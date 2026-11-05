@@ -33,7 +33,7 @@ impl CommitBox {
     }
 
     /// Summary, a blank line, description; trailing space trimmed.
-    fn message(&self) -> String {
+    pub(super) fn message(&self) -> String {
         let summary = self.summary.text().trim().to_string();
         let body = self.body.text().trim_end().to_string();
         if body.trim().is_empty() { summary } else { format!("{summary}\n\n{body}") }

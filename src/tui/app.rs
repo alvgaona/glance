@@ -49,6 +49,10 @@ pub(crate) trait Screen {
         Ok(())
     }
     fn toast(&mut self) -> &mut Option<Toast>;
+    /// True while a text field or search has the keys: only then is a paste typed in.
+    fn typing(&self) -> bool {
+        false
+    }
 }
 
 pub(crate) fn run<S: Screen>(screen: &mut S) -> Result<S::Out> {
@@ -67,6 +71,10 @@ pub(crate) fn run<S: Screen>(screen: &mut S) -> Result<S::Out> {
                 Event::Key(k) if k.kind == KeyEventKind::Press => screen.key(k),
                 Event::Mouse(m) => {
                     screen.mouse(m);
+                    Flow::Stay
+                }
+                Event::Paste(text) if screen.typing() => {
+                    paste(screen, &text);
                     Flow::Stay
                 }
                 _ => Flow::Stay,
@@ -90,6 +98,17 @@ pub(crate) fn run<S: Screen>(screen: &mut S) -> Result<S::Out> {
     })();
     leave();
     result
+}
+
+/// Types `text` in as plain characters. A line break becomes a space, so a paste can
+/// never press Enter (which would submit, and the rest would run as commands).
+pub(crate) fn paste<S: Screen>(screen: &mut S, text: &str) {
+    let chars = text.chars().map(|c| if c.is_whitespace() { ' ' } else { c }).filter(|c| !c.is_control());
+    for c in chars {
+        let k = KeyEvent::new(crossterm::event::KeyCode::Char(c), crossterm::event::KeyModifiers::NONE);
+        // Typing never leaves the field, so the flow is always Stay.
+        let _ = screen.key(k);
+    }
 }
 
 /// A plain key press.

@@ -314,6 +314,9 @@ impl Screen for App {
     fn toast(&mut self) -> &mut Option<Toast> {
         &mut self.toast
     }
+    fn typing(&self) -> bool {
+        self.commit.is_some()
+    }
 }
 
 fn commands() -> Vec<Command<Cmd>> {
@@ -340,6 +343,8 @@ impl App {
         self.entries = entries(&self.repo, &self.st, &conflicts);
         self.selected = self.selected.min(self.entries.len().saturating_sub(1));
         self.diff = None;
+        // Entry indexes may point at other files now.
+        self.pick = None;
         Ok(())
     }
 
@@ -478,6 +483,7 @@ impl App {
                 {
                     self.selected = *i;
                     self.focus = Focus::Files;
+                    self.pick = None;
                     self.detail_scroll.reset();
                 } else if in_details && self.view().has_hunks() {
                     // A click in the diff works on the hunk under it.

@@ -206,6 +206,9 @@ impl Screen for App<'_> {
     fn toast(&mut self) -> &mut Option<Toast> {
         &mut self.toast
     }
+    fn typing(&self) -> bool {
+        self.input.is_some()
+    }
 }
 
 fn commands() -> Vec<Command<Cmd>> {

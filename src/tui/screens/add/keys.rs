@@ -34,9 +34,6 @@ impl App {
             return Flow::Stay;
         }
 
-        if self.detail_scroll.key(k, self.detail_area.height) {
-            return Flow::Stay;
-        }
         if self.focus == Focus::Hunks && self.pick().is_some() {
             let shift = k.modifiers.contains(KeyModifiers::SHIFT);
             match k.code {
@@ -54,6 +51,10 @@ impl App {
                     return self.on_key(k);
                 }
             }
+            return Flow::Stay;
+        }
+        // After the pick: J/K there grow it instead of scrolling.
+        if self.detail_scroll.key(k, self.detail_area.height) {
             return Flow::Stay;
         }
         if self.focus == Focus::Hunks {

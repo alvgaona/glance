@@ -147,6 +147,9 @@ impl Screen for App<'_> {
     fn toast(&mut self) -> &mut Option<Toast> {
         &mut self.toast
     }
+    fn typing(&self) -> bool {
+        self.searching
+    }
 }
 
 impl App<'_> {

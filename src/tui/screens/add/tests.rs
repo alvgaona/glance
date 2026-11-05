@@ -140,3 +140,39 @@ fn a_conflict_with_markers_asks_before_staging() {
     select(&mut app, "a.txt");
     assert!(matches!(key(&mut app, KeyCode::Char(' ')), Flow::Run(Effect::File { op: FileOp::Add, .. })));
 }
+
+#[test]
+fn a_line_pick_grows_with_shift_j_and_ends_on_reload() {
+    let s = scratch("add-pick");
+    s.commit("c.txt", "1\n2\n3\n");
+    s.write("c.txt", "a\nb\nc\n");
+    let mut app = start(s.repo()).unwrap();
+    select(&mut app, "c.txt");
+    app.tick().unwrap();
+    key(&mut app, KeyCode::Enter);
+    key(&mut app, KeyCode::Char('v'));
+    assert_eq!(app.pick().map(|p| p.range().count()), Some(1));
+    // J grows the pick; it doesn't scroll the diff.
+    key(&mut app, KeyCode::Char('J'));
+    assert_eq!(app.pick().map(|p| p.range().count()), Some(2));
+
+    // After a reload the entry indexes may mean other files: the pick is gone.
+    app.apply(Effect::Reload).unwrap();
+    assert!(app.pick.is_none());
+}
+
+#[test]
+fn a_paste_only_types_into_an_open_field() {
+    let s = scratch("add-paste");
+    let mut app = start(s.repo()).unwrap();
+    // On the list a paste is not typed: "dy" would discard a file.
+    assert!(!app.typing());
+    let Flow::Run(e) = key(&mut app, KeyCode::Char(' ')) else { panic!() };
+    app.apply(e).unwrap();
+    let Flow::Run(e) = key(&mut app, KeyCode::Char('c')) else { panic!() };
+    app.apply(e).unwrap();
+    assert!(app.typing());
+    // A line break in the paste must not press Enter (that would commit).
+    crate::tui::app::paste(&mut app, "fix\nday");
+    assert_eq!(app.commit.as_ref().unwrap().message(), "fix day");
+}

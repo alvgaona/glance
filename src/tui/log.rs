@@ -46,6 +46,13 @@ enum Cmd {
     Quit,
 }
 
+/// A row of the list. Commits that branches point at get a label row above them.
+#[derive(Clone, Copy)]
+enum Item {
+    Label(usize),
+    Commit(usize),
+}
+
 /// Rendered details of one commit, cached by id.
 struct Detail {
     lines: Vec<Line<'static>>,
@@ -55,8 +62,9 @@ struct App<'r> {
     repo: &'r gix::Repository,
     opts: Options,
     commits: Vec<Commit>,
-    /// Indexes into `commits` that match the search, in order.
-    visible: Vec<usize>,
+    /// Rows of the list for the commits that match the search, in order.
+    visible: Vec<Item>,
+    /// Always the row of a commit, never of a label.
     selected: usize,
     scroll: usize,
     query: String,
@@ -137,21 +145,51 @@ impl App<'_> {
     fn rebuild(&mut self) {
         let keep = self.selected_commit().map(|c| c.oid);
         let q = self.query.to_lowercase();
-        self.visible = (0..self.commits.len()).filter(|&i| q.is_empty() || matches(&self.commits[i], &q)).collect();
+        self.visible.clear();
+        for (i, c) in self.commits.iter().enumerate() {
+            if !q.is_empty() && !matches(c, &q) {
+                continue;
+            }
+            if !c.refs.is_empty() {
+                self.visible.push(Item::Label(i));
+            }
+            self.visible.push(Item::Commit(i));
+        }
+        let first = self.visible.iter().position(|it| matches!(it, Item::Commit(_)));
         self.selected = keep
-            .and_then(|oid| self.visible.iter().position(|&i| self.commits[i].oid == oid))
+            .and_then(|oid| self.visible.iter().position(|it| matches!(it, Item::Commit(i) if self.commits[*i].oid == oid)))
+            .or(first)
             .unwrap_or(0);
         self.detail_scroll = 0;
     }
 
     fn selected_commit(&self) -> Option<&Commit> {
-        self.visible.get(self.selected).map(|&i| &self.commits[i])
+        match self.visible.get(self.selected)? {
+            Item::Commit(i) => Some(&self.commits[*i]),
+            Item::Label(_) => None,
+        }
     }
 
-    /// Moves `steps` commits up (negative) or down.
+    fn commit_count(&self) -> usize {
+        self.visible.iter().filter(|it| matches!(it, Item::Commit(_))).count()
+    }
+
+    /// Moves `steps` commits up (negative) or down, skipping label rows.
     fn step(&mut self, steps: isize) {
-        let last = self.visible.len().saturating_sub(1) as isize;
-        let i = (self.selected as isize + steps).clamp(0, last) as usize;
+        let mut i = self.selected;
+        let mut left = steps.unsigned_abs();
+        while left > 0 {
+            let next = if steps < 0 {
+                self.visible[..i].iter().rposition(|it| matches!(it, Item::Commit(_)))
+            } else {
+                self.visible.iter().skip(i + 1).position(|it| matches!(it, Item::Commit(_))).map(|p| p + i + 1)
+            };
+            match next {
+                Some(n) => i = n,
+                None => break,
+            }
+            left -= 1;
+        }
         if i != self.selected {
             self.selected = i;
             self.detail_scroll = 0;
@@ -323,7 +361,11 @@ impl App<'_> {
             MouseEventKind::ScrollDown => self.step(1),
             MouseEventKind::ScrollUp => self.step(-1),
             MouseEventKind::Down(MouseButton::Left) if inside(self.list_area) => {
-                let i = self.scroll + (m.row - self.list_area.y) as usize;
+                let mut i = self.scroll + (m.row - self.list_area.y) as usize;
+                // A click on a label selects the commit below it.
+                if matches!(self.visible.get(i), Some(Item::Label(_))) {
+                    i += 1;
+                }
                 if i < self.visible.len() && i != self.selected {
                     self.selected = i;
                     self.detail_scroll = 0;
@@ -428,8 +470,13 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     app.list_area = inner;
 
     let height = inner.height as usize;
-    if app.selected < app.scroll {
-        app.scroll = app.selected;
+    // Keep the selected commit on screen, together with its label row if it has one.
+    let top = match app.selected.checked_sub(1).map(|i| app.visible[i]) {
+        Some(Item::Label(_)) => app.selected - 1,
+        _ => app.selected,
+    };
+    if top < app.scroll {
+        app.scroll = top;
     } else if height > 0 && app.selected >= app.scroll + height {
         app.scroll = app.selected + 1 - height;
     }
@@ -441,119 +488,66 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     }
 
     let now = crate::core::now();
-    let rows: Vec<usize> = app.visible.iter().copied().skip(app.scroll).take(height).collect();
-    // Branch column: only as wide as needed, and small next to the messages
-    // (a sixth of the list, 10 to 30 columns).
-    let refs_w = rows
-        .iter()
-        .map(|&i| Line::from(compact_refs(&app.commits[i].refs, usize::MAX)).width())
-        .max()
-        .unwrap_or(0)
-        .min((inner.width / 6).clamp(10, 30) as usize);
-
-    for (n, &index) in rows.iter().enumerate() {
-        let row = app.scroll + n;
-        let r = Rect { y: inner.y + n as u16, height: 1, ..inner };
-        let selected = row == app.selected;
+    for (n, item) in app.visible.iter().enumerate().skip(app.scroll).take(height) {
+        let r = Rect { y: inner.y + (n - app.scroll) as u16, height: 1, ..inner };
+        // A label belongs to the commit below it, so it lights up with it.
+        let selected = n == app.selected || (matches!(item, Item::Label(_)) && n + 1 == app.selected);
         let bg = if selected { theme::ELEMENT } else { theme::PANEL };
-        let bar = if selected { Span::styled("┃ ", Style::new().fg(theme::ACCENT)) } else { Span::raw("  ") };
 
-        let c = &app.commits[index];
-        let subject_style = if c.is_merge { theme::muted() } else { theme::text() };
-        let left = Line::from(vec![
-            bar,
-            Span::styled(c.id.clone(), theme::faint()),
-            Span::raw("  "),
-            Span::styled(c.summary.clone(), subject_style),
-        ]);
-
-        // Right side: branches (right-aligned in their column), author, age.
-        let refs = Line::from(compact_refs(&c.refs, refs_w));
-        let mut right = vec![Span::raw(" ".repeat(refs_w.saturating_sub(refs.width()) + 2))];
-        right.extend(refs.spans);
-        let author = c.author.split_whitespace().next().unwrap_or(&c.author).to_string();
-        right.push(Span::raw("  "));
-        right.push(Span::styled(format!("{author:<10}"), theme::muted()));
-        right.push(Span::styled(format!("{:>8}", relative_time(c.time, now)), theme::faint()));
-        right.push(Span::raw("  "));
-        let right = Line::from(right);
-
-        let [l, rr] = Layout::horizontal([Constraint::Min(1), Constraint::Length(right.width() as u16)]).areas(r);
-        f.render_widget(Paragraph::new(widgets::truncate(left, l.width)).style(Style::new().bg(bg)), l);
-        f.render_widget(Paragraph::new(right).style(Style::new().bg(bg)), rr);
+        match *item {
+            Item::Label(index) => {
+                let mut spans = vec![Span::styled("  ╭ ", theme::faint())];
+                for (i, label) in label_order(&app.commits[index].refs).into_iter().enumerate() {
+                    if i > 0 {
+                        spans.push(Span::raw(" "));
+                    }
+                    spans.push(ref_pill(label));
+                }
+                f.render_widget(Paragraph::new(widgets::truncate(Line::from(spans), r.width)).style(Style::new().bg(bg)), r);
+            }
+            Item::Commit(index) => {
+                let c = &app.commits[index];
+                let bar = if n == app.selected { Span::styled("┃ ", Style::new().fg(theme::ACCENT)) } else { Span::raw("  ") };
+                let subject_style = if c.is_merge { theme::muted() } else { theme::text() };
+                let left = Line::from(vec![
+                    bar,
+                    Span::styled(c.id.clone(), theme::faint()),
+                    Span::raw("  "),
+                    Span::styled(c.summary.clone(), subject_style),
+                ]);
+                let author = c.author.split_whitespace().next().unwrap_or(&c.author).to_string();
+                let right = Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(format!("{author:<10}"), theme::muted()),
+                    Span::styled(format!("{:>8}", relative_time(c.time, now)), theme::faint()),
+                    Span::raw("  "),
+                ]);
+                let [l, rr] = Layout::horizontal([Constraint::Min(1), Constraint::Length(right.width() as u16)]).areas(r);
+                f.render_widget(Paragraph::new(widgets::truncate(left, l.width)).style(Style::new().bg(bg)), l);
+                f.render_widget(Paragraph::new(right).style(Style::new().bg(bg)), rr);
+            }
+        }
     }
 }
 
-/// Branch tags that fit in `width` columns: HEAD's branch first, then local branches, tags,
-/// and remotes that aren't just a copy of a local branch; the rest become "+N".
-fn compact_refs(refs: &[RefLabel], width: usize) -> Vec<Span<'static>> {
-    let locals: Vec<&str> = refs
-        .iter()
-        .filter_map(|r| match r {
-            RefLabel::Head(n) | RefLabel::Branch(n) => Some(n.as_str()),
-            _ => None,
-        })
-        .collect();
-    let mut ordered: Vec<&RefLabel> = refs
-        .iter()
-        .filter(|r| match r {
-            // origin/feat duplicates feat: skip it here (the details panel lists everything).
-            RefLabel::Remote(n) => !n.split_once('/').is_some_and(|(_, b)| locals.contains(&b)),
-            _ => true,
-        })
-        .collect();
+/// HEAD's branch first, then local branches, tags and remotes.
+fn label_order(refs: &[RefLabel]) -> Vec<&RefLabel> {
+    let mut ordered: Vec<&RefLabel> = refs.iter().collect();
     ordered.sort_by_key(|r| match r {
         RefLabel::Head(_) => 0,
         RefLabel::Branch(_) => 1,
         RefLabel::Tag(_) => 2,
         RefLabel::Remote(_) => 3,
     });
-
-    let mut out: Vec<Span> = Vec::new();
-    let mut used = 0;
-    for (i, r) in ordered.iter().enumerate() {
-        let left_after = ordered.len() - i - 1;
-        // Room for this pill, a gap, and a "+N" if more would follow.
-        let more_w = if left_after > 0 { format!(" +{left_after}").len() } else { 0 };
-        let gap = if out.is_empty() { 0 } else { 1 };
-        // Names longer than 20 are shortened; the first one is also shortened to fit the column.
-        let pad = if matches!(r, RefLabel::Tag(_)) { 3 } else { 2 };
-        let mut max_name = 20;
-        if out.is_empty() {
-            max_name = max_name.min(width.saturating_sub(pad + more_w)).max(4);
-        }
-        let name = label_name(r);
-        let short = if name.chars().count() > max_name {
-            format!("{}…", name.chars().take(max_name - 1).collect::<String>())
-        } else {
-            name.to_string()
-        };
-        let pill = ref_pill_named(r, &short);
-        if !out.is_empty() && used + gap + pill.width() + more_w > width {
-            let rest = ordered.len() - i;
-            out.push(Span::styled(format!("{}+{rest}", if out.is_empty() { "" } else { " " }), theme::faint()));
-            break;
-        }
-        if gap == 1 {
-            out.push(Span::raw(" "));
-        }
-        used += gap + pill.width();
-        out.push(pill);
-    }
-    out
+    ordered
 }
 
 fn ref_pill(r: &RefLabel) -> Span<'static> {
-    ref_pill_named(r, label_name(r))
-}
-
-/// A tag for `r`, showing `name` (possibly shortened).
-fn ref_pill_named(r: &RefLabel, name: &str) -> Span<'static> {
     match r {
-        RefLabel::Head(_) => widgets::pill(name, theme::ACCENT, theme::BG),
-        RefLabel::Branch(_) => Span::styled(format!(" {name} "), Style::new().bg(theme::BORDER).fg(theme::GREEN)),
-        RefLabel::Remote(_) => Span::styled(format!(" {name} "), Style::new().bg(theme::ELEMENT).fg(theme::MUTED)),
-        RefLabel::Tag(_) => Span::styled(format!(" #{name} "), Style::new().bg(theme::ELEMENT).fg(theme::PURPLE)),
+        RefLabel::Head(n) => widgets::pill(n, theme::ACCENT, theme::BG),
+        RefLabel::Branch(n) => Span::styled(format!(" {n} "), Style::new().bg(theme::BORDER).fg(theme::GREEN)),
+        RefLabel::Remote(n) => Span::styled(format!(" {n} "), Style::new().bg(theme::ELEMENT).fg(theme::MUTED)),
+        RefLabel::Tag(n) => Span::styled(format!(" #{n} "), Style::new().bg(theme::ELEMENT).fg(theme::PURPLE)),
     }
 }
 
@@ -686,7 +680,7 @@ fn kind_mark(k: ChangeKind) -> (&'static str, Color) {
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let total = app.commits.len();
     let left = if app.searching || !app.query.is_empty() {
-        let found = app.visible.len();
+        let found = app.commit_count();
         let mut spans = vec![
             Span::styled("/ ", Style::new().fg(theme::ACCENT)),
             Span::styled(app.query.clone(), theme::text()),

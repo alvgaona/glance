@@ -1,5 +1,6 @@
 //! Full-screen views built on ratatui. Only started by interactive commands.
 
+pub mod branches;
 pub mod log;
 pub mod rebase;
 pub mod theme;

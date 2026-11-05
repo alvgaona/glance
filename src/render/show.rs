@@ -56,7 +56,9 @@ pub fn print(s: &Shown, p: &Paint) {
             None => String::new(),
             Some(Size::Lines { .. }) => {
                 // Scale like `git show --stat`, but keep at least one mark for small changes.
-                let scale = |n: usize| if max <= BAR { n } else { (n * BAR).div_ceil(max) };
+                let scale = |n: usize| {
+                    if max <= BAR { n } else { (n * BAR).div_ceil(max) }
+                };
                 format!(
                     "{:>count_w$} {}{}",
                     a + r,

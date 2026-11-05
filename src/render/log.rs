@@ -49,14 +49,8 @@ pub fn lines(commits: &[Commit], p: &Paint) -> Vec<String> {
 }
 
 fn draw(cells: &[Cell], p: &Paint) -> String {
-    const LANE_COLORS: [fn(Style) -> Style; 6] = [
-        |s| s.cyan(),
-        |s| s.green(),
-        |s| s.yellow(),
-        |s| s.magenta(),
-        |s| s.blue(),
-        |s| s.red(),
-    ];
+    const LANE_COLORS: [fn(Style) -> Style; 6] =
+        [|s| s.cyan(), |s| s.green(), |s| s.yellow(), |s| s.magenta(), |s| s.blue(), |s| s.red()];
     cells
         .iter()
         .map(|c| {

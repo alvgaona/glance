@@ -35,7 +35,12 @@ fn main() -> Result<()> {
         }
         Command::Branches => {
             let repo = core::open()?;
-            render::branches::print(&core::branches::read(&repo)?, &paint);
+            // Interactive in a terminal; the plain list when piped (or built without the TUI).
+            #[cfg(feature = "tui")]
+            if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+                return tui::branches::run(&repo);
+            }
+            render::branches::print(&core::branches::read(&repo, false)?, &paint);
         }
         Command::Show { rev, patch } => {
             let repo = core::open()?;

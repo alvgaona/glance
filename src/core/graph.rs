@@ -29,12 +29,8 @@ pub fn layout(commits: &[Commit]) -> Vec<Row> {
     let mut rows = Vec::with_capacity(commits.len());
 
     for (index, c) in commits.iter().enumerate() {
-        let mut hits: Vec<usize> = lanes
-            .iter()
-            .enumerate()
-            .filter(|(_, l)| **l == Some(c.oid))
-            .map(|(i, _)| i)
-            .collect();
+        let mut hits: Vec<usize> =
+            lanes.iter().enumerate().filter(|(_, l)| **l == Some(c.oid)).map(|(i, _)| i).collect();
         let col = if hits.is_empty() {
             // A tip nobody was waiting for.
             let i = free_slot(&mut lanes);

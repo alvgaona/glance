@@ -86,13 +86,8 @@ impl Toast {
     pub fn draw(&self, f: &mut Frame, area: Rect) {
         let width = (self.text.chars().count() as u16 + 6).min(area.width.saturating_sub(4)).max(10);
         let lines = self.text.chars().count() as u16 / width.saturating_sub(6).max(1) + 1;
-        let r = Rect {
-            x: area.right().saturating_sub(width + 2),
-            y: area.y + 1,
-            width,
-            height: lines + 2,
-        }
-        .intersection(area);
+        let r = Rect { x: area.right().saturating_sub(width + 2), y: area.y + 1, width, height: lines + 2 }
+            .intersection(area);
         f.render_widget(Clear, r);
         let bar = Block::new()
             .style(Style::new().bg(theme::ELEMENT))
@@ -121,23 +116,27 @@ pub struct Confirm {
 }
 
 impl Confirm {
+    /// `body` may have several lines; lines starting with `$ ` are shown as commands.
     pub fn draw(&self, f: &mut Frame, area: Rect) {
-        let w = 56;
-        let body_lines = (self.body.chars().count() as u16).div_ceil(w - 6);
-        let r = centered(area, w, body_lines + 7);
+        let w: u16 = 64;
+        let inner_w = (w - 4) as usize;
+        let body_rows: u16 = self.body.lines().map(|l| (l.chars().count().max(1)).div_ceil(inner_w) as u16).sum();
+        let r = centered(area, w, body_rows + 7);
         f.render_widget(Clear, r);
         let yes_color = if self.danger { theme::RED } else { theme::ACCENT };
-        let text = vec![
-            Line::styled(self.title.clone(), theme::bold()),
-            Line::raw(""),
-            Line::styled(self.body.clone(), theme::muted()),
-            Line::raw(""),
-            Line::from(vec![
-                pill(&format!("enter  {}", self.yes), yes_color, theme::BG),
-                Span::raw("  "),
-                pill(&format!("esc  {}", self.no), theme::BORDER, theme::TEXT),
-            ]),
-        ];
+        let mut text = vec![Line::styled(self.title.clone(), theme::bold()), Line::raw("")];
+        for l in self.body.lines() {
+            text.push(match l.strip_prefix("$ ") {
+                Some(cmd) => Line::styled(format!("  {cmd}"), Style::new().fg(theme::ACCENT)),
+                None => Line::styled(l.to_string(), theme::muted()),
+            });
+        }
+        text.push(Line::raw(""));
+        text.push(Line::from(vec![
+            pill(&format!("enter  {}", self.yes), yes_color, theme::BG),
+            Span::raw("  "),
+            pill(&format!("esc  {}", self.no), theme::BORDER, theme::TEXT),
+        ]));
         f.render_widget(
             Paragraph::new(text).wrap(ratatui::widgets::Wrap { trim: true }).block(panel(theme::ELEMENT)),
             r,
@@ -191,7 +190,9 @@ impl<T: Clone> Palette<T> {
         let found = self.matches();
         match k.code {
             KeyCode::Esc => return Some(PaletteEvent::Close),
-            KeyCode::Char('p') if k.modifiers.contains(KeyModifiers::CONTROL) => return Some(PaletteEvent::Close),
+            KeyCode::Char('p') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                return Some(PaletteEvent::Close);
+            }
             KeyCode::Enter => {
                 return found.get(self.selected).map(|&i| PaletteEvent::Run(self.commands[i].action.clone()));
             }
@@ -234,7 +235,10 @@ impl<T: Clone> Palette<T> {
         let input_line = if self.query.is_empty() {
             Line::from(vec![Span::styled("▏", Style::new().fg(theme::ACCENT)), Span::styled("Search", theme::faint())])
         } else {
-            Line::from(vec![Span::styled(self.query.clone(), theme::text()), Span::styled("▏", Style::new().fg(theme::ACCENT))])
+            Line::from(vec![
+                Span::styled(self.query.clone(), theme::text()),
+                Span::styled("▏", Style::new().fg(theme::ACCENT)),
+            ])
         };
         f.render_widget(Paragraph::new(input_line), input);
 
@@ -255,10 +259,14 @@ impl<T: Clone> Palette<T> {
             } else {
                 (theme::ELEMENT, theme::TEXT, theme::MUTED)
             };
-            let [l, rgt] = Layout::horizontal([Constraint::Min(1), Constraint::Length(cmd.keys.chars().count() as u16 + 1)])
-                .areas(line_area);
+            let [l, rgt] =
+                Layout::horizontal([Constraint::Min(1), Constraint::Length(cmd.keys.chars().count() as u16 + 1)])
+                    .areas(line_area);
             let style = Style::new().bg(bg).fg(fg);
-            f.render_widget(Paragraph::new(Span::styled(format!(" {}", cmd.label), style)).style(Style::new().bg(bg)), l);
+            f.render_widget(
+                Paragraph::new(Span::styled(format!(" {}", cmd.label), style)).style(Style::new().bg(bg)),
+                l,
+            );
             f.render_widget(
                 Paragraph::new(Span::styled(cmd.keys, Style::new().fg(key_fg).bg(bg).add_modifier(Modifier::empty())))
                     .style(Style::new().bg(bg)),

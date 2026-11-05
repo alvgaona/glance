@@ -157,7 +157,9 @@ impl App<'_> {
         }
         let first = self.visible.iter().position(|it| matches!(it, Item::Commit(_)));
         self.selected = keep
-            .and_then(|oid| self.visible.iter().position(|it| matches!(it, Item::Commit(i) if self.commits[*i].oid == oid)))
+            .and_then(|oid| {
+                self.visible.iter().position(|it| matches!(it, Item::Commit(i) if self.commits[*i].oid == oid))
+            })
             .or(first)
             .unwrap_or(0);
         self.detail_scroll = 0;
@@ -344,7 +346,9 @@ impl App<'_> {
                 self.toast = Some(Toast::new(what, theme::ACCENT));
             }
             Cmd::Details => self.details = !self.details,
-            Cmd::Choose => return Ok(Some(Outcome::Done(self.selected_commit().map(|c| c.id.clone())))),
+            Cmd::Choose => {
+                return Ok(Some(Outcome::Done(self.selected_commit().map(|c| c.id.clone()))));
+            }
             Cmd::Quit => return Ok(Some(Outcome::Done(None))),
         }
         Ok(None)
@@ -356,8 +360,12 @@ impl App<'_> {
         }
         let inside = |a: Rect| m.column >= a.x && m.column < a.right() && m.row >= a.y && m.row < a.bottom();
         match m.kind {
-            MouseEventKind::ScrollDown if inside(self.detail_area) => self.detail_scroll = self.detail_scroll.saturating_add(3),
-            MouseEventKind::ScrollUp if inside(self.detail_area) => self.detail_scroll = self.detail_scroll.saturating_sub(3),
+            MouseEventKind::ScrollDown if inside(self.detail_area) => {
+                self.detail_scroll = self.detail_scroll.saturating_add(3)
+            }
+            MouseEventKind::ScrollUp if inside(self.detail_area) => {
+                self.detail_scroll = self.detail_scroll.saturating_sub(3)
+            }
             MouseEventKind::ScrollDown => self.step(1),
             MouseEventKind::ScrollUp => self.step(-1),
             MouseEventKind::Down(MouseButton::Left) if inside(self.list_area) => {
@@ -421,10 +429,12 @@ fn draw(f: &mut Frame, app: &mut App) {
     let (list, details) = if !app.details {
         (body, None)
     } else if body.width >= 110 {
-        let [l, _, r] = Layout::horizontal([Constraint::Percentage(50), Constraint::Length(1), Constraint::Min(30)]).areas(body);
+        let [l, _, r] =
+            Layout::horizontal([Constraint::Percentage(50), Constraint::Length(1), Constraint::Min(30)]).areas(body);
         (l, Some(r))
     } else {
-        let [t, _, b] = Layout::vertical([Constraint::Percentage(45), Constraint::Length(1), Constraint::Min(5)]).areas(body);
+        let [t, _, b] =
+            Layout::vertical([Constraint::Percentage(45), Constraint::Length(1), Constraint::Min(5)]).areas(body);
         (t, Some(b))
     };
     draw_list(f, app, list);
@@ -502,11 +512,18 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                     }
                     spans.push(ref_pill(label));
                 }
-                f.render_widget(Paragraph::new(widgets::truncate(Line::from(spans), r.width)).style(Style::new().bg(bg)), r);
+                f.render_widget(
+                    Paragraph::new(widgets::truncate(Line::from(spans), r.width)).style(Style::new().bg(bg)),
+                    r,
+                );
             }
             Item::Commit(index) => {
                 let c = &app.commits[index];
-                let bar = if n == app.selected { Span::styled("┃ ", Style::new().fg(theme::ACCENT)) } else { Span::raw("  ") };
+                let bar = if n == app.selected {
+                    Span::styled("┃ ", Style::new().fg(theme::ACCENT))
+                } else {
+                    Span::raw("  ")
+                };
                 let subject_style = if c.is_merge { theme::muted() } else { theme::text() };
                 let left = Line::from(vec![
                     bar,
@@ -521,7 +538,8 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                     Span::styled(format!("{:>8}", relative_time(c.time, now)), theme::faint()),
                     Span::raw("  "),
                 ]);
-                let [l, rr] = Layout::horizontal([Constraint::Min(1), Constraint::Length(right.width() as u16)]).areas(r);
+                let [l, rr] =
+                    Layout::horizontal([Constraint::Min(1), Constraint::Length(right.width() as u16)]).areas(r);
                 f.render_widget(Paragraph::new(widgets::truncate(left, l.width)).style(Style::new().bg(bg)), l);
                 f.render_widget(Paragraph::new(right).style(Style::new().bg(bg)), rr);
             }
@@ -611,7 +629,10 @@ fn detail_lines(repo: &gix::Repository, s: &Shown) -> Vec<Line<'static>> {
     ]));
     for f in &s.files {
         let (mark, color) = kind_mark(f.kind);
-        let mut spans = vec![Span::styled(format!("{mark}  "), Style::new().fg(color)), Span::styled(f.path.clone(), theme::text())];
+        let mut spans = vec![
+            Span::styled(format!("{mark}  "), Style::new().fg(color)),
+            Span::styled(f.path.clone(), theme::text()),
+        ];
         if let Some(Size::Lines { added, removed }) = f.size {
             spans.push(Span::styled(format!("  +{added} "), Style::new().fg(theme::GREEN)));
             spans.push(Span::styled(format!("−{removed}"), Style::new().fg(theme::RED)));
@@ -631,8 +652,11 @@ fn detail_lines(repo: &gix::Repository, s: &Shown) -> Vec<Line<'static>> {
             None => f.path.clone(),
         };
         out.push(
-            Line::from(vec![Span::styled(format!(" {mark} "), Style::new().fg(color)), Span::styled(name, theme::bold())])
-                .style(Style::new().bg(theme::ELEMENT)),
+            Line::from(vec![
+                Span::styled(format!(" {mark} "), Style::new().fg(color)),
+                Span::styled(name, theme::bold()),
+            ])
+            .style(Style::new().bg(theme::ELEMENT)),
         );
         if shown >= MAX_DIFF_LINES {
             out.push(Line::styled("   diff not shown: this commit is large", theme::faint()));
@@ -646,9 +670,10 @@ fn detail_lines(repo: &gix::Repository, s: &Shown) -> Vec<Line<'static>> {
             shown += 1;
             out.push(match l {
                 PatchLine::Hunk { new_start, .. } => Line::styled(format!("   ⋯ line {new_start}"), theme::faint()),
-                PatchLine::Context { new, text, .. } => {
-                    Line::from(vec![Span::styled(format!("{new:>5}  "), theme::faint()), Span::styled(text, theme::muted())])
-                }
+                PatchLine::Context { new, text, .. } => Line::from(vec![
+                    Span::styled(format!("{new:>5}  "), theme::faint()),
+                    Span::styled(text, theme::muted()),
+                ]),
                 PatchLine::Added { new, text } => Line::from(vec![
                     Span::styled(format!("{new:>5} "), Style::new().fg(theme::GREEN)),
                     Span::styled("+", Style::new().fg(theme::GREEN)),
@@ -680,10 +705,8 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let total = app.commits.len();
     let left = if app.searching || !app.query.is_empty() {
         let found = app.commit_count();
-        let mut spans = vec![
-            Span::styled("/ ", Style::new().fg(theme::ACCENT)),
-            Span::styled(app.query.clone(), theme::text()),
-        ];
+        let mut spans =
+            vec![Span::styled("/ ", Style::new().fg(theme::ACCENT)), Span::styled(app.query.clone(), theme::text())];
         if app.searching {
             spans.push(Span::styled("▏", Style::new().fg(theme::ACCENT)));
         }
@@ -694,7 +717,9 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     };
     let right = match (app.opts.mode, app.searching) {
         (_, true) => widgets::hints(&[("enter", "keep filter"), ("esc", "clear")]),
-        (Mode::Browse, false) => widgets::hints(&[("/", "search"), ("enter", "copy"), ("ctrl+p", "commands"), ("esc", "quit")]),
+        (Mode::Browse, false) => {
+            widgets::hints(&[("/", "search"), ("enter", "copy"), ("ctrl+p", "commands"), ("esc", "quit")])
+        }
         (Mode::Pick, false) => widgets::hints(&[("/", "search"), ("enter", "rebase from here"), ("esc", "cancel")]),
     };
     let [l, r] = Layout::horizontal([Constraint::Min(1), Constraint::Length(right.width() as u16)]).areas(area);

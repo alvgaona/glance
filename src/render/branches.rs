@@ -30,7 +30,7 @@ pub fn print(b: &Branches, p: &Paint) {
             br.summary.style(p.dim()),
         );
     }
-    if let Some(def) = &b.default {
+    if let Some((def, _)) = &b.default {
         let n = b.list.iter().filter(|x| x.merged).count();
         if n > 0 {
             println!("\n{}", format!("{n} merged into {def}").style(p.dim()));

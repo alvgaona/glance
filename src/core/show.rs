@@ -52,29 +52,44 @@ pub fn read(repo: &gix::Repository, rev: &str) -> Result<Shown> {
         Some(p) => repo.find_commit(*p)?.tree()?,
         None => repo.empty_tree(),
     };
-    let changes = repo.diff_tree_to_tree(Some(&old_tree), Some(&new_tree), None)?;
+    let files = tree_changes(repo, &old_tree, &new_tree)?;
 
+    let time = commit.time()?;
+    Ok(Shown {
+        oid: commit.id,
+        id: commit.id().shorten_or_id().to_string(),
+        refs: ref_labels(repo)?.remove(&commit.id).unwrap_or_default(),
+        author: author.name.to_str_lossy().into_owned(),
+        email: author.email.to_str_lossy().into_owned(),
+        time: time.seconds,
+        offset: time.offset,
+        subject: message.summary().to_str_lossy().into_owned(),
+        body: message.body().map(|b| b.to_str_lossy().trim().to_string()).unwrap_or_default(),
+        parents: parents.iter().map(|p| p.to_hex_with_len(id.shorten_or_id().hex_len()).to_string()).collect(),
+        files,
+    })
+}
+
+/// Files that differ between two trees, with line counts, sorted by path.
+pub fn tree_changes(
+    repo: &gix::Repository,
+    old_tree: &gix::Tree<'_>,
+    new_tree: &gix::Tree<'_>,
+) -> Result<Vec<FileStat>> {
+    let changes = repo.diff_tree_to_tree(Some(old_tree), Some(new_tree), None)?;
     let mut files = Vec::new();
     for change in changes {
         let (kind, path, from, old, new, mode) = match change {
-            ChangeDetached::Addition { location, id, entry_mode, .. } => (ChangeKind::Added, location, None, None, Some(id), entry_mode),
-            ChangeDetached::Deletion { location, id, entry_mode, .. } => (ChangeKind::Deleted, location, None, Some(id), None, entry_mode),
-            ChangeDetached::Modification {
-                location,
-                previous_id,
-                id,
-                entry_mode,
-                ..
-            } => (ChangeKind::Modified, location, None, Some(previous_id), Some(id), entry_mode),
-            ChangeDetached::Rewrite {
-                source_location,
-                source_id,
-                location,
-                id,
-                copy,
-                entry_mode,
-                ..
-            } => {
+            ChangeDetached::Addition { location, id, entry_mode, .. } => {
+                (ChangeKind::Added, location, None, None, Some(id), entry_mode)
+            }
+            ChangeDetached::Deletion { location, id, entry_mode, .. } => {
+                (ChangeKind::Deleted, location, None, Some(id), None, entry_mode)
+            }
+            ChangeDetached::Modification { location, previous_id, id, entry_mode, .. } => {
+                (ChangeKind::Modified, location, None, Some(previous_id), Some(id), entry_mode)
+            }
+            ChangeDetached::Rewrite { source_location, source_id, location, id, copy, entry_mode, .. } => {
                 let kind = if copy { ChangeKind::Copied } else { ChangeKind::Renamed };
                 (kind, location, Some(source_location), Some(source_id), Some(id), entry_mode)
             }
@@ -93,22 +108,5 @@ pub fn read(repo: &gix::Repository, rev: &str) -> Result<Shown> {
         });
     }
     files.sort_by(|a, b| a.path.cmp(&b.path));
-
-    let time = commit.time()?;
-    Ok(Shown {
-        oid: commit.id,
-        id: commit.id().shorten_or_id().to_string(),
-        refs: ref_labels(repo)?.remove(&commit.id).unwrap_or_default(),
-        author: author.name.to_str_lossy().into_owned(),
-        email: author.email.to_str_lossy().into_owned(),
-        time: time.seconds,
-        offset: time.offset,
-        subject: message.summary().to_str_lossy().into_owned(),
-        body: message.body().map(|b| b.to_str_lossy().trim().to_string()).unwrap_or_default(),
-        parents: parents
-            .iter()
-            .map(|p| p.to_hex_with_len(id.shorten_or_id().hex_len()).to_string())
-            .collect(),
-        files,
-    })
+    Ok(files)
 }

@@ -79,11 +79,7 @@ pub fn ref_labels(repo: &gix::Repository) -> Result<HashMap<ObjectId, Vec<RefLab
         let Ok(id) = r.peel_to_id() else { continue };
         let id = id.detach();
         let label = if full.starts_with("refs/heads/") {
-            if head_branch.as_deref() == Some(short.as_str()) {
-                RefLabel::Head(short)
-            } else {
-                RefLabel::Branch(short)
-            }
+            if head_branch.as_deref() == Some(short.as_str()) { RefLabel::Head(short) } else { RefLabel::Branch(short) }
         } else if full.starts_with("refs/remotes/") {
             if short.ends_with("/HEAD") {
                 continue;

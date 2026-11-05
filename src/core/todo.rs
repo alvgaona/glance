@@ -13,7 +13,8 @@ pub enum Action {
 }
 
 impl Action {
-    pub const ALL: [Action; 6] = [Action::Pick, Action::Reword, Action::Edit, Action::Squash, Action::Fixup, Action::Drop];
+    pub const ALL: [Action; 6] =
+        [Action::Pick, Action::Reword, Action::Edit, Action::Squash, Action::Fixup, Action::Drop];
 
     pub fn word(self) -> &'static str {
         match self {
@@ -63,11 +64,9 @@ pub fn parse(text: &str) -> Vec<Line> {
             let subject = subject.strip_prefix("# ").unwrap_or(subject);
             match Action::parse(word) {
                 // `fixup -C <hash>` and friends carry flags; keep them verbatim.
-                Some(action) if !hash.is_empty() && !hash.starts_with('-') => Line::Commit {
-                    action,
-                    hash: hash.to_string(),
-                    subject: subject.to_string(),
-                },
+                Some(action) if !hash.is_empty() && !hash.starts_with('-') => {
+                    Line::Commit { action, hash: hash.to_string(), subject: subject.to_string() }
+                }
                 _ => Line::Other(l.to_string()),
             }
         })

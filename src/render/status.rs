@@ -6,10 +6,7 @@ use crate::core::status::{ChangeKind, FileChange, Status};
 pub fn print(st: &Status, p: &Paint) {
     print_header(st, p);
 
-    let clean = st.staged.is_empty()
-        && st.unstaged.is_empty()
-        && st.untracked.is_empty()
-        && st.conflicted.is_empty();
+    let clean = st.staged.is_empty() && st.unstaged.is_empty() && st.untracked.is_empty() && st.conflicted.is_empty();
     if clean {
         println!("\n  {}", "nothing to commit, working tree clean".style(p.dim()));
         return;
@@ -73,10 +70,7 @@ fn print_header(st: &Status, p: &Paint) {
     }
     println!("{line}");
     if st.in_progress.as_deref().is_some_and(|op| op.starts_with("rebasing")) {
-        println!(
-            "{}",
-            "  gg rebase --continue · --skip · --abort · --edit-todo".style(p.dim())
-        );
+        println!("{}", "  gg rebase --continue · --skip · --abort · --edit-todo".style(p.dim()));
     }
 }
 

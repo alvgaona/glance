@@ -338,13 +338,15 @@ fn draw(f: &mut Frame, app: &mut App) {
     let (list, details) = if !app.details {
         (body, None)
     } else if body.width >= 110 {
-        let [l, _, r] = Layout::horizontal([Constraint::Percentage(58), Constraint::Length(1), Constraint::Min(30)]).areas(body);
+        let [l, _, r] =
+            Layout::horizontal([Constraint::Percentage(58), Constraint::Length(1), Constraint::Min(30)]).areas(body);
         (l, Some(r))
     } else {
         // Stacked: the list takes only the rows it needs, details get the rest.
         let needed = app.lines.len() as u16 + 2;
         let list_h = needed.min(body.height * 3 / 5);
-        let [t, _, b] = Layout::vertical([Constraint::Length(list_h), Constraint::Length(1), Constraint::Min(5)]).areas(body);
+        let [t, _, b] =
+            Layout::vertical([Constraint::Length(list_h), Constraint::Length(1), Constraint::Min(5)]).areas(body);
         (t, Some(b))
     };
     draw_list(f, app, list);
@@ -379,8 +381,9 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         right.push(Span::styled("modified", theme::muted()));
     }
     let right = Line::from(right);
-    let [l, _, r] = Layout::horizontal([Constraint::Min(1), Constraint::Length(3), Constraint::Length(right.width() as u16)])
-        .areas(area);
+    let [l, _, r] =
+        Layout::horizontal([Constraint::Min(1), Constraint::Length(3), Constraint::Length(right.width() as u16)])
+            .areas(area);
     f.render_widget(Paragraph::new(widgets::truncate(left, l.width)), l);
     f.render_widget(Paragraph::new(right), r);
 }
@@ -449,7 +452,15 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 };
                 (left, right)
             }
-            Todo::Other(raw) => (vec![bar, widgets::pill("  ··  ", theme::ELEMENT, theme::MUTED), Span::raw("  "), Span::styled(raw.clone(), theme::muted())], Vec::new()),
+            Todo::Other(raw) => (
+                vec![
+                    bar,
+                    widgets::pill("  ··  ", theme::ELEMENT, theme::MUTED),
+                    Span::raw("  "),
+                    Span::styled(raw.clone(), theme::muted()),
+                ],
+                Vec::new(),
+            ),
         };
 
         let right = Line::from(right);
@@ -520,7 +531,10 @@ fn details(s: &Shown, action: Action, newest_first: bool) -> Vec<Line<'static>> 
             ChangeKind::Renamed | ChangeKind::Copied => ("R", theme::BLUE),
             ChangeKind::Modified | ChangeKind::TypeChange => ("M", theme::YELLOW),
         };
-        let mut spans = vec![Span::styled(format!("{mark}  "), Style::new().fg(color)), Span::styled(file.path.clone(), theme::text())];
+        let mut spans = vec![
+            Span::styled(format!("{mark}  "), Style::new().fg(color)),
+            Span::styled(file.path.clone(), theme::text()),
+        ];
         match file.size {
             Some(Size::Lines { added, removed }) => {
                 spans.push(Span::raw("  "));
@@ -542,7 +556,8 @@ fn details(s: &Shown, action: Action, newest_first: bool) -> Vec<Line<'static>> 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     // Left: what the list will do, e.g. "5 commits  ● 1 fixup  ● 1 drop".
     let commits = app.lines.iter().filter(|l| matches!(l, Todo::Commit { .. })).count();
-    let mut left = vec![Span::styled(format!("{commits} commit{}", if commits == 1 { "" } else { "s" }), theme::muted())];
+    let mut left =
+        vec![Span::styled(format!("{commits} commit{}", if commits == 1 { "" } else { "s" }), theme::muted())];
     for a in Action::ALL.into_iter().filter(|a| *a != Action::Pick) {
         let n = app.lines.iter().filter(|l| matches!(l, Todo::Commit { action, .. } if *action == a)).count();
         if n > 0 {

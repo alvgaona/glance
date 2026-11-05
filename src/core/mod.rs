@@ -1,10 +1,15 @@
 //! Reads data from the repository. Never prints anything.
 
+// Remotes, deletes and details are only used by the interactive view.
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub mod branches;
+// Patches are drawn only by the interactive log.
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub mod diff;
 pub mod graph;
 pub mod log;
 pub mod repos;
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub mod show;
 pub mod status;
 // Only the TUI rebase editor edits the todo list.
@@ -31,8 +36,5 @@ pub fn repo_name(repo: &gix::Repository) -> String {
 
 /// Seconds since the Unix epoch, right now.
 pub fn now() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }

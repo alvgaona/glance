@@ -75,7 +75,11 @@ pub fn print(repos: &[Repo], p: &Paint) {
         }
         let notes = if notes.is_empty() { "clean".style(p.dim()).to_string() } else { notes.join("  ") };
 
-        println!("{}{name_pad}  {b_shown}{b_pad}  {:>7}  {notes}", r.name.style(p.pick(owo_colors::Style::new().bold())), age.style(p.dim()));
+        println!(
+            "{}{name_pad}  {b_shown}{b_pad}  {:>7}  {notes}",
+            r.name.style(p.pick(owo_colors::Style::new().bold())),
+            age.style(p.dim())
+        );
     }
     println!(
         "\n{}",

@@ -19,10 +19,7 @@ pub fn count(old: &[u8], new: &[u8]) -> Option<Size> {
     }
     let input = InternedInput::new(byte_lines(old), byte_lines(new));
     let diff = Diff::compute(Algorithm::Histogram, &input);
-    Some(Size::Lines {
-        added: diff.count_additions(),
-        removed: diff.count_removals(),
-    })
+    Some(Size::Lines { added: diff.count_additions(), removed: diff.count_removals() })
 }
 
 #[cfg(test)]
@@ -65,10 +62,23 @@ mod tests {
 #[allow(dead_code)]
 pub enum PatchLine {
     /// `@@ -12,7 +12,9 @@`
-    Hunk { old_start: u32, new_start: u32 },
-    Context { old: u32, new: u32, text: String },
-    Added { new: u32, text: String },
-    Removed { old: u32, text: String },
+    Hunk {
+        old_start: u32,
+        new_start: u32,
+    },
+    Context {
+        old: u32,
+        new: u32,
+        text: String,
+    },
+    Added {
+        new: u32,
+        text: String,
+    },
+    Removed {
+        old: u32,
+        text: String,
+    },
 }
 
 /// Unified diff with `context` lines around each change. `None` for binary or huge files.

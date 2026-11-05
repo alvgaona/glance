@@ -20,7 +20,7 @@ pub struct Status {
     pub conflicted: Vec<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Upstream {
     pub name: String,
     pub ahead: usize,
@@ -62,10 +62,8 @@ pub fn read(repo: &gix::Repository, sizes: bool) -> Result<Status> {
         st.upstream = upstream(repo, name.as_ref(), head_id.detach()).ok().flatten();
     }
 
-    let iter = repo
-        .status(gix::progress::Discard)?
-        .untracked_files(gix::status::UntrackedFiles::Collapsed)
-        .into_iter(None)?;
+    let iter =
+        repo.status(gix::progress::Discard)?.untracked_files(gix::status::UntrackedFiles::Collapsed).into_iter(None)?;
 
     for item in iter {
         match item? {
@@ -75,17 +73,10 @@ pub fn read(repo: &gix::Repository, sizes: bool) -> Result<Status> {
                 let (kind, path, from, old, new) = match change {
                     Addition { location, id, .. } => (ChangeKind::Added, location, None, None, Some(id.into_owned())),
                     Deletion { location, id, .. } => (ChangeKind::Deleted, location, None, Some(id.into_owned()), None),
-                    Modification {
-                        location, previous_id, id, ..
-                    } => (ChangeKind::Modified, location, None, Some(previous_id.into_owned()), Some(id.into_owned())),
-                    Rewrite {
-                        source_location,
-                        source_id,
-                        location,
-                        id,
-                        copy,
-                        ..
-                    } => {
+                    Modification { location, previous_id, id, .. } => {
+                        (ChangeKind::Modified, location, None, Some(previous_id.into_owned()), Some(id.into_owned()))
+                    }
+                    Rewrite { source_location, source_id, location, id, copy, .. } => {
                         let kind = if copy { ChangeKind::Copied } else { ChangeKind::Renamed };
                         (kind, location, Some(source_location), Some(source_id.into_owned()), Some(id.into_owned()))
                     }
@@ -165,11 +156,7 @@ pub fn upstream(
     let count = |from: gix::ObjectId, hide: gix::ObjectId| -> Result<usize> {
         Ok(repo.rev_walk([from]).with_hidden([hide]).all()?.count())
     };
-    Ok(Some(Upstream {
-        name: name.shorten().to_string(),
-        ahead: count(head, up)?,
-        behind: count(up, head)?,
-    }))
+    Ok(Some(Upstream { name: name.shorten().to_string(), ahead: count(head, up)?, behind: count(up, head)? }))
 }
 
 /// "rebase 3/5", "merge", "cherry-pick"... for an operation that was started but not finished.
@@ -207,7 +194,5 @@ fn in_progress(repo: &gix::Repository) -> Option<String> {
 
 pub fn count_stashes(repo: &gix::Repository) -> usize {
     // The stash list is the reflog of refs/stash: one line per entry.
-    std::fs::read(repo.common_dir().join("logs/refs/stash"))
-        .map(|b| b.lines().count())
-        .unwrap_or(0)
+    std::fs::read(repo.common_dir().join("logs/refs/stash")).map(|b| b.lines().count()).unwrap_or(0)
 }

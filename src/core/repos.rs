@@ -18,26 +18,17 @@ pub struct RepoState {
 
 /// Every git repo directly inside `dir`, sorted by name. Each is read on its own thread.
 pub fn read(dir: &Path) -> Result<Vec<Repo>> {
-    let mut paths: Vec<PathBuf> = std::fs::read_dir(dir)?
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| p.join(".git").exists())
-        .collect();
+    let mut paths: Vec<PathBuf> =
+        std::fs::read_dir(dir)?.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.join(".git").exists()).collect();
     paths.sort();
 
     let repos = std::thread::scope(|scope| {
-        let handles: Vec<_> = paths
-            .iter()
-            .map(|path| scope.spawn(move || read_one(path)))
-            .collect();
+        let handles: Vec<_> = paths.iter().map(|path| scope.spawn(move || read_one(path))).collect();
         handles
             .into_iter()
             .zip(&paths)
             .map(|(h, path)| {
-                h.join().unwrap_or_else(|_| Repo {
-                    name: file_name(path),
-                    state: Err("crashed while reading".into()),
-                })
+                h.join().unwrap_or_else(|_| Repo { name: file_name(path), state: Err("crashed while reading".into()) })
             })
             .collect()
     });

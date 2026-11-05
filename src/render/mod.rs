@@ -33,14 +33,28 @@ impl Paint {
         if self.on { s } else { Style::new() }
     }
 
-    pub fn green(&self) -> Style { self.pick(Style::new().green()) }
-    pub fn red(&self) -> Style { self.pick(Style::new().red()) }
-    pub fn yellow(&self) -> Style { self.pick(Style::new().yellow()) }
-    pub fn blue(&self) -> Style { self.pick(Style::new().blue()) }
-    pub fn magenta(&self) -> Style { self.pick(Style::new().magenta()) }
-    pub fn dim(&self) -> Style { self.pick(Style::new().dimmed()) }
+    pub fn green(&self) -> Style {
+        self.pick(Style::new().green())
+    }
+    pub fn red(&self) -> Style {
+        self.pick(Style::new().red())
+    }
+    pub fn yellow(&self) -> Style {
+        self.pick(Style::new().yellow())
+    }
+    pub fn blue(&self) -> Style {
+        self.pick(Style::new().blue())
+    }
+    pub fn magenta(&self) -> Style {
+        self.pick(Style::new().magenta())
+    }
+    pub fn dim(&self) -> Style {
+        self.pick(Style::new().dimmed())
+    }
     /// Current branch name.
-    pub fn head(&self) -> Style { self.pick(Style::new().bold().cyan()) }
+    pub fn head(&self) -> Style {
+        self.pick(Style::new().bold().cyan())
+    }
 }
 
 /// "+12 −3", "+5", "−7" or "binary".

@@ -95,7 +95,9 @@ fn resolve(args: &[String]) -> Result<Option<(Vec<String>, Option<String>)>> {
                 std::cmp::Ordering::Greater => Ok(Some((with_rest(format!("HEAD~{n}")), desc))),
                 // Exactly the whole history: git needs --root for that.
                 std::cmp::Ordering::Equal => Ok(Some((with_rest("--root".into()), desc))),
-                std::cmp::Ordering::Less => anyhow::bail!("this branch only has {available} commits"),
+                std::cmp::Ordering::Less => {
+                    anyhow::bail!("this branch only has {available} commits")
+                }
             }
         }
         Some(_) => Ok(Some((args.to_vec(), None))),
@@ -106,9 +108,13 @@ fn resolve(args: &[String]) -> Result<Option<(Vec<String>, Option<String>)>> {
 /// "4 commits since branching off main". Compares with both the local and origin
 /// copies of main and keeps the closer one. `None` if there's nothing to rebase.
 fn fork_point(repo: &gix::Repository) -> Result<Option<(gix::ObjectId, String)>> {
-    let Ok(head) = repo.head_id() else { return Ok(None) };
+    let Ok(head) = repo.head_id() else {
+        return Ok(None);
+    };
     let head = head.detach();
-    let Some((main, _)) = core::branches::default_branch(repo) else { return Ok(None) };
+    let Some((main, _)) = core::branches::default_branch(repo) else {
+        return Ok(None);
+    };
     // On main itself there's no fork; `unpushed` covers that case.
     if repo.head_name()?.is_some_and(|n| n.shorten() == main.as_str()) {
         return Ok(None);
@@ -116,10 +122,14 @@ fn fork_point(repo: &gix::Repository) -> Result<Option<(gix::ObjectId, String)>>
 
     let mut best: Option<(usize, gix::ObjectId, String)> = None;
     for name in [format!("refs/heads/{main}"), format!("refs/remotes/origin/{main}")] {
-        let Ok(mut r) = repo.find_reference(name.as_str()) else { continue };
+        let Ok(mut r) = repo.find_reference(name.as_str()) else {
+            continue;
+        };
         let short = r.name().shorten().to_string();
         let Ok(tip) = r.peel_to_id() else { continue };
-        let Ok(Some(base)) = repo.merge_base(head, tip.detach()) else { continue };
+        let Ok(Some(base)) = repo.merge_base(head, tip.detach()) else {
+            continue;
+        };
         let base = base.detach();
         let n = repo.rev_walk([head]).with_hidden([base]).all()?.count();
         if n > 0 && best.as_ref().is_none_or(|(m, ..)| n < *m) {
@@ -134,13 +144,19 @@ fn fork_point(repo: &gix::Repository) -> Result<Option<(gix::ObjectId, String)>>
 
 /// Commits not yet pushed to this branch's upstream, e.g. on main before a push.
 fn unpushed(repo: &gix::Repository) -> Result<Option<(gix::ObjectId, String)>> {
-    let (Some(name), Ok(head)) = (repo.head_name()?, repo.head_id()) else { return Ok(None) };
+    let (Some(name), Ok(head)) = (repo.head_name()?, repo.head_id()) else {
+        return Ok(None);
+    };
     let Some(Ok(up)) = repo.branch_remote_tracking_ref_name(name.as_ref(), gix::remote::Direction::Fetch) else {
         return Ok(None);
     };
-    let Ok(mut up_ref) = repo.find_reference(up.as_ref()) else { return Ok(None) };
+    let Ok(mut up_ref) = repo.find_reference(up.as_ref()) else {
+        return Ok(None);
+    };
     let head = head.detach();
-    let Ok(Some(base)) = repo.merge_base(head, up_ref.peel_to_id()?.detach()) else { return Ok(None) };
+    let Ok(Some(base)) = repo.merge_base(head, up_ref.peel_to_id()?.detach()) else {
+        return Ok(None);
+    };
     let base = base.detach();
     let n = repo.rev_walk([head]).with_hidden([base]).all()?.count();
     if n == 0 {
@@ -221,9 +237,8 @@ fn newest_first(repo: &gix::Repository) -> bool {
 fn header(repo: &gix::Repository, lines: &[todo::Line]) -> (String, String) {
     let dir = repo.path().join("rebase-merge");
     let read = |name: &str| std::fs::read_to_string(dir.join(name)).ok().map(|s| s.trim().to_string());
-    let branch = read("head-name")
-        .map(|h| h.trim_start_matches("refs/heads/").to_string())
-        .unwrap_or_else(|| "HEAD".into());
+    let branch =
+        read("head-name").map(|h| h.trim_start_matches("refs/heads/").to_string()).unwrap_or_else(|| "HEAD".into());
     let onto = read("onto").map(|o| o.chars().take(7).collect::<String>()).unwrap_or_default();
     let n = lines.iter().filter(|l| matches!(l, todo::Line::Commit { .. })).count();
     let done = read("done").map(|d| todo::parse(&d).len()).unwrap_or(0);

@@ -6,6 +6,9 @@ pub mod branches;
 // Patches are drawn only by the interactive log.
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub mod diff;
+// Pull requests via gh, shown by the interactive branch view.
+#[cfg(feature = "tui")]
+pub mod github;
 pub mod graph;
 pub mod log;
 pub mod repos;

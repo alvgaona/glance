@@ -4,6 +4,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::process::{Command as Process, Stdio};
 use std::rc::Rc;
+use std::sync::mpsc;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -19,11 +20,24 @@ use ratatui::{
 use super::theme;
 use super::widgets::{self, Command, Confirm, Palette, PaletteEvent, Toast};
 use crate::core::branches::{self, Branch, Branches};
+use crate::core::github::{self, Pr};
 use crate::render::relative_time;
+
+/// Pull requests, loaded from gh in the background.
+enum Prs {
+    /// No GitHub remote or no gh.
+    Off,
+    Loading(mpsc::Receiver<Result<Vec<Pr>>>),
+    Ready(Vec<Pr>),
+    /// gh failed; the reason was shown in a toast.
+    Failed,
+}
 
 #[derive(Clone)]
 enum Cmd {
     Checkout,
+    OpenPr,
+    ReloadPrs,
     DeleteLocal,
     DeleteRemote,
     Mark,
@@ -143,6 +157,11 @@ struct App<'r> {
     repo_name: String,
     /// What the last single delete removed, for its toast.
     last_deleted: String,
+    prs: Prs,
+    /// Branch name -> index into the ready PR list.
+    pr_of: HashMap<String, usize>,
+    /// Remote name -> GitHub account, to tell our PRs from same-named ones in other forks.
+    owners: HashMap<String, String>,
 }
 
 pub fn run(repo: &gix::Repository) -> Result<()> {
@@ -165,7 +184,11 @@ pub fn run(repo: &gix::Repository) -> Result<()> {
         list_area: Rect::default(),
         repo_name: crate::core::repo_name(repo),
         last_deleted: String::new(),
+        prs: Prs::Off,
+        pr_of: HashMap::new(),
+        owners: github::remote_owners(repo),
     };
+    app.load_prs();
     app.filter();
     // Start on the current branch.
     if let Some(i) = app.visible.iter().position(|&i| app.data.list[i].current) {
@@ -178,6 +201,7 @@ pub fn run(repo: &gix::Repository) -> Result<()> {
             if app.toast.as_ref().is_some_and(Toast::expired) {
                 app.toast = None;
             }
+            app.poll_prs();
             terminal.draw(|f| draw(f, &mut app))?;
             if !event::poll(Duration::from_millis(200))? {
                 continue;
@@ -239,6 +263,8 @@ fn commands() -> Vec<Command<Cmd>> {
         Command { label: "Select merged and gone branches", keys: "m", action: Cmd::MarkMerged },
         Command { label: "Clear selection", keys: "esc", action: Cmd::ClearMarks },
         Command { label: "Copy branch name", keys: "y", action: Cmd::Copy },
+        Command { label: "Open pull request in the browser", keys: "o", action: Cmd::OpenPr },
+        Command { label: "Reload pull requests", keys: "R", action: Cmd::ReloadPrs },
         Command { label: "Show or hide remote branches", keys: "a", action: Cmd::ToggleRemotes },
         Command { label: "Search branches", keys: "/", action: Cmd::Search },
         Command { label: "Show or hide details", keys: "tab", action: Cmd::Details },
@@ -265,6 +291,7 @@ impl App<'_> {
         self.cache.clear();
         let names: BTreeSet<String> = self.data.list.iter().map(|b| b.name.clone()).collect();
         self.marked.retain(|m| names.contains(m));
+        self.index_prs();
         self.filter();
         if let Some(name) = keep
             && let Some(i) = self.visible.iter().position(|&i| self.data.list[i].name == name)
@@ -276,6 +303,60 @@ impl App<'_> {
 
     fn current(&self) -> Option<&Branch> {
         self.visible.get(self.selected).map(|&i| &self.data.list[i])
+    }
+
+    /// Asks gh for PRs on a background thread; `poll_prs` picks up the answer.
+    fn load_prs(&mut self) {
+        let Some(dir) = self.repo.workdir().map(|d| d.to_path_buf()) else { return };
+        if !github::available(self.repo) {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(github::fetch(&dir));
+        });
+        self.prs = Prs::Loading(rx);
+    }
+
+    fn poll_prs(&mut self) {
+        let Prs::Loading(rx) = &self.prs else { return };
+        let got = match rx.try_recv() {
+            Ok(r) => r,
+            Err(mpsc::TryRecvError::Empty) => return,
+            Err(mpsc::TryRecvError::Disconnected) => Err(anyhow::anyhow!("gh stopped")),
+        };
+        self.prs = match got {
+            Ok(list) => Prs::Ready(list),
+            Err(e) => {
+                self.toast = Some(Toast::new(format!("Couldn't load pull requests: {e}"), theme::YELLOW));
+                Prs::Failed
+            }
+        };
+        self.index_prs();
+        self.cache.clear();
+    }
+
+    fn index_prs(&mut self) {
+        self.pr_of.clear();
+        let Prs::Ready(list) = &self.prs else { return };
+        let main = self.data.default.as_ref().map(|(n, _)| n.as_str());
+        for b in &self.data.list {
+            if let Some(pr) = github::find(list, b, &self.owners, main) {
+                let i = list.iter().position(|p| std::ptr::eq(p, pr)).unwrap_or(0);
+                self.pr_of.insert(b.name.clone(), i);
+            }
+        }
+    }
+
+    fn pr(&self, b: &Branch) -> Option<&Pr> {
+        let Prs::Ready(list) = &self.prs else { return None };
+        self.pr_of.get(&b.name).map(|&i| &list[i])
+    }
+
+    /// Merged on GitHub (squash or rebase) with nothing added since: safe to delete
+    /// even though git doesn't see it in main.
+    fn merged_by_pr(&self, b: &Branch) -> Option<&Pr> {
+        self.pr(b).filter(|p| p.state == github::State::Merged && p.head == Some(b.oid))
     }
 
     /// Marked branches, or the one under the cursor when nothing is marked.
@@ -423,6 +504,9 @@ impl App<'_> {
             KeyCode::Char(' ') => Cmd::Mark,
             KeyCode::Char('m') => Cmd::MarkMerged,
             KeyCode::Char('y') => Cmd::Copy,
+            KeyCode::Char('o') => Cmd::OpenPr,
+            KeyCode::Char('R') => Cmd::ReloadPrs,
+            KeyCode::Char('r') if k.modifiers.contains(KeyModifiers::SHIFT) => Cmd::ReloadPrs,
             KeyCode::Char('a') => Cmd::ToggleRemotes,
             KeyCode::Char('/') => Cmd::Search,
             KeyCode::Tab => Cmd::Details,
@@ -456,6 +540,33 @@ impl App<'_> {
                     self.toast = Some(Toast::new(format!("Copied {name}"), theme::ACCENT));
                 }
             }
+            Cmd::OpenPr => {
+                let msg = match (&self.prs, self.current().and_then(|b| self.pr(b))) {
+                    (_, Some(pr)) => {
+                        let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+                        let ok = Process::new(opener)
+                            .arg(&pr.url)
+                            .stdout(Stdio::null())
+                            .stderr(Stdio::null())
+                            .status()
+                            .is_ok_and(|s| s.success());
+                        if ok { format!("Opened #{}", pr.number) } else { pr.url.clone() }
+                    }
+                    (Prs::Loading(_), None) => "Still loading pull requests".into(),
+                    (Prs::Off, None) => "Pull requests need a GitHub remote and gh".into(),
+                    _ => "No pull request for this branch".into(),
+                };
+                self.toast = Some(Toast::new(msg, theme::ACCENT));
+            }
+            Cmd::ReloadPrs => {
+                if matches!(self.prs, Prs::Loading(_)) {
+                    return Ok(None);
+                }
+                self.load_prs();
+                if matches!(self.prs, Prs::Loading(_)) {
+                    self.toast = Some(Toast::new("Reloading pull requests…", theme::ACCENT));
+                }
+            }
             Cmd::Mark => {
                 if let Some(b) = self.current() {
                     let name = b.name.clone();
@@ -470,12 +581,19 @@ impl App<'_> {
                     .data
                     .list
                     .iter()
-                    .filter(|b| !b.remote && (b.merged || b.gone()) && !self.protected(b))
+                    .filter(|b| {
+                        !b.remote && (b.merged || b.gone() || self.merged_by_pr(b).is_some()) && !self.protected(b)
+                    })
                     .map(|b| b.name.clone())
                     .collect();
                 let msg = match picks.len() {
                     0 => "No merged or gone branches".to_string(),
                     n => format!("Selected {n} merged or gone branch{}", if n == 1 { "" } else { "es" }),
+                };
+                let msg = if matches!(self.prs, Prs::Loading(_)) {
+                    format!("{msg} (pull requests still loading)")
+                } else {
+                    msg
                 };
                 self.marked.extend(picks);
                 self.toast = Some(Toast::new(msg, theme::ACCENT));
@@ -548,6 +666,8 @@ impl App<'_> {
             let n = only_here(b);
             let mut body = if n == 0 && b.merged {
                 format!("It's merged into {main}, so no work is lost.")
+            } else if let Some(pr) = self.merged_by_pr(b) {
+                format!("PR #{} was merged into {main} (as new commits), so no work is lost.", pr.number)
             } else if n == 0 {
                 "Every commit is also on another branch, so no work is lost.".to_string()
             } else {
@@ -570,6 +690,8 @@ impl App<'_> {
                 let n = only_here(b);
                 let note = if n == 0 {
                     if b.merged { "merged" } else { "safe" }.to_string()
+                } else if let Some(pr) = self.merged_by_pr(b) {
+                    format!("PR #{} merged", pr.number)
                 } else {
                     unmerged += 1;
                     format!("{n} commit{} only here", if n == 1 { "" } else { "s" })
@@ -584,7 +706,7 @@ impl App<'_> {
                     "{unmerged} of them have commits no other branch has. `git branch <name> <id>` brings one back."
                 );
             } else {
-                body += "Every commit is also on another branch; no work is lost.";
+                body += "No work is lost: every commit is on another branch or in a merged PR.";
             }
             (format!("Delete {} branches?", list.len()), body.trim_end().to_string())
         };
@@ -598,7 +720,7 @@ impl App<'_> {
             let names: Vec<String> = keep.iter().map(|b| format!("{} ({})", b.name, why(b))).collect();
             body += &format!("\nSkipping {}.", names.join(", "));
         }
-        let danger = list.iter().any(|b| only_here(b) > 0);
+        let danger = list.iter().any(|b| only_here(b) > 0 && self.merged_by_pr(b).is_none());
         self.confirm =
             Some((Confirm { title, body, yes: "Delete".into(), no: "Cancel".into(), danger }, Pending::Local(list)));
     }
@@ -693,7 +815,7 @@ impl App<'_> {
             return Some(d.clone());
         }
         let default = self.data.default.clone();
-        let lines = Rc::new(build_detail(self.repo, &b, default.as_ref(), self.protected(&b)));
+        let lines = Rc::new(build_detail(self.repo, &b, default.as_ref(), self.protected(&b), self.pr(&b)));
         self.cache.insert(key, lines.clone());
         Some(lines)
     }
@@ -801,6 +923,11 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     if app.remotes {
         spans.push(Span::styled("  · with remotes", theme::faint()));
     }
+    match &app.prs {
+        Prs::Loading(_) => spans.push(Span::styled("  · loading pull requests…", theme::faint())),
+        Prs::Failed => spans.push(Span::styled("  · no pull requests (R retries)", theme::faint())),
+        Prs::Ready(_) | Prs::Off => {}
+    }
     f.render_widget(Paragraph::new(widgets::truncate(Line::from(spans), area.width)), area);
 }
 
@@ -874,7 +1001,24 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
         // On several remotes, or on one it doesn't track: "2r".
         let on = b.copies.len();
         let show = on > 1 || (on == 1 && (b.upstream.is_none() || b.gone()));
-        let mut right = vec![Span::styled(if show { format!("  {on}r") } else { "    ".into() }, theme::faint())];
+        let mut right = Vec::new();
+        // PR column, only once some branch has one: "#1042 ✓".
+        if !app.pr_of.is_empty() {
+            let mut pr_spans = match app.pr(b) {
+                Some(pr) => {
+                    let mut s = vec![Span::styled(format!("#{}", pr.number), Style::new().fg(pr_color(pr.state)))];
+                    if let Some((glyph, color)) = pr.checks.as_ref().and_then(checks_glyph) {
+                        s.push(Span::styled(format!(" {glyph}"), Style::new().fg(color)));
+                    }
+                    s
+                }
+                None => Vec::new(),
+            };
+            let w = Line::from(pr_spans.clone()).width();
+            right.push(Span::raw(" ".repeat(10usize.saturating_sub(w))));
+            right.append(&mut pr_spans);
+        }
+        right.push(Span::styled(if show { format!("  {on}r") } else { "    ".into() }, theme::faint()));
         right.push(Span::raw(" ".repeat(9usize.saturating_sub(track_w))));
         right.extend(track);
         right.push(Span::styled(if b.merged { "   merged" } else { "         " }, theme::faint()));
@@ -888,11 +1032,94 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
+fn pr_color(s: github::State) -> ratatui::style::Color {
+    match s {
+        github::State::Open => theme::GREEN,
+        github::State::Draft => theme::MUTED,
+        github::State::Merged => theme::PURPLE,
+        github::State::Closed => theme::RED,
+    }
+}
+
+/// ✗ if any check failed, • while some run, ✓ when all passed.
+fn checks_glyph(c: &github::Checks) -> Option<(&'static str, ratatui::style::Color)> {
+    if c.failed > 0 {
+        Some(("✗", theme::RED))
+    } else if c.pending > 0 {
+        Some(("•", theme::YELLOW))
+    } else if c.passed > 0 {
+        Some(("✓", theme::GREEN))
+    } else {
+        None
+    }
+}
+
+/// The "pr" rows of the details panel.
+fn pr_lines(pr: &Pr, b: &Branch, label: &dyn Fn(&str) -> Span<'static>) -> Vec<Line<'static>> {
+    let state = match pr.state {
+        github::State::Open => "open",
+        github::State::Draft => "draft",
+        github::State::Merged => "merged",
+        github::State::Closed => "closed",
+    };
+    let mut first = vec![
+        label("pr"),
+        Span::styled(format!("#{}", pr.number), Style::new().fg(pr_color(pr.state)).add_modifier(Modifier::BOLD)),
+        Span::raw(" "),
+        Span::styled(format!(" {state} "), Style::new().bg(theme::ELEMENT).fg(pr_color(pr.state))),
+    ];
+    if matches!(pr.state, github::State::Open | github::State::Draft) {
+        let review = match pr.review.as_deref() {
+            Some("APPROVED") => Some(("approved", theme::GREEN)),
+            Some("CHANGES_REQUESTED") => Some(("changes requested", theme::RED)),
+            Some("REVIEW_REQUIRED") => Some(("review required", theme::MUTED)),
+            _ => None,
+        };
+        if let Some((text, color)) = review {
+            first.push(Span::styled("  ·  ", theme::faint()));
+            first.push(Span::styled(text, Style::new().fg(color)));
+        }
+        if let Some(c) = &pr.checks {
+            let mut parts = Vec::new();
+            if c.failed > 0 {
+                parts.push(Span::styled(format!("✗ {} failed", c.failed), Style::new().fg(theme::RED)));
+            }
+            if c.pending > 0 {
+                parts.push(Span::styled(format!("• {} running", c.pending), Style::new().fg(theme::YELLOW)));
+            }
+            if c.failed == 0 && c.pending == 0 && c.passed > 0 {
+                parts.push(Span::styled(format!("✓ {} checks passed", c.passed), Style::new().fg(theme::GREEN)));
+            }
+            for p in parts {
+                first.push(Span::styled("  ·  ", theme::faint()));
+                first.push(p);
+            }
+        }
+    }
+    let mut out = vec![Line::from(first), Line::from(vec![label(""), Span::styled(pr.title.clone(), theme::text())])];
+    // Local work the PR doesn't have (pushed later, or never pushed).
+    if pr.head.is_some_and(|h| h != b.oid) {
+        let note = match pr.state {
+            github::State::Merged => "branch has changed since the PR was merged",
+            github::State::Closed => "branch has changed since the PR was closed",
+            _ => "local branch differs from the PR",
+        };
+        out.push(Line::from(vec![label(""), Span::styled(note, Style::new().fg(theme::YELLOW))]));
+    }
+    out.push(Line::from(vec![
+        label(""),
+        Span::styled(format!("{}  ", pr.url), theme::faint()),
+        Span::styled("o open", theme::muted()),
+    ]));
+    out
+}
+
 fn build_detail(
     repo: &gix::Repository,
     b: &Branch,
     default: Option<&(String, gix::ObjectId)>,
     protected: bool,
+    pr: Option<&Pr>,
 ) -> Vec<Line<'static>> {
     let now = crate::core::now();
     let label = |s: &str| Span::styled(format!("{s:<10}"), theme::faint());
@@ -925,6 +1152,11 @@ fn build_detail(
         Line::styled(b.summary.clone(), theme::text()),
         Line::raw(""),
     ];
+
+    if let Some(pr) = pr {
+        out.extend(pr_lines(pr, b, &label));
+        out.push(Line::raw(""));
+    }
 
     // Upstream.
     if !b.remote {
@@ -998,6 +1230,11 @@ fn build_detail(
     let state = match &d {
         Some(d) if d.unique_total == 0 => Span::styled(
             if protected { "merged".to_string() } else { format!("merged into {main}, safe to delete") },
+            Style::new().fg(theme::GREEN),
+        ),
+        // Squash or rebase merges: git can't see it, GitHub can.
+        Some(_) if pr.is_some_and(|p| p.state == github::State::Merged && p.head == Some(b.oid)) => Span::styled(
+            if protected { "merged via PR".to_string() } else { "merged via PR, safe to delete".to_string() },
             Style::new().fg(theme::GREEN),
         ),
         Some(d) => Span::styled(

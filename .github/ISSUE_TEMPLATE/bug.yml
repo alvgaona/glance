@@ -1,0 +1,29 @@
+name: Bug
+description: Something glance does wrong
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you ran, what you saw, and what you expected instead. A screenshot helps for screens.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to make it happen
+      description: The git state matters (a merge in progress, a detached HEAD, a worktree…).
+      placeholder: |
+        1. git init, commit a file
+        2. glance add
+        3. …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Versions
+      description: Output of `glance --version` and `git --version`, and your OS and terminal.
+    validations:
+      required: true

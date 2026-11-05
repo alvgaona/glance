@@ -44,6 +44,10 @@ pub enum Command {
     #[command(visible_alias = "br")]
     Branches,
 
+    /// Stashes: browse, apply, pop, drop, or turn one into a branch.
+    #[command(visible_alias = "sh")]
+    Stash,
+
     /// One commit with a per-file summary.
     Show {
         /// Revision to show.

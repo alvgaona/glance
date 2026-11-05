@@ -14,6 +14,9 @@ pub mod log;
 pub mod repos;
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub mod show;
+// Files and details are only shown by the interactive view.
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
+pub mod stash;
 pub mod status;
 // Only the TUI rebase editor edits the todo list.
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]

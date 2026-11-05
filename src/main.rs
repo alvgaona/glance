@@ -42,6 +42,14 @@ fn main() -> Result<()> {
             }
             render::branches::print(&core::branches::read(&repo, false)?, &paint);
         }
+        Command::Stash => {
+            let repo = core::open()?;
+            #[cfg(feature = "tui")]
+            if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+                return tui::stash::run(&repo);
+            }
+            render::stash::print(&core::stash::list(&repo)?, &paint);
+        }
         Command::Show { rev, patch } => {
             let repo = core::open()?;
             let shown = core::show::read(&repo, &rev)?;

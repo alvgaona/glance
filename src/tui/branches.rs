@@ -10,15 +10,15 @@ use std::time::Duration;
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
 use ratatui::{
-    DefaultTerminal, Frame,
+    Frame,
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Padding, Paragraph, Wrap},
 };
 
-use super::theme;
-use super::widgets::{self, Command, Confirm, Palette, PaletteEvent, Toast};
+use super::widgets::{self, Command, Confirm, Input, InputEvent, Palette, PaletteEvent, Toast};
+use super::{enter, first_lines, git, leave, theme};
 use crate::core::branches::{self, Branch, Branches};
 use crate::core::github::{self, Pr};
 use crate::render::relative_time;
@@ -130,116 +130,6 @@ impl RemotePick {
     }
 }
 
-/// Typing a new name for a branch.
-struct Rename {
-    from: String,
-    /// The branch is on a remote: say that copy keeps the old name.
-    pushed: bool,
-    input: Vec<char>,
-    /// Cursor position in `input`.
-    at: usize,
-}
-
-enum RenameEvent {
-    Cancel,
-    Done(String),
-}
-
-impl Rename {
-    fn new(from: &str, pushed: bool) -> Self {
-        let input: Vec<char> = from.chars().collect();
-        Self { from: from.to_string(), pushed, at: input.len(), input }
-    }
-
-    fn key(&mut self, k: KeyEvent) -> Option<RenameEvent> {
-        let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
-        match k.code {
-            KeyCode::Esc => return Some(RenameEvent::Cancel),
-            KeyCode::Enter => return Some(RenameEvent::Done(self.input.iter().collect::<String>().trim().to_string())),
-            KeyCode::Left => self.at = self.at.saturating_sub(1),
-            KeyCode::Right => self.at = (self.at + 1).min(self.input.len()),
-            KeyCode::Home => self.at = 0,
-            KeyCode::End => self.at = self.input.len(),
-            KeyCode::Char('a') if ctrl => self.at = 0,
-            KeyCode::Char('e') if ctrl => self.at = self.input.len(),
-            KeyCode::Char('u') if ctrl => {
-                self.input.drain(..self.at);
-                self.at = 0;
-            }
-            // Delete back to the previous '/', '-', '_' or space.
-            KeyCode::Char('w') if ctrl => {
-                let stop = |c: &char| matches!(c, '/' | '-' | '_' | ' ');
-                let mut start = self.at;
-                while start > 0 && stop(&self.input[start - 1]) {
-                    start -= 1;
-                }
-                while start > 0 && !stop(&self.input[start - 1]) {
-                    start -= 1;
-                }
-                self.input.drain(start..self.at);
-                self.at = start;
-            }
-            KeyCode::Backspace if self.at > 0 => {
-                self.at -= 1;
-                self.input.remove(self.at);
-            }
-            KeyCode::Delete if self.at < self.input.len() => {
-                self.input.remove(self.at);
-            }
-            KeyCode::Char(c) if !ctrl && !c.is_whitespace() => {
-                self.input.insert(self.at, c);
-                self.at += 1;
-            }
-            _ => {}
-        }
-        None
-    }
-
-    fn draw(&self, f: &mut Frame, area: Rect) {
-        let rows = if self.pushed { 10 } else { 8 };
-        let r = widgets::centered(area, 64, rows);
-        f.render_widget(ratatui::widgets::Clear, r);
-        let block = widgets::panel(theme::ELEMENT);
-        let inner = block.inner(r);
-        f.render_widget(block, r);
-
-        // The input on a slightly lighter strip, with the cursor as a block.
-        let w = inner.width as usize;
-        let start = (self.at + 1).saturating_sub(w.saturating_sub(1));
-        let field = Style::new().bg(theme::BORDER).fg(theme::TEXT);
-        let mut input = Vec::new();
-        for (i, c) in self.input.iter().enumerate().skip(start) {
-            let style = if i == self.at { Style::new().bg(theme::ACCENT).fg(theme::BG) } else { field };
-            input.push(Span::styled(c.to_string(), style));
-        }
-        if self.at == self.input.len() {
-            input.push(Span::styled(" ", Style::new().bg(theme::ACCENT)));
-        }
-        let used = Line::from(input.clone()).width();
-        input.push(Span::styled(" ".repeat(w.saturating_sub(used)), field));
-
-        let mut lines = vec![
-            Line::from(vec![
-                Span::styled("Rename ", theme::bold()),
-                Span::styled(self.from.clone(), theme::bold().fg(theme::ACCENT)),
-            ]),
-            Line::raw(""),
-            Line::from(input),
-            Line::raw(""),
-        ];
-        if self.pushed {
-            lines.push(Line::styled("The copy on the remote keeps its old name.", theme::muted()));
-            lines.push(Line::raw(""));
-        }
-        lines.push(Line::from(vec![
-            widgets::pill("enter  Rename", theme::ACCENT, theme::BG),
-            Span::raw("  "),
-            widgets::pill("esc  Cancel", theme::BORDER, theme::TEXT),
-        ]));
-        f.render_widget(Paragraph::new(lines), inner);
-    }
-}
-
 /// What the event loop has to do after a key press.
 enum Effect {
     Quit,
@@ -270,7 +160,8 @@ struct App<'r> {
     palette: Option<Palette<Cmd>>,
     confirm: Option<(Confirm, Pending)>,
     pick: Option<RemotePick>,
-    rename: Option<Rename>,
+    /// The rename dialog and the branch it renames.
+    rename: Option<(Input, String)>,
     /// A background `git fetch`, while it runs.
     fetching: Option<mpsc::Receiver<(bool, String)>>,
     list_area: Rect,
@@ -355,29 +246,6 @@ pub fn run(repo: &gix::Repository) -> Result<()> {
     })();
     leave();
     result
-}
-
-fn enter() -> DefaultTerminal {
-    let t = ratatui::init();
-    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture);
-    t
-}
-
-fn leave() {
-    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
-    ratatui::restore();
-}
-
-/// Runs git, returning whether it worked and its output (stderr first; that's where git talks).
-/// Prompts for credentials still reach the terminal: ssh and git ask on /dev/tty.
-fn git(args: &[String]) -> (bool, String) {
-    match Process::new("git").args(args).stdin(Stdio::inherit()).output() {
-        Ok(out) => {
-            let text = format!("{}{}", String::from_utf8_lossy(&out.stderr), String::from_utf8_lossy(&out.stdout));
-            (out.status.success(), text.trim().to_string())
-        }
-        Err(e) => (false, format!("could not run git: {e}")),
-    }
 }
 
 fn commands() -> Vec<Command<Cmd>> {
@@ -564,11 +432,11 @@ impl App<'_> {
     fn key(&mut self, k: KeyEvent) -> Result<Option<Effect>> {
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         let shift = k.modifiers.contains(KeyModifiers::SHIFT);
-        if let Some(r) = &mut self.rename {
-            match r.key(k) {
-                Some(RenameEvent::Cancel) => self.rename = None,
-                Some(RenameEvent::Done(to)) => {
-                    let from = r.from.clone();
+        if let Some((input, from)) = &mut self.rename {
+            match input.key(k) {
+                Some(InputEvent::Cancel) => self.rename = None,
+                Some(InputEvent::Done(to)) => {
+                    let from = from.clone();
                     self.rename = None;
                     if !to.is_empty() && to != from {
                         let (ok, out) = git(&["branch".into(), "-m".into(), from.clone(), to.clone()]);
@@ -780,7 +648,13 @@ impl App<'_> {
                 Some(b) if b.remote => {
                     self.toast = Some(Toast::new("Remote branches are renamed on the remote", theme::YELLOW));
                 }
-                Some(b) => self.rename = Some(Rename::new(&b.name, !b.copies.is_empty())),
+                Some(b) => {
+                    let mut input = Input::new("Rename", &b.name, &b.name, "Rename");
+                    if !b.copies.is_empty() {
+                        input = input.note("The copy on the remote keeps its old name.");
+                    }
+                    self.rename = Some((input, b.name.clone()));
+                }
                 None => {}
             },
             Cmd::Fetch => self.fetch(),
@@ -1097,10 +971,6 @@ fn short_path(p: &std::path::Path) -> String {
     }
 }
 
-fn first_lines(s: &str) -> String {
-    s.lines().filter(|l| !l.trim().is_empty()).take(2).collect::<Vec<_>>().join(" · ")
-}
-
 // ---------------------------------------------------------------- drawing
 
 fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
@@ -1182,8 +1052,8 @@ fn draw(f: &mut Frame, app: &mut App) {
     if let Some(p) = &app.pick {
         p.draw(f, full);
     }
-    if let Some(r) = &app.rename {
-        r.draw(f, full);
+    if let Some((input, _)) = &app.rename {
+        input.draw(f, full);
     }
     if let Some(t) = &app.toast {
         t.draw(f, full);

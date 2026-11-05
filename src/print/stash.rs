@@ -7,7 +7,7 @@ use crate::fmt::relative_time;
 use crate::git::stash::Stash;
 
 pub fn print(list: &[Stash], p: &Paint) {
-    lines(list, p).iter().for_each(|l| println!("{l}"));
+    super::out(lines(list, p));
 }
 
 pub fn lines(list: &[Stash], p: &Paint) -> Vec<String> {

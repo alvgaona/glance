@@ -6,7 +6,7 @@ use super::{Paint, Tone};
 use crate::git::worktree::Worktree;
 
 pub fn print(list: &[Worktree], p: &Paint) {
-    lines(list, p).iter().for_each(|l| println!("{l}"));
+    super::out(lines(list, p));
 }
 
 pub fn lines(list: &[Worktree], p: &Paint) -> Vec<String> {

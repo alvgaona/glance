@@ -10,9 +10,7 @@ use crate::git::log::{Commit, RefLabel};
 use graph::{Cell, Row};
 
 pub fn print(commits: &[Commit], p: &Paint) {
-    for line in lines(commits, p) {
-        println!("{line}");
-    }
+    crate::print::out(lines(commits, p));
 }
 
 /// Graph plus one formatted line per commit. Commit lines contain the short id

@@ -6,7 +6,7 @@ use super::{Paint, Tone};
 use crate::git::remote::Remote;
 
 pub fn print(list: &[Remote], p: &Paint) {
-    lines(list, p).iter().for_each(|l| println!("{l}"));
+    super::out(lines(list, p));
 }
 
 pub fn lines(list: &[Remote], p: &Paint) -> Vec<String> {

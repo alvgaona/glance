@@ -11,7 +11,7 @@ use crate::git::status::{ChangeKind, FileChange, Status};
 const BAR: usize = 10;
 
 pub fn print(st: &Status, p: &Paint) {
-    lines(st, p).iter().for_each(|l| println!("{l}"));
+    super::out(lines(st, p));
 }
 
 pub fn lines(st: &Status, p: &Paint) -> Vec<String> {

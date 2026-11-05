@@ -16,7 +16,7 @@ pub fn run(count: Option<usize>, interactive: bool, all: bool, paint: &Paint) ->
     }
     if let Some(id) = pick(&repo, count, all)? {
         crate::clipboard::copy(&id);
-        println!("{id}");
+        crate::print::out([id]);
     }
     Ok(())
 }

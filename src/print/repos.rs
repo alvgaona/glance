@@ -7,7 +7,7 @@ use crate::fmt::relative_time;
 use crate::git::repos::Repo;
 
 pub fn print(repos: &[Repo], p: &Paint) {
-    lines(repos, p).iter().for_each(|l| println!("{l}"));
+    super::out(lines(repos, p));
 }
 
 pub fn lines(repos: &[Repo], p: &Paint) -> Vec<String> {

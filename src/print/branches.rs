@@ -7,7 +7,7 @@ use crate::fmt::relative_time;
 use crate::git::branches::Branches;
 
 pub fn print(b: &Branches, p: &Paint) {
-    lines(b, p).iter().for_each(|l| println!("{l}"));
+    super::out(lines(b, p));
 }
 
 pub fn lines(b: &Branches, p: &Paint) -> Vec<String> {

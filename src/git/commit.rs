@@ -64,7 +64,7 @@ pub fn create(repo: &gix::Repository, message: &str, amend: bool) -> (bool, Stri
 /// The same on the terminal: signing may ask for a passphrase, and with `edit` git
 /// opens the editor on the message first. The message waits in a file meanwhile.
 pub fn create_on_terminal(repo: &gix::Repository, message: &str, amend: bool, edit: bool) -> (bool, String) {
-    let file = repo.git_dir().join("GG_COMMIT_MSG");
+    let file = repo.git_dir().join("GLANCE_COMMIT_MSG");
     if let Err(e) = std::fs::write(&file, message) {
         return (false, format!("couldn't write {}: {e}", file.display()));
     }

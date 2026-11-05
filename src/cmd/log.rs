@@ -30,7 +30,7 @@ fn pick(repo: &gix::Repository, count: usize, all: bool) -> Result<Option<String
     }
     #[cfg(not(feature = "tui"))]
     {
-        anyhow::ensure!(crate::fzf::available(), "`gg log -i` needs fzf installed");
+        anyhow::ensure!(crate::fzf::available(), "`glance log -i` needs fzf installed");
         let commits = git::log::read(repo, count, all)?;
         let lines = print::log::lines(&commits, &Paint { on: true, rgb: false });
         crate::fzf::pick_commit(&lines, &git::repo_name(repo), "copy")

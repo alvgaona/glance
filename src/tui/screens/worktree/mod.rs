@@ -288,7 +288,7 @@ impl App<'_> {
         let refuse = if r.wt.main {
             Some("The main worktree can't be removed".to_string())
         } else if r.here {
-            Some("You're inside this worktree. Run gg wt from another one to remove it".into())
+            Some("You're inside this worktree. Run glance wt from another one to remove it".into())
         } else if r.wt.locked.is_some() {
             Some("It's locked: l unlocks it first".into())
         } else if matches!(r.load, Load::None) {

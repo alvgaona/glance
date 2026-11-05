@@ -90,8 +90,8 @@ pub fn progress(repo: &gix::Repository) -> Progress {
     }
 }
 
-/// `git config gg.rebaseOrder oldest` shows git's order; anything else (or unset) shows newest first.
+/// `git config glance.rebaseOrder oldest` shows git's order; anything else (or unset) shows newest first.
 pub fn newest_first(repo: &gix::Repository) -> bool {
-    let order = repo.config_snapshot().string("gg.rebaseOrder");
+    let order = repo.config_snapshot().string("glance.rebaseOrder");
     !order.is_some_and(|o| o.eq_ignore_ascii_case(b"oldest"))
 }

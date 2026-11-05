@@ -121,7 +121,7 @@ fn print_header(st: &Status, p: &Paint) {
         let cmds = ["--continue", "--skip", "--abort", "--edit-todo"]
             .map(|c| c.style(p.tone(Tone::Text)).to_string())
             .join(&sep);
-        println!("{bar} {} {cmds}", "gg rebase".style(p.tone(Tone::Muted)));
+        println!("{bar} {} {cmds}", "glance rebase".style(p.tone(Tone::Muted)));
     }
 }
 

@@ -24,6 +24,6 @@ pub fn run(paths: &[String], paint: &Paint) -> Result<()> {
         return crate::tui::screens::add::run(repo);
     }
     print::status::print(&git::status::read(&repo, true)?, paint);
-    eprintln!("gg add opens a full screen in a terminal; or name the files: gg add <path>…");
+    eprintln!("glance add opens a full screen in a terminal; or name the files: glance add <path>…");
     Ok(())
 }

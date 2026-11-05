@@ -1,11 +1,27 @@
 [package]
-name = "glance"
+# `glance` is taken on crates.io as a crate name; the binary is still `glance`.
+name = "glance-git"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
 description = "A nicer view of git status, log and friends"
+authors = ["Alvaro Gaona <alvgaona@gmail.com>"]
+license = "Apache-2.0"
+repository = "https://github.com/alvgaona/glance"
+homepage = "https://github.com/alvgaona/glance"
+readme = "README.md"
+keywords = ["git", "tui", "cli", "terminal", "staging"]
+categories = ["command-line-utilities", "development-tools"]
+exclude = [".agents/", ".github/", "lefthook.yml", "pixi.toml", "pixi.lock", ".commitlintrc.yaml"]
+
+# `cargo binstall glance-git` downloads the release tarball instead of compiling.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/glance-v{ version }-{ target }.tar.gz"
+bin-dir = "glance-v{ version }-{ target }/{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
 
 [[bin]]
-name = "gg"
+name = "glance"
 path = "src/main.rs"
 
 [dependencies]

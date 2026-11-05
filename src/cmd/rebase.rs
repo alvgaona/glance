@@ -32,7 +32,7 @@ pub fn run(args: &[String]) -> Result<i32> {
     };
     let interactive = args.iter().any(|a| a == "-i" || a == "--interactive");
 
-    let exe = std::env::current_exe().context("can't find the gg binary")?;
+    let exe = std::env::current_exe().context("can't find the glance binary")?;
     // Git runs this through the shell, so quote the path.
     let quoted = format!("'{}'", exe.display().to_string().replace('\'', r"'\''"));
     // When editing the list mid-rebase, quitting should keep it, not empty it.
@@ -79,7 +79,7 @@ fn resolve(args: &[String]) -> Result<Option<(Vec<String>, Option<String>)>> {
             Some((base, desc)) => Ok(Some((vec![base.to_string()], Some(desc)))),
             None => anyhow::bail!(
                 "nothing to pick automatically: this branch has no commits of its own and nothing unpushed.\n\
-                 Try `gg rebase 5` (last 5 commits) or `gg rebase -p` (choose where to start)."
+                 Try `glance rebase 5` (last 5 commits) or `glance rebase -p` (choose where to start)."
             ),
         },
         Some("-p" | "--pick") => pick(&repo, rest),
@@ -133,7 +133,7 @@ fn pick(repo: &gix::Repository, rest: &[String]) -> Result<Option<(Vec<String>, 
 
 /// Left by the editor when the user quits, so `run` can tell a cancel from a failure.
 fn cancel_marker() -> Result<std::path::PathBuf> {
-    Ok(git::open()?.path().join("gg-rebase-cancelled"))
+    Ok(git::open()?.path().join("glance-rebase-cancelled"))
 }
 
 /// Called by git with the todo file path. Writing it back applies the changes.
@@ -159,7 +159,7 @@ pub fn edit(file: &Path, keep_on_quit: bool) -> Result<()> {
     #[cfg(not(feature = "tui"))]
     {
         let _ = (lines, branch, detail, keep_on_quit);
-        anyhow::bail!("the rebase editor needs gg built with the `tui` feature")
+        anyhow::bail!("the rebase editor needs glance built with the `tui` feature")
     }
 }
 

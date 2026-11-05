@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Parser)]
-#[command(name = "gg", version, about = "A nicer view of git status, log and friends")]
+#[command(name = "glance", version, about = "A nicer view of git status, log and friends")]
 pub struct Cli {
     /// When to use colour.
     #[arg(long, value_enum, default_value_t = ColorMode::Auto, global = true)]
@@ -26,8 +26,8 @@ pub enum Command {
 
     /// Stage files on a full screen, with each file's diff.
     ///
-    ///   gg add              full screen: space stages or unstages a file
-    ///   gg add <path>…      plain `git add`, then the short status
+    ///   glance add              full screen: space stages or unstages a file
+    ///   glance add <path>…      plain `git add`, then the short status
     #[command(verbatim_doc_comment)]
     Add { paths: Vec<String> },
 
@@ -38,7 +38,7 @@ pub enum Command {
         #[arg(short = 'n', long)]
         count: Option<usize>,
 
-        /// Full screen even when piped: `$(gg log -i)` gives the picked commit id.
+        /// Full screen even when piped: `$(glance log -i)` gives the picked commit id.
         /// Without the TUI build, picks in fzf.
         #[arg(short, long)]
         interactive: bool,
@@ -58,10 +58,10 @@ pub enum Command {
 
     /// Worktrees: see them all, add, remove, prune, lock.
     ///
-    ///   gg wt               full screen; enter prints the picked folder,
-    ///                       so `cd "$(gg wt)"` jumps there
-    ///   gg wt -l            one line per worktree
-    #[command(visible_alias = "wt")]
+    ///   glance wt               full screen; enter prints the picked folder,
+    ///                           so `cd "$(glance wt)"` jumps there
+    ///   glance wt -l            one line per worktree
+    #[command(visible_alias = "wt", verbatim_doc_comment)]
     Worktrees {
         /// Print the list instead of opening the full screen.
         #[arg(short, long)]
@@ -85,19 +85,19 @@ pub enum Command {
 
     /// Interactive rebase with a visual todo editor.
     ///
-    ///   gg rebase          this branch's commits (since it split off main),
-    ///                      or on main, the commits you haven't pushed yet
-    ///   gg rebase 5        the last 5 commits
-    ///   gg rebase -p       pick the oldest commit to edit, in fzf
-    ///   gg rebase <ref>    anything else goes to `git rebase -i` as is
-    ///   gg rebase --continue | --skip | --abort | --edit-todo
+    ///   glance rebase          this branch's commits (since it split off main),
+    ///                          or on main, the commits you haven't pushed yet
+    ///   glance rebase 5        the last 5 commits
+    ///   glance rebase -p       pick the oldest commit to edit, in fzf
+    ///   glance rebase <ref>    anything else goes to `git rebase -i` as is
+    ///   glance rebase --continue | --skip | --abort | --edit-todo
     #[command(visible_alias = "rb", verbatim_doc_comment)]
     Rebase {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
 
-    /// Used by git as GIT_SEQUENCE_EDITOR during `gg rebase`.
+    /// Used by git as GIT_SEQUENCE_EDITOR during `glance rebase`.
     #[command(name = "__rebase-editor", hide = true)]
     RebaseEditor {
         file: std::path::PathBuf,

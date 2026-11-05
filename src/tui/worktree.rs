@@ -8,7 +8,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use gix::bstr::ByteSlice;
 use ratatui::{
     Frame,
@@ -19,7 +19,8 @@ use ratatui::{
 };
 
 use super::widgets::{self, Command, Confirm, Input, InputEvent, Palette, PaletteEvent, Toast};
-use super::{diffview, enter, first_lines, leave, theme};
+use super::app::{self, Flow, Screen};
+use super::{diffview, first_lines, theme};
 use crate::fmt::paths::tilde;
 use crate::fmt::{now, relative_time};
 use crate::git::diff::Size;
@@ -121,30 +122,30 @@ pub fn run(repo: &gix::Repository) -> Result<Option<PathBuf>> {
     // Start on the worktree we're in.
     app.selected = app.rows.iter().position(|r| r.here).unwrap_or(0);
 
-    let mut terminal = enter();
-    let result = (|| -> Result<Option<PathBuf>> {
-        loop {
-            if app.toast.as_ref().is_some_and(Toast::expired) {
-                app.toast = None;
-            }
-            app.poll_states();
-            terminal.draw(|f| draw(f, &mut app))?;
-            if !event::poll(Duration::from_millis(150))? {
-                continue;
-            }
-            match event::read()? {
-                Event::Key(k) if k.kind == KeyEventKind::Press => {
-                    if let Some(done) = app.key(k)? {
-                        return Ok(done);
-                    }
-                }
-                Event::Mouse(m) => app.mouse(m),
-                _ => {}
-            }
-        }
-    })();
-    leave();
-    result
+    app::run(&mut app)
+}
+
+impl Screen for App<'_> {
+    type Out = Option<PathBuf>;
+    // Folder states arrive one by one; show them soon.
+    const WAKE: Duration = Duration::from_millis(150);
+
+    fn draw(&mut self, f: &mut Frame) {
+        draw(f, self)
+    }
+    fn key(&mut self, k: KeyEvent) -> Result<Flow<Self::Out>> {
+        Ok(self.on_key(k)?.into())
+    }
+    fn mouse(&mut self, m: MouseEvent) {
+        self.on_mouse(m)
+    }
+    fn tick(&mut self) -> Result<()> {
+        self.poll_states();
+        Ok(())
+    }
+    fn toast(&mut self) -> &mut Option<Toast> {
+        &mut self.toast
+    }
 }
 
 fn commands() -> Vec<Command<Cmd>> {
@@ -251,7 +252,7 @@ impl App<'_> {
     }
 
     /// Returns `Some` to quit, with the folder picked (if any).
-    fn key(&mut self, k: KeyEvent) -> Result<Option<Option<PathBuf>>> {
+    fn on_key(&mut self, k: KeyEvent) -> Result<Option<Option<PathBuf>>> {
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         if let Some(input) = &mut self.input {
             match input.key(k) {
@@ -515,7 +516,7 @@ impl App<'_> {
         self.reload(None)
     }
 
-    fn mouse(&mut self, m: crossterm::event::MouseEvent) {
+    fn on_mouse(&mut self, m: MouseEvent) {
         if self.palette.is_some() || self.confirm.is_some() || self.input.is_some() {
             return;
         }

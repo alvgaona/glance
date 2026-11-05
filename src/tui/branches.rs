@@ -5,10 +5,9 @@ use std::collections::{BTreeSet, HashMap};
 use std::process::{Command as Process, Stdio};
 use std::rc::Rc;
 use std::sync::mpsc;
-use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -18,7 +17,8 @@ use ratatui::{
 };
 
 use super::widgets::{self, Command, Confirm, Input, InputEvent, Palette, PaletteEvent, Toast};
-use super::{enter, first_lines, leave, theme};
+use super::app::{self, Flow, Screen};
+use super::{first_lines, theme};
 use crate::fmt::paths::short as short_path;
 use crate::fmt::{now, relative_time};
 use crate::git::branches::{self, Branch, Branches};
@@ -169,6 +169,8 @@ struct App<'r> {
     repo_name: String,
     /// What the last single delete removed, for its toast.
     last_deleted: String,
+    /// Commands waiting to run on the normal screen (see `Effect::InTerminal`).
+    outside: Vec<Vec<String>>,
     prs: Prs,
     /// Branch name -> index into the ready PR list.
     pr_of: HashMap<String, usize>,
@@ -201,6 +203,7 @@ pub fn run(repo: &gix::Repository) -> Result<()> {
         list_area: Rect::default(),
         repo_name: crate::git::repo_name(repo),
         last_deleted: String::new(),
+        outside: Vec::new(),
         prs: Prs::Off,
         pr_of: HashMap::new(),
         owners: github::remote_owners(repo),
@@ -212,41 +215,40 @@ pub fn run(repo: &gix::Repository) -> Result<()> {
         app.selected = i;
     }
 
-    let mut terminal = enter();
-    let result = (|| -> Result<()> {
-        loop {
-            if app.toast.as_ref().is_some_and(Toast::expired) {
-                app.toast = None;
+    app::run(&mut app)
+}
+
+impl Screen for App<'_> {
+    type Out = ();
+
+    fn draw(&mut self, f: &mut Frame) {
+        draw(f, self)
+    }
+    fn key(&mut self, k: KeyEvent) -> Result<Flow<()>> {
+        Ok(match self.on_key(k)? {
+            None => Flow::Stay,
+            Some(Effect::Quit) => Flow::Done(()),
+            Some(Effect::InTerminal(cmds)) => {
+                self.outside = cmds;
+                Flow::Outside
             }
-            app.poll_prs();
-            app.poll_fetch()?;
-            terminal.draw(|f| draw(f, &mut app))?;
-            if !event::poll(Duration::from_millis(200))? {
-                continue;
-            }
-            let effect = match event::read()? {
-                Event::Key(k) if k.kind == KeyEventKind::Press => app.key(k)?,
-                Event::Mouse(m) => {
-                    app.mouse(m);
-                    None
-                }
-                _ => None,
-            };
-            match effect {
-                Some(Effect::Quit) => return Ok(()),
-                Some(Effect::InTerminal(cmds)) => {
-                    leave();
-                    let results: Vec<_> = cmds.iter().map(|args| crate::git::run::git(args)).collect();
-                    terminal = enter();
-                    app.report(&results);
-                    app.reload()?;
-                }
-                None => {}
-            }
-        }
-    })();
-    leave();
-    result
+        })
+    }
+    fn mouse(&mut self, m: MouseEvent) {
+        self.on_mouse(m)
+    }
+    fn tick(&mut self) -> Result<()> {
+        self.poll_prs();
+        self.poll_fetch()
+    }
+    fn toast(&mut self) -> &mut Option<Toast> {
+        &mut self.toast
+    }
+    fn outside(&mut self) -> Result<()> {
+        let results: Vec<_> = std::mem::take(&mut self.outside).iter().map(|a| crate::git::run::git(a)).collect();
+        self.report(&results);
+        self.reload()
+    }
 }
 
 fn commands() -> Vec<Command<Cmd>> {
@@ -420,7 +422,7 @@ impl App<'_> {
         self.selected = (self.selected as isize + n).clamp(0, last) as usize;
     }
 
-    fn key(&mut self, k: KeyEvent) -> Result<Option<Effect>> {
+    fn on_key(&mut self, k: KeyEvent) -> Result<Option<Effect>> {
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         let shift = k.modifiers.contains(KeyModifiers::SHIFT);
         if let Some((input, from)) = &mut self.rename {
@@ -897,7 +899,7 @@ impl App<'_> {
         });
     }
 
-    fn mouse(&mut self, m: crossterm::event::MouseEvent) {
+    fn on_mouse(&mut self, m: MouseEvent) {
         if self.palette.is_some() || self.confirm.is_some() || self.pick.is_some() || self.rename.is_some() {
             return;
         }

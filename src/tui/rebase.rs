@@ -1,10 +1,9 @@
 //! Full-screen editor for the rebase todo list.
 
 use std::collections::HashMap;
-use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -14,7 +13,8 @@ use ratatui::{
 };
 
 use super::widgets::{self, Command, Confirm, Palette, PaletteEvent, Toast};
-use super::{enter, leave, theme};
+use super::app::{self, Flow, Screen};
+use super::theme;
 use crate::fmt::{now, relative_time};
 use crate::git::commit::{self, Details};
 use crate::git::diff::Size;
@@ -98,30 +98,24 @@ pub fn run(repo: &gix::Repository, mut lines: Vec<Todo>, header: Header, newest_
         list_area: Rect::default(),
     };
 
-    let mut terminal = enter();
-    let result = (|| -> Result<Outcome> {
-        loop {
-            if app.toast.as_ref().is_some_and(Toast::expired) {
-                app.toast = None;
-            }
-            terminal.draw(|f| draw(f, &mut app))?;
-            // Wake up now and then so toasts disappear on their own.
-            if !event::poll(Duration::from_millis(200))? {
-                continue;
-            }
-            match event::read()? {
-                Event::Key(k) if k.kind == KeyEventKind::Press => {
-                    if let Some(outcome) = app.key(k) {
-                        return Ok(outcome);
-                    }
-                }
-                Event::Mouse(m) => app.mouse(m),
-                _ => {}
-            }
-        }
-    })();
-    leave();
-    result
+    app::run(&mut app)
+}
+
+impl Screen for App {
+    type Out = Outcome;
+
+    fn draw(&mut self, f: &mut Frame) {
+        draw(f, self)
+    }
+    fn key(&mut self, k: KeyEvent) -> Result<Flow<Outcome>> {
+        Ok(self.on_key(k).into())
+    }
+    fn mouse(&mut self, m: MouseEvent) {
+        self.on_mouse(m)
+    }
+    fn toast(&mut self) -> &mut Option<Toast> {
+        &mut self.toast
+    }
 }
 
 fn commands() -> Vec<Command<Cmd>> {
@@ -155,7 +149,7 @@ impl App {
         self.lines != self.original
     }
 
-    fn key(&mut self, k: KeyEvent) -> Option<Outcome> {
+    fn on_key(&mut self, k: KeyEvent) -> Option<Outcome> {
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         let shift = k.modifiers.contains(KeyModifiers::SHIFT);
         let alt = k.modifiers.contains(KeyModifiers::ALT);
@@ -296,7 +290,7 @@ impl App {
         None
     }
 
-    fn mouse(&mut self, m: crossterm::event::MouseEvent) {
+    fn on_mouse(&mut self, m: MouseEvent) {
         if self.palette.is_some() || self.confirm_abort.is_some() {
             return;
         }

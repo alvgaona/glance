@@ -2,10 +2,9 @@
 
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -15,7 +14,8 @@ use ratatui::{
 };
 
 use super::widgets::{self, Command, Palette, PaletteEvent, Toast};
-use super::{diffview, enter, leave, theme};
+use super::app::{self, Flow, Screen};
+use super::{diffview, theme};
 use crate::fmt::{now, relative_time};
 use crate::git::commit::{self, Details};
 use crate::git::log::{Commit, RefLabel};
@@ -105,29 +105,24 @@ pub fn run(repo: &gix::Repository, opts: Options) -> Result<Option<String>> {
     };
     app.load()?;
 
-    let mut terminal = enter();
-    let result = (|| -> Result<Option<String>> {
-        loop {
-            if app.toast.as_ref().is_some_and(Toast::expired) {
-                app.toast = None;
-            }
-            terminal.draw(|f| draw(f, &mut app))?;
-            if !event::poll(Duration::from_millis(200))? {
-                continue;
-            }
-            match event::read()? {
-                Event::Key(k) if k.kind == KeyEventKind::Press => {
-                    if let Some(Outcome::Done(id)) = app.key(k)? {
-                        return Ok(id);
-                    }
-                }
-                Event::Mouse(m) => app.mouse(m),
-                _ => {}
-            }
-        }
-    })();
-    leave();
-    result
+    app::run(&mut app)
+}
+
+impl Screen for App<'_> {
+    type Out = Option<String>;
+
+    fn draw(&mut self, f: &mut Frame) {
+        draw(f, self)
+    }
+    fn key(&mut self, k: KeyEvent) -> Result<Flow<Self::Out>> {
+        Ok(self.on_key(k)?.map(|Outcome::Done(id)| id).into())
+    }
+    fn mouse(&mut self, m: MouseEvent) {
+        self.on_mouse(m)
+    }
+    fn toast(&mut self) -> &mut Option<Toast> {
+        &mut self.toast
+    }
 }
 
 impl App<'_> {
@@ -210,7 +205,7 @@ impl App<'_> {
         c
     }
 
-    fn key(&mut self, k: KeyEvent) -> Result<Option<Outcome>> {
+    fn on_key(&mut self, k: KeyEvent) -> Result<Option<Outcome>> {
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         let shift = k.modifiers.contains(KeyModifiers::SHIFT);
         if ctrl && k.code == KeyCode::Char('c') {
@@ -350,7 +345,7 @@ impl App<'_> {
         Ok(None)
     }
 
-    fn mouse(&mut self, m: crossterm::event::MouseEvent) {
+    fn on_mouse(&mut self, m: MouseEvent) {
         if self.palette.is_some() {
             return;
         }

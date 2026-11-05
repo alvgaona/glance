@@ -242,7 +242,7 @@ impl App<'_> {
                 };
                 // For origin/feat, `git switch feat` creates a local branch that tracks it.
                 let target = if b.remote {
-                    b.name.split_once('/').map_or(b.name.clone(), |(_, n)| n.to_string())
+                    branches::split_remote(&self.data.remotes, &b.name).map_or(b.name.clone(), |(_, n)| n.to_string())
                 } else {
                     b.name.clone()
                 };

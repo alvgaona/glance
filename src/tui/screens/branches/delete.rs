@@ -102,7 +102,7 @@ impl App<'_> {
         let main = self.default_name().map(str::to_string);
         let picked = self.targets();
         let items: Vec<PickItem> = (picked.iter())
-            .flat_map(|b| b.remote_targets().into_iter().map(move |target| (b, target)))
+            .flat_map(|b| b.remote_targets(&self.data.remotes).into_iter().map(move |target| (b, target)))
             .filter(|(_, (_, branch))| Some(branch) != main.as_ref())
             .map(|(b, (remote, branch))| {
                 let note = match b.copies.iter().find(|c| c.remote == remote && c.branch == branch) {

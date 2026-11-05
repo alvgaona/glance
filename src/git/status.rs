@@ -156,10 +156,8 @@ pub fn upstream(
     };
     let up = reference.peel_to_id()?.detach();
 
-    let count = |from: gix::ObjectId, hide: gix::ObjectId| -> Result<usize> {
-        Ok(repo.rev_walk([from]).with_hidden([hide]).all()?.count())
-    };
-    Ok(Some(Upstream { name: name.shorten().to_string(), ahead: count(head, up)?, behind: count(up, head)? }))
+    let (ahead, behind) = super::branches::ahead_behind(repo, head, up);
+    Ok(Some(Upstream { name: name.shorten().to_string(), ahead, behind }))
 }
 
 /// "rebase 3/5", "merge", "cherry-pick"... for an operation that was started but not finished.

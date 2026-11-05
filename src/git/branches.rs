@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use anyhow::Result;
 use gix::ObjectId;
 use gix::bstr::ByteSlice;
@@ -44,12 +46,25 @@ impl Branch {
 
     /// `(remote, branch)` pairs to delete on remotes: every copy of a local branch,
     /// or the branch itself when it is a remote one.
-    pub fn remote_targets(&self) -> Vec<(String, String)> {
+    pub fn remote_targets(&self, remotes: &[String]) -> Vec<(String, String)> {
         if self.remote {
-            return self.name.split_once('/').map(|(r, b)| (r.to_string(), b.to_string())).into_iter().collect();
+            return split_remote(remotes, &self.name)
+                .map(|(r, b)| (r.to_string(), b.to_string()))
+                .into_iter()
+                .collect();
         }
         self.copies.iter().map(|c| (c.remote.clone(), c.branch.clone())).collect()
     }
+}
+
+/// `origin/feat` → `("origin", "feat")`. The remote is the longest remote name that
+/// prefixes it: names may have a `/` (`my/fork/feat` is `feat` on `my/fork`).
+pub fn split_remote<'a>(remotes: &[String], name: &'a str) -> Option<(&'a str, &'a str)> {
+    let r = remotes
+        .iter()
+        .filter(|r| name.strip_prefix(r.as_str()).is_some_and(|b| b.starts_with('/')))
+        .max_by_key(|r| r.len())?;
+    Some((&name[..r.len()], &name[r.len() + 1..]))
 }
 
 /// Where `name` exists on each remote: `refs/remotes/<remote>/<name>`, plus the upstream
@@ -66,12 +81,9 @@ fn copies(repo: &gix::Repository, remotes: &[String], name: &str, upstream: Opti
             out.push(Copy { remote: remote.to_string(), branch: branch.to_string(), oid: id.detach() });
         }
     };
-    if let Some(up) = upstream.filter(|u| !u.name.ends_with("(gone)")) {
-        // The upstream's remote is the longest remote name that prefixes it.
-        let remote = remotes.iter().filter(|r| up.name.starts_with(&format!("{r}/"))).max_by_key(|r| r.len());
-        if let Some(r) = remote {
-            add(r, &up.name[r.len() + 1..]);
-        }
+    if let Some((r, b)) = upstream.filter(|u| !u.name.ends_with("(gone)")).and_then(|u| split_remote(remotes, &u.name))
+    {
+        add(r, b);
     }
     for r in remotes {
         add(r, name);
@@ -127,6 +139,8 @@ pub struct Branches {
     pub default: Option<(String, ObjectId)>,
     /// Newest first.
     pub list: Vec<Branch>,
+    /// Remote names, for splitting `origin/feat`.
+    pub remotes: Vec<String>,
 }
 
 /// Local branches, plus remote ones with `remotes` (skipping `origin/HEAD`).
@@ -142,6 +156,12 @@ pub fn read(repo: &gix::Repository, remotes: bool) -> Result<Branches> {
         iters.push(refs.remote_branches()?);
     }
 
+    // Everything in the default branch, walked once: a branch is merged when its tip is in it.
+    let in_default: HashSet<ObjectId> = match &default {
+        Some((_, id)) => repo.rev_walk([*id]).all()?.filter_map(Result::ok).map(|c| c.id).collect(),
+        None => HashSet::new(),
+    };
+
     let mut list = Vec::new();
     for (i, iter) in iters.into_iter().enumerate() {
         let remote = i == 1;
@@ -156,13 +176,13 @@ pub fn read(repo: &gix::Repository, remotes: bool) -> Result<Branches> {
             let tip = tip.detach();
             let commit = repo.find_commit(tip)?;
 
-            let merged = match &default {
-                // Same tip as main counts too (fast-forward merges); main and origin/main don't.
-                Some((def_name, def_id)) if *def_name != name && !name.ends_with(&format!("/{def_name}")) => {
-                    tip == *def_id || repo.rev_walk([tip]).with_hidden([*def_id]).all()?.next().is_none()
-                }
-                _ => false,
+            // Same tip as main counts too (fast-forward merges); main and origin/main don't.
+            let is_default = match &default {
+                Some((def, _)) if remote => split_remote(&remote_names, &name).is_some_and(|(_, b)| b == def),
+                Some((def, _)) => *def == name,
+                None => true,
             };
+            let merged = !is_default && in_default.contains(&tip);
 
             let up = if remote { None } else { upstream(repo, full.as_ref(), tip).ok().flatten() };
             list.push(Branch {
@@ -182,7 +202,7 @@ pub fn read(repo: &gix::Repository, remotes: bool) -> Result<Branches> {
         }
     }
     list.sort_by_key(|b| std::cmp::Reverse(b.time));
-    Ok(Branches { default, list })
+    Ok(Branches { default, list, remotes: remote_names })
 }
 
 /// What a branch adds on top of the default branch.
@@ -295,5 +315,30 @@ mod tests {
     fn delete_args_name_the_branch() {
         assert_eq!(delete_args("feat/x"), ["branch", "-D", "feat/x"]);
         assert_eq!(delete_remote_args("origin", "feat/x"), ["push", "origin", "--delete", "feat/x"]);
+    }
+
+    #[test]
+    fn splits_at_the_longest_remote_name() {
+        let remotes = ["my".to_string(), "my/fork".to_string()];
+        assert_eq!(split_remote(&remotes, "my/fork/feat"), Some(("my/fork", "feat")));
+        assert_eq!(split_remote(&remotes, "my/feat"), Some(("my", "feat")));
+        assert_eq!(split_remote(&remotes, "myx/feat"), None);
+    }
+
+    #[test]
+    fn merged_branches_are_in_the_default_branch() {
+        let s = crate::git::run::Scratch::new("branches-merged");
+        s.commit("a.txt", "one\n");
+        s.git(&["branch", "fix/main"]);
+        s.git(&["branch", "ahead"]);
+        s.git(&["checkout", "-q", "ahead"]);
+        s.commit("b.txt", "two\n");
+        s.git(&["checkout", "-q", "main"]);
+        let b = read(&s.repo(), false).unwrap();
+        let merged = |n: &str| b.list.iter().find(|x| x.name == n).unwrap().merged;
+        // Ends in "/main", but it's a local branch, not the remote's main.
+        assert!(merged("fix/main"));
+        assert!(!merged("ahead"));
+        assert!(!merged("main"));
     }
 }

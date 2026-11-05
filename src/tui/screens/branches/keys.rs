@@ -51,9 +51,8 @@ impl App<'_> {
             return Flow::Stay;
         }
         if self.confirm.is_some() {
-            return match k.code {
-                KeyCode::Enter | KeyCode::Char('y') => {
-                    let (_, pending) = self.confirm.take().unwrap();
+            return match Confirm::key(&mut self.confirm, &k) {
+                Some(pending) => {
                     self.marked.clear();
                     Flow::Run(Effect::InTerminal(match pending {
                         Pending::Local(list) => {
@@ -63,11 +62,7 @@ impl App<'_> {
                         Pending::Remote(list) => self.remote_deletes(list),
                     }))
                 }
-                KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('q') => {
-                    self.confirm = None;
-                    Flow::Stay
-                }
-                _ => Flow::Stay,
+                None => Flow::Stay,
             };
         }
         if let Some(p) = &mut self.palette {

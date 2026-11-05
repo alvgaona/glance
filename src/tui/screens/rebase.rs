@@ -162,13 +162,13 @@ impl App {
             return Some(Outcome::Quit);
         }
         if self.confirm_abort.is_some() {
-            return match k.code {
-                KeyCode::Enter | KeyCode::Char('y') => Some(Outcome::Quit),
-                KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('q') => {
+            return match Confirm::answer(&k) {
+                Some(true) => Some(Outcome::Quit),
+                Some(false) => {
                     self.confirm_abort = None;
                     None
                 }
-                _ => None,
+                None => None,
             };
         }
         if let Some(p) = &mut self.palette {

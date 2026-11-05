@@ -22,6 +22,28 @@ pub struct Confirm {
 }
 
 impl Confirm {
+    /// Enter or `y` is yes, Esc, `n` or `q` is no, any other key is neither.
+    pub fn answer(k: &crossterm::event::KeyEvent) -> Option<bool> {
+        use crossterm::event::KeyCode;
+        match k.code {
+            KeyCode::Enter | KeyCode::Char('y') => Some(true),
+            KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('q') => Some(false),
+            _ => None,
+        }
+    }
+
+    /// A key for the dialog in `slot`, which holds what it asks about: yes takes that
+    /// out, no closes the dialog.
+    pub fn key<T>(slot: &mut Option<(Confirm, T)>, k: &crossterm::event::KeyEvent) -> Option<T> {
+        match Self::answer(k)? {
+            true => slot.take().map(|(_, t)| t),
+            false => {
+                *slot = None;
+                None
+            }
+        }
+    }
+
     /// `body` may have several lines; lines starting with `$ ` are shown as commands.
     pub fn draw(&self, f: &mut Frame, area: Rect) {
         let yes_color = if self.danger { theme::RED } else { theme::ACCENT };

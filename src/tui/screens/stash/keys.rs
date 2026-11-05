@@ -20,15 +20,7 @@ impl App<'_> {
             return Flow::Done(());
         }
         if self.confirm.is_some() {
-            match k.code {
-                KeyCode::Enter | KeyCode::Char('y') => {
-                    let (_, effect) = self.confirm.take().unwrap();
-                    return Flow::Run(effect);
-                }
-                KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('q') => self.confirm = None,
-                _ => {}
-            }
-            return Flow::Stay;
+            return Confirm::key(&mut self.confirm, &k).map_or(Flow::Stay, Flow::Run);
         }
         if let Some(p) = &mut self.palette {
             match p.key(k) {

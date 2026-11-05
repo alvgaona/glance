@@ -21,6 +21,9 @@ pub struct Branch {
     pub merged: bool,
     /// For a local branch: the remotes that have it (same name, or its upstream), as last fetched.
     pub copies: Vec<Copy>,
+    /// Checked out (or being rebased) in another worktree, at this path.
+    /// Git won't delete it or check it out here while that lasts.
+    pub worktree: Option<std::path::PathBuf>,
 }
 
 /// A local branch as it exists on one remote.
@@ -75,6 +78,51 @@ fn copies(repo: &gix::Repository, remotes: &[String], name: &str, upstream: Opti
     out
 }
 
+/// Branches held by worktrees other than this one: branch name -> worktree path.
+/// Includes the main worktree when we're in a linked one.
+fn other_worktrees(repo: &gix::Repository) -> std::collections::HashMap<String, std::path::PathBuf> {
+    use std::path::{Path, PathBuf};
+    // The branch a worktree's git dir holds: its HEAD, or the branch under a rebase.
+    let held = |git_dir: &Path| -> Vec<String> {
+        let mut out = Vec::new();
+        for file in ["HEAD", "rebase-merge/head-name", "rebase-apply/head-name"] {
+            if let Ok(s) = std::fs::read_to_string(git_dir.join(file)) {
+                let s = s.trim();
+                let s = s.strip_prefix("ref: ").unwrap_or(s);
+                if let Some(b) = s.strip_prefix("refs/heads/") {
+                    out.push(b.to_string());
+                }
+            }
+        }
+        out
+    };
+    let mut map = std::collections::HashMap::new();
+    let mut dirs: Vec<(PathBuf, PathBuf)> = Vec::new();
+    if let Ok(list) = repo.worktrees() {
+        for wt in list {
+            if let Ok(base) = wt.base() {
+                dirs.push((wt.git_dir().to_path_buf(), base));
+            }
+        }
+    }
+    let common = repo.common_dir();
+    if repo.git_dir() != common
+        && let Some(base) = common.parent()
+    {
+        dirs.push((common.to_path_buf(), base.to_path_buf()));
+    }
+    let here = repo.git_dir().canonicalize().ok();
+    for (git_dir, base) in dirs {
+        if git_dir.canonicalize().ok() == here {
+            continue;
+        }
+        for b in held(&git_dir) {
+            map.insert(b, base.clone());
+        }
+    }
+    map
+}
+
 /// How far `a` is ahead of and behind `b`.
 pub fn ahead_behind(repo: &gix::Repository, a: ObjectId, b: ObjectId) -> (usize, usize) {
     if a == b {
@@ -96,6 +144,7 @@ pub fn read(repo: &gix::Repository, remotes: bool) -> Result<Branches> {
     let current = repo.head_name()?.map(|n| n.shorten().to_string());
     let default = default_branch(repo);
     let remote_names: Vec<String> = repo.remote_names().into_iter().map(|r| r.to_string()).collect();
+    let worktrees = other_worktrees(repo);
 
     let refs = repo.references()?;
     let mut iters = vec![refs.local_branches()?];
@@ -136,6 +185,7 @@ pub fn read(repo: &gix::Repository, remotes: bool) -> Result<Branches> {
                 author: commit.author()?.name.to_str_lossy().into_owned(),
                 copies: if remote { Vec::new() } else { copies(repo, &remote_names, &name, up.as_ref()) },
                 upstream: up,
+                worktree: if remote { None } else { worktrees.get(&name).cloned() },
                 merged,
                 name,
             });

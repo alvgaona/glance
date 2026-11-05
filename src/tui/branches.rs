@@ -288,7 +288,7 @@ impl App<'_> {
     }
 
     fn protected(&self, b: &Branch) -> bool {
-        b.current || (!b.remote && Some(b.name.as_str()) == self.default_name())
+        b.current || b.worktree.is_some() || (!b.remote && Some(b.name.as_str()) == self.default_name())
     }
 
     fn step(&mut self, n: isize) {
@@ -495,6 +495,15 @@ impl App<'_> {
                     self.toast = Some(Toast::new(format!("Already on {target}"), theme::ACCENT));
                     return Ok(None);
                 }
+                if let Some(path) =
+                    self.data.list.iter().find(|x| !x.remote && x.name == target).and_then(|x| x.worktree.as_ref())
+                {
+                    self.toast = Some(Toast::new(
+                        format!("{target} is checked out in the worktree at {}", short_path(path)),
+                        theme::YELLOW,
+                    ));
+                    return Ok(None);
+                }
                 let (ok, out) = git(&["switch".into(), target.clone()]);
                 self.toast = Some(if ok {
                     Toast::new(format!("Switched to {target}"), theme::GREEN)
@@ -521,6 +530,9 @@ impl App<'_> {
             let why = match keep.first() {
                 Some(b) if b.current => {
                     format!("{} is checked out; switch to another branch first", b.name)
+                }
+                Some(Branch { name, worktree: Some(path), .. }) => {
+                    format!("{name} is checked out in the worktree at {}; remove that worktree first", short_path(path))
                 }
                 Some(b) => format!("{} is the main branch", b.name),
                 None => "Nothing to delete".into(),
@@ -576,6 +588,16 @@ impl App<'_> {
             }
             (format!("Delete {} branches?", list.len()), body.trim_end().to_string())
         };
+        let mut body = body;
+        if !keep.is_empty() {
+            let why = |b: &Branch| match &b.worktree {
+                _ if b.current => "checked out".to_string(),
+                Some(p) => format!("in worktree {}", short_path(p)),
+                None => "main branch".to_string(),
+            };
+            let names: Vec<String> = keep.iter().map(|b| format!("{} ({})", b.name, why(b))).collect();
+            body += &format!("\nSkipping {}.", names.join(", "));
+        }
         let danger = list.iter().any(|b| only_here(b) > 0);
         self.confirm =
             Some((Confirm { title, body, yes: "Delete".into(), no: "Cancel".into(), danger }, Pending::Local(list)));
@@ -684,6 +706,23 @@ fn sync_note((ahead, behind): (usize, usize)) -> String {
         (a, 0) => format!("{a} to push"),
         (0, b) => format!("{b} to pull"),
         (a, b) => format!("differs: {a} to push, {b} to pull"),
+    }
+}
+
+/// `/Users/me/git/x` as `~/git/x`; long paths keep their last two parts: `…/git/x`.
+fn short_path(p: &std::path::Path) -> String {
+    let s = p.display().to_string();
+    let s = match std::env::var("HOME") {
+        Ok(home) if !home.is_empty() && s.starts_with(&home) => format!("~{}", &s[home.len()..]),
+        _ => s,
+    };
+    if s.chars().count() <= 40 {
+        return s;
+    }
+    let parts: Vec<&str> = s.rsplitn(3, '/').collect();
+    match parts.as_slice() {
+        [last, parent, _] => format!("…/{parent}/{last}"),
+        _ => s,
     }
 }
 
@@ -796,7 +835,14 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
         } else {
             Span::raw("  ")
         };
-        let dot = if b.current { Span::styled("● ", Style::new().fg(theme::ACCENT)) } else { Span::raw("  ") };
+        // ● checked out here, ◆ checked out in another worktree.
+        let dot = if b.current {
+            Span::styled("● ", Style::new().fg(theme::ACCENT))
+        } else if b.worktree.is_some() {
+            Span::styled("◆ ", Style::new().fg(theme::BLUE))
+        } else {
+            Span::raw("  ")
+        };
         let name_style = if b.current {
             Style::new().fg(theme::ACCENT).add_modifier(Modifier::BOLD)
         } else if b.remote || b.merged || b.gone() {
@@ -859,6 +905,7 @@ fn build_detail(
         (b.remote, "remote", theme::MUTED),
         (b.merged, "merged", theme::GREEN),
         (b.gone(), "gone", theme::RED),
+        (b.worktree.is_some(), "in another worktree", theme::BLUE),
     ] {
         if on {
             badges.push(Span::raw("  "));
@@ -907,6 +954,14 @@ fn build_detail(
         let mut line = vec![label("upstream")];
         line.extend(up);
         out.push(Line::from(line));
+
+        if let Some(path) = &b.worktree {
+            out.push(Line::from(vec![
+                label("worktree"),
+                Span::styled(short_path(path), Style::new().fg(theme::BLUE)),
+                Span::styled("  can't delete or check out here", theme::muted()),
+            ]));
+        }
 
         // Every remote that has it, when that says more than the upstream row.
         if b.copies.len() > 1 || (b.copies.len() == 1 && (b.upstream.is_none() || b.gone())) {

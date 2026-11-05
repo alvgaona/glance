@@ -8,7 +8,7 @@ use gix::bstr::BStr;
 
 pub use super::diff::Hunk;
 use super::diff::{self, Op};
-use super::run::{args, git_in, git_with_input, top};
+use super::run::{Ran, args, git_in, git_with_input, top};
 
 /// Which half of a change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -145,7 +145,7 @@ pub fn changes_anything(h: &Hunk) -> bool {
 }
 
 /// Applies one hunk of `path` (taken from the side the action works on).
-pub fn apply_hunk(repo: &gix::Repository, path: &str, h: &Hunk, action: HunkAction) -> (bool, String) {
+pub fn apply_hunk(repo: &gix::Repository, path: &str, h: &Hunk, action: HunkAction) -> Ran {
     let how: &[&str] = match action {
         HunkAction::Stage => &["--cached"],
         HunkAction::Unstage => &["--cached", "--reverse"],
@@ -160,7 +160,7 @@ pub fn apply_hunk(repo: &gix::Repository, path: &str, h: &Hunk, action: HunkActi
 // The writes run in the repository's root folder: paths come from status, so they're
 // relative to it, wherever gg was started.
 
-fn run(repo: &gix::Repository, cmd: &[&str], paths: Option<&[String]>) -> (bool, String) {
+fn run(repo: &gix::Repository, cmd: &[&str], paths: Option<&[String]>) -> Ran {
     let mut a = args(cmd);
     if let Some(paths) = paths {
         a.push("--".into());
@@ -175,19 +175,19 @@ fn unborn(repo: &gix::Repository) -> bool {
 }
 
 /// `gg add <paths>`: plain `git add`, paths as typed (from the current folder).
-pub fn add_typed(paths: &[String]) -> (bool, String) {
+pub fn add_typed(paths: &[String]) -> Ran {
     let mut a = args(&["add", "--"]);
     a.extend(paths.iter().cloned());
     git_in(None, &a)
 }
 
 /// Stages whole files: changes, new files and deletions.
-pub fn add(repo: &gix::Repository, paths: &[String]) -> (bool, String) {
+pub fn add(repo: &gix::Repository, paths: &[String]) -> Ran {
     run(repo, &["add", "--all"], Some(paths))
 }
 
 /// Takes whole files out of the index again; the working tree keeps them.
-pub fn unstage(repo: &gix::Repository, paths: &[String]) -> (bool, String) {
+pub fn unstage(repo: &gix::Repository, paths: &[String]) -> Ran {
     if unborn(repo) {
         run(repo, &["rm", "--cached", "-r", "-q"], Some(paths))
     } else {
@@ -195,21 +195,21 @@ pub fn unstage(repo: &gix::Repository, paths: &[String]) -> (bool, String) {
     }
 }
 
-pub fn add_all(repo: &gix::Repository) -> (bool, String) {
+pub fn add_all(repo: &gix::Repository) -> Ran {
     run(repo, &["add", "--all"], None)
 }
 
-pub fn unstage_all(repo: &gix::Repository) -> (bool, String) {
+pub fn unstage_all(repo: &gix::Repository) -> Ran {
     if unborn(repo) { run(repo, &["rm", "--cached", "-r", "-q", "."], None) } else { run(repo, &["reset", "-q"], None) }
 }
 
 /// Throws away unstaged changes to tracked files: back to what's staged.
-pub fn discard(repo: &gix::Repository, paths: &[String]) -> (bool, String) {
+pub fn discard(repo: &gix::Repository, paths: &[String]) -> Ran {
     run(repo, &["restore", "--worktree"], Some(paths))
 }
 
 /// Deletes untracked files or folders (never ignored ones).
-pub fn delete_untracked(repo: &gix::Repository, paths: &[String]) -> (bool, String) {
+pub fn delete_untracked(repo: &gix::Repository, paths: &[String]) -> Ran {
     run(repo, &["clean", "-f", "-d", "-q"], Some(paths))
 }
 
@@ -253,7 +253,7 @@ pub fn conflicts(repo: &gix::Repository) -> Result<std::collections::HashMap<Str
 
 /// Deletes files from the index and the working tree; for a conflict, that's taking
 /// the side that deleted it.
-pub fn remove(repo: &gix::Repository, paths: &[String]) -> (bool, String) {
+pub fn remove(repo: &gix::Repository, paths: &[String]) -> Ran {
     run(repo, &["rm", "-q", "--ignore-unmatch"], Some(paths))
 }
 
@@ -277,9 +277,10 @@ mod tests {
             crate::git::run::test_git(&self.0, a);
         }
         /// Runs one of our writes on the repo, opened afresh.
-        fn run(&self, f: impl FnOnce(&gix::Repository) -> (bool, String)) {
-            let (ok, out) = f(&self.repo());
-            assert!(ok, "{out}");
+        fn run(&self, f: impl FnOnce(&gix::Repository) -> Ran) {
+            if let Err(e) = f(&self.repo()) {
+                panic!("{e}");
+            }
         }
         fn write(&self, path: &str, text: &str) {
             std::fs::write(self.0.join(path), text).unwrap();

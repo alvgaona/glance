@@ -142,8 +142,8 @@ impl App<'_> {
     }
 
     /// Toast summarising what the git commands did.
-    pub(super) fn report(&mut self, results: &[(bool, String)]) {
-        let failed: Vec<&String> = results.iter().filter(|(ok, _)| !ok).map(|(_, out)| out).collect();
+    pub(super) fn report(&mut self, results: &[Ran]) {
+        let failed: Vec<&String> = results.iter().filter_map(|r| r.as_ref().err()).collect();
         self.toast = Some(if failed.is_empty() {
             let n = results.len();
             Toast::new(

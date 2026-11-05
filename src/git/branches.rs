@@ -2,7 +2,7 @@ use anyhow::Result;
 use gix::ObjectId;
 use gix::bstr::ByteSlice;
 
-use super::run;
+use super::run::{self, Ran};
 use super::status::{Upstream, upstream};
 
 #[derive(Debug, Clone)]
@@ -278,11 +278,11 @@ pub fn default_branch(repo: &gix::Repository) -> Option<(String, ObjectId)> {
 
 // ---------------------------------------------------------------- writes
 
-pub fn switch(name: &str) -> (bool, String) {
+pub fn switch(name: &str) -> Ran {
     run::git(&run::args(&["switch", name]))
 }
 
-pub fn rename(from: &str, to: &str) -> (bool, String) {
+pub fn rename(from: &str, to: &str) -> Ran {
     run::git(&run::args(&["branch", "-m", from, to]))
 }
 
@@ -298,7 +298,7 @@ pub fn delete_remote_args(remote: &str, branch: &str) -> Vec<String> {
 
 /// `git fetch --all --prune` that never prompts (a prompt would draw over the screen):
 /// a remote that needs a password fails and says so.
-pub fn fetch(repo: &gix::Repository) -> impl FnOnce() -> (bool, String) + Send + 'static {
+pub fn fetch(repo: &gix::Repository) -> impl FnOnce() -> Ran + Send + 'static {
     super::remote::no_prompt(repo, run::args(&["fetch", "--all", "--prune", "--quiet"]))
 }
 

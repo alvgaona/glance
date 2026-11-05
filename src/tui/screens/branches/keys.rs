@@ -13,15 +13,13 @@ impl App<'_> {
                     let from = from.clone();
                     self.rename = None;
                     if !to.is_empty() && to != from {
-                        let (ok, out) = branches::rename(&from, &to);
-                        if ok {
-                            self.toast = Some(Toast::new(format!("Renamed {from} → {to}"), theme::GREEN));
+                        let ran = branches::rename(&from, &to);
+                        self.toast = Some(Toast::ran(&ran, format!("Renamed {from} → {to}")));
+                        if ran.is_ok() {
                             if self.marked.remove(&from) {
                                 self.marked.insert(to.clone());
                             }
                             self.reload_selecting(Some(to))?;
-                        } else {
-                            self.toast = Some(Toast::new(first_lines(&out), theme::RED));
                         }
                     }
                 }
@@ -288,12 +286,7 @@ impl App<'_> {
                     ));
                     return Ok(None);
                 }
-                let (ok, out) = branches::switch(&target);
-                self.toast = Some(if ok {
-                    Toast::new(format!("Switched to {target}"), theme::GREEN)
-                } else {
-                    Toast::new(first_lines(&out), theme::RED)
-                });
+                self.toast = Some(Toast::ran(&branches::switch(&target), format!("Switched to {target}")));
                 self.reload()?;
             }
             Cmd::DeleteLocal => self.ask_delete_local(),

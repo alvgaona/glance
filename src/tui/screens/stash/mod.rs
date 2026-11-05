@@ -232,22 +232,23 @@ impl App<'_> {
     /// `git stash apply` or `git stash pop` on the current stash.
     fn apply(&mut self, pop: bool) -> Result<()> {
         let Some(s) = self.current().cloned() else { return Ok(()) };
-        let (ok, out) = stash::apply(&s, pop);
-        self.toast = Some(if ok {
-            let done = if pop { "Popped" } else { "Applied" };
-            Toast::new(format!("{done} {}: {}", s.name(), s.title()), theme::GREEN)
-        } else if out.contains("CONFLICT") {
-            // git keeps the stash when a pop conflicts.
-            let n = out.lines().filter(|l| l.contains("CONFLICT")).count();
-            Toast::new(
-                format!(
-                    "Applied with conflicts in {n} file{}. The stash is kept; fix them, then drop it",
-                    if n == 1 { "" } else { "s" }
-                ),
-                theme::RED,
-            )
-        } else {
-            Toast::new(first_lines(&out), theme::RED)
+        self.toast = Some(match stash::apply(&s, pop) {
+            Ok(_) => {
+                let done = if pop { "Popped" } else { "Applied" };
+                Toast::new(format!("{done} {}: {}", s.name(), s.title()), theme::GREEN)
+            }
+            Err(out) if out.contains("CONFLICT") => {
+                // git keeps the stash when a pop conflicts.
+                let n = out.lines().filter(|l| l.contains("CONFLICT")).count();
+                Toast::new(
+                    format!(
+                        "Applied with conflicts in {n} file{}. The stash is kept; fix them, then drop it",
+                        if n == 1 { "" } else { "s" }
+                    ),
+                    theme::RED,
+                )
+            }
+            Err(out) => Toast::new(first_lines(&out), theme::RED),
         });
         self.reload(None)
     }
@@ -282,13 +283,7 @@ impl App<'_> {
     /// Drops newest index last, so the indexes of the others don't shift under us.
     fn drop_stashes(&mut self, mut list: Vec<Stash>) -> Result<()> {
         list.sort_by_key(|s| std::cmp::Reverse(s.index));
-        let mut failed = Vec::new();
-        for s in &list {
-            let (ok, out) = stash::drop(s);
-            if !ok {
-                failed.push(out);
-            }
-        }
+        let failed: Vec<String> = list.iter().filter_map(|s| stash::drop(s).err()).collect();
         self.marked.clear();
         self.toast = Some(match (failed.first(), list.as_slice()) {
             (Some(err), _) => Toast::new(format!("{} failed: {}", failed.len(), first_lines(err)), theme::RED),
@@ -304,24 +299,16 @@ impl App<'_> {
                 if text.is_empty() {
                     return Ok(());
                 }
-                let (ok, out) = stash::branch(&s, &text);
-                self.toast = Some(if ok {
-                    Toast::new(format!("On new branch {text}, with {} applied", s.name()), theme::GREEN)
-                } else {
-                    Toast::new(first_lines(&out), theme::RED)
-                });
+                let done = format!("On new branch {text}, with {} applied", s.name());
+                self.toast = Some(Toast::ran(&stash::branch(&s, &text), done));
                 self.reload(None)
             }
             Ask::New(picked) => {
-                let (ok, out) = picked.push.run(&text);
-                if ok {
+                let ran = picked.push.run(&text);
+                if ran.is_ok() {
                     self.changes.reset_ticks();
                 }
-                self.toast = Some(if ok {
-                    Toast::new(format!("Stashed {} as stash@{{0}}", picked.describe()), theme::GREEN)
-                } else {
-                    Toast::new(first_lines(&out), theme::RED)
-                });
+                self.toast = Some(Toast::ran(&ran, format!("Stashed {} as stash@{{0}}", picked.describe())));
                 self.reload(Some(0))?;
                 if self.changes.is_empty() {
                     self.focus = Pane::Stashes;

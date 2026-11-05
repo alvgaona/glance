@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use gix::ObjectId;
 
-use super::run;
+use super::run::{self, Ran};
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Worktree {
@@ -96,12 +96,12 @@ pub fn add_args(path: &Path, branch: &str, from: Source) -> Vec<String> {
     }
 }
 
-pub fn add(path: &Path, branch: &str, from: Source) -> (bool, String) {
+pub fn add(path: &Path, branch: &str, from: Source) -> Ran {
     run::git(&add_args(path, branch, from))
 }
 
 /// `force` also throws away uncommitted and untracked files in it.
-pub fn remove(path: &Path, force: bool) -> (bool, String) {
+pub fn remove(path: &Path, force: bool) -> Ran {
     let dir = path.display().to_string();
     let mut a = run::args(&["worktree", "remove"]);
     if force {
@@ -112,12 +112,12 @@ pub fn remove(path: &Path, force: bool) -> (bool, String) {
 }
 
 /// Forgets worktrees whose folders are gone.
-pub fn prune() -> (bool, String) {
+pub fn prune() -> Ran {
     run::git(&run::args(&["worktree", "prune"]))
 }
 
 /// `git worktree lock` (or `unlock`): a locked one isn't pruned or removed.
-pub fn lock(path: &Path, on: bool) -> (bool, String) {
+pub fn lock(path: &Path, on: bool) -> Ran {
     run::git(&run::args(&["worktree", if on { "lock" } else { "unlock" }, &path.display().to_string()]))
 }
 

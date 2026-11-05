@@ -7,7 +7,7 @@ use std::time::SystemTime;
 use anyhow::Result;
 use gix::bstr::{BStr, ByteSlice};
 
-use super::run::{self, args, git};
+use super::run::{self, Ran, args, git};
 
 pub struct Remote {
     pub name: String,
@@ -155,25 +155,25 @@ fn newest_file(dir: &Path) -> Option<i64> {
     newest
 }
 
-pub fn add(name: &str, url: &str) -> (bool, String) {
+pub fn add(name: &str, url: &str) -> Ran {
     git(&args(&["remote", "add", name, url]))
 }
 
-pub fn remove(name: &str) -> (bool, String) {
+pub fn remove(name: &str) -> Ran {
     git(&args(&["remote", "remove", name]))
 }
 
 /// Also moves its remote branches and the upstream of every branch tracking it.
-pub fn rename(old: &str, new: &str) -> (bool, String) {
+pub fn rename(old: &str, new: &str) -> Ran {
     git(&args(&["remote", "rename", old, new]))
 }
 
-pub fn set_url(name: &str, url: &str) -> (bool, String) {
+pub fn set_url(name: &str, url: &str) -> Ran {
     git(&args(&["remote", "set-url", name, url]))
 }
 
 /// A push URL apart from the fetch one; `None` pushes to the fetch URL again.
-pub fn set_push_url(name: &str, url: Option<&str>) -> (bool, String) {
+pub fn set_push_url(name: &str, url: Option<&str>) -> Ran {
     match url {
         Some(u) => git(&args(&["remote", "set-url", "--push", name, u])),
         None => git(&args(&["config", "--unset-all", &format!("remote.{name}.pushurl")])),
@@ -196,7 +196,7 @@ pub fn set_head_args(name: &str) -> Vec<String> {
 /// A git command that talks to remotes but never prompts: it runs behind a full screen,
 /// so a remote that needs a password fails and says so instead. Returns the job to run
 /// on another thread; the repository is only read here, on this one.
-pub fn no_prompt(repo: &gix::Repository, args: Vec<String>) -> impl FnOnce() -> (bool, String) + Send + 'static {
+pub fn no_prompt(repo: &gix::Repository, args: Vec<String>) -> impl FnOnce() -> Ran + Send + 'static {
     // Keep ssh from asking for a passphrase too, unless the user set their own ssh command.
     let own_ssh =
         std::env::var_os("GIT_SSH_COMMAND").is_some() || repo.config_snapshot().string("core.sshCommand").is_some();

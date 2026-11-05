@@ -25,6 +25,7 @@ use ratatui::{
 use crate::fmt::paths::short as short_path;
 use crate::fmt::{now, relative_time};
 use crate::git::branches::{self, Branch, Branches};
+use crate::git::run::Ran;
 use crate::github::{self, Pr};
 use crate::process;
 use crate::tui::app::{self, Flow, Screen};
@@ -171,7 +172,7 @@ struct App<'r> {
     /// The rename dialog and the branch it renames.
     rename: Option<(Input, String)>,
     /// A background `git fetch`, while it runs.
-    fetching: Option<mpsc::Receiver<(bool, String)>>,
+    fetching: Option<mpsc::Receiver<Ran>>,
     list_area: Rect,
     repo_name: String,
     /// What the last single delete removed, for its toast.
@@ -333,17 +334,14 @@ impl App<'_> {
 
     fn poll_fetch(&mut self) -> Result<()> {
         let Some(rx) = &self.fetching else { return Ok(()) };
-        let (ok, out) = match rx.try_recv() {
+        let ran = match rx.try_recv() {
             Ok(r) => r,
             Err(mpsc::TryRecvError::Empty) => return Ok(()),
-            Err(mpsc::TryRecvError::Disconnected) => (false, "fetch stopped".into()),
+            Err(mpsc::TryRecvError::Disconnected) => Err("fetch stopped".into()),
         };
         self.fetching = None;
-        self.toast = Some(if ok {
-            Toast::new("Fetched all remotes", theme::GREEN)
-        } else {
-            Toast::new(format!("Fetch failed: {}", first_lines(&out)), theme::RED)
-        });
+        let ran = ran.map_err(|out| format!("Fetch failed: {}", first_lines(&out)));
+        self.toast = Some(Toast::ran(&ran, "Fetched all remotes"));
         self.reload()?;
         // Pushes and merges may have changed PRs too.
         if !matches!(self.prs, Prs::Loading(_) | Prs::Off) {

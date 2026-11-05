@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use gix::bstr::ByteSlice;
 
 use super::log::{RefLabel, ref_labels};
-use super::run::{args, git_on_terminal, git_with_input};
+use super::run::{Ran, args, git_on_terminal, git_with_input};
 use super::tree::{self, FileStat};
 
 #[derive(Debug)]
@@ -53,7 +53,7 @@ pub fn read(repo: &gix::Repository, rev: &str) -> Result<Details> {
 
 /// Commits what's staged (or amends HEAD) with `message`, output collected; runs in the
 /// repository root so hooks see the usual folder.
-pub fn create(repo: &gix::Repository, message: &str, amend: bool) -> (bool, String) {
+pub fn create(repo: &gix::Repository, message: &str, amend: bool) -> Ran {
     let mut a = args(&["commit", "-F", "-"]);
     if amend {
         a.push("--amend".into());
@@ -63,11 +63,9 @@ pub fn create(repo: &gix::Repository, message: &str, amend: bool) -> (bool, Stri
 
 /// The same on the terminal: signing may ask for a passphrase, and with `edit` git
 /// opens the editor on the message first. The message waits in a file meanwhile.
-pub fn create_on_terminal(repo: &gix::Repository, message: &str, amend: bool, edit: bool) -> (bool, String) {
+pub fn create_on_terminal(repo: &gix::Repository, message: &str, amend: bool, edit: bool) -> Ran {
     let file = repo.git_dir().join("GLANCE_COMMIT_MSG");
-    if let Err(e) = std::fs::write(&file, message) {
-        return (false, format!("couldn't write {}: {e}", file.display()));
-    }
+    std::fs::write(&file, message).map_err(|e| format!("couldn't write {}: {e}", file.display()))?;
     let r = git_on_terminal(repo.workdir(), &create_args(&file, amend, edit));
     let _ = std::fs::remove_file(&file);
     r
@@ -125,21 +123,18 @@ mod tests {
 
         let repo = gix::open(&dir).unwrap();
         assert!(!signs(&repo));
-        let (ok, out) = create(&repo, "feat: first\n\nWhy it matters.", false);
-        assert!(ok, "{out}");
+        create(&repo, "feat: first\n\nWhy it matters.", false).unwrap();
         let repo = gix::open(&dir).unwrap();
         assert_eq!(last_message(&repo).as_deref(), Some("feat: first\n\nWhy it matters."));
 
         // Amending with nothing staged changes only the message.
-        let (ok, out) = create(&repo, "feat: better first", true);
-        assert!(ok, "{out}");
+        create(&repo, "feat: better first", true).unwrap();
         let repo = gix::open(&dir).unwrap();
         assert_eq!(last_message(&repo).as_deref(), Some("feat: better first"));
         assert_eq!(repo.head_commit().unwrap().parent_ids().count(), 0);
 
         // Nothing staged: git refuses, and says so.
-        let (ok, out) = create(&repo, "empty", false);
-        assert!(!ok);
+        let out = create(&repo, "empty", false).unwrap_err();
         assert!(out.contains("nothing"), "{out}");
         let _ = std::fs::remove_dir_all(&dir);
     }

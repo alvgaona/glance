@@ -165,7 +165,7 @@ impl App {
     /// Runs the editor (from `Screen::outside`), then shows the file as it is now.
     pub(super) fn edit_outside(&mut self) -> Result<()> {
         let Some(path) = self.editing.take() else { return Ok(()) };
-        let (ok, out) = crate::git::run::edit(&self.repo, &path);
+        let ran = crate::git::run::edit(&self.repo, &path);
         let place = self.place();
         match place {
             Some((g, pos)) => self.reload_at(g, pos)?,
@@ -173,7 +173,7 @@ impl App {
         }
         self.focus = Focus::Files;
         let conflict = self.current().filter(|e| e.path == path).and_then(|e| e.conflict);
-        self.toast = Some(if !ok {
+        self.toast = Some(if let Err(out) = ran {
             Toast::new(if out.is_empty() { "The editor failed".into() } else { first_lines(&out) }, theme::RED)
         } else if conflict.is_some_and(|c| c.in_content()) && !has_markers(&self.repo, &path) {
             Toast::new("No markers left: space marks it resolved", theme::GREEN)

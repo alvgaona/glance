@@ -30,7 +30,7 @@ use crate::git::worktree::{self, Source, Worktree};
 use crate::tui::app::{self, Flow, Screen};
 use crate::tui::kit::{self, Command, Confirm, Input, InputEvent, Palette, PaletteEvent, Scroll, Toast, footer, list};
 use crate::tui::panels::changes;
-use crate::tui::{first_lines, theme};
+use crate::tui::theme;
 
 #[derive(Clone)]
 enum Cmd {
@@ -268,18 +268,14 @@ impl App<'_> {
             return Ok(());
         }
         let from = worktree::source(self.repo, branch);
-        let (ok, out) = worktree::add(&path, branch, from);
-        self.toast = Some(if ok {
-            let how = match from {
-                Source::Local => "on",
-                Source::Remote => "tracking the remote",
-                Source::New => "on new branch",
-            };
-            Toast::new(format!("Created {} {how} {branch}", self.name(&path)), theme::GREEN)
-        } else {
-            Toast::new(first_lines(&out), theme::RED)
-        });
-        self.reload(ok.then_some(path.as_path()))
+        let ran = worktree::add(&path, branch, from);
+        let how = match from {
+            Source::Local => "on",
+            Source::Remote => "tracking the remote",
+            Source::New => "on new branch",
+        };
+        self.toast = Some(Toast::ran(&ran, format!("Created {} {how} {branch}", self.name(&path))));
+        self.reload(ran.is_ok().then_some(path.as_path()))
     }
 
     fn ask_remove(&mut self) {
@@ -350,21 +346,11 @@ impl App<'_> {
     fn answer(&mut self, ask: Ask) -> Result<()> {
         match ask {
             Ask::Remove { path, force } => {
-                let (ok, out) = worktree::remove(&path, force);
-                self.toast = Some(if ok {
-                    Toast::new(format!("Removed {}", self.name(&path)), theme::GREEN)
-                } else {
-                    Toast::new(first_lines(&out), theme::RED)
-                });
+                self.toast = Some(Toast::ran(&worktree::remove(&path, force), format!("Removed {}", self.name(&path))));
             }
             Ask::Prune => {
                 let before = self.rows.iter().filter(|r| r.wt.prunable.is_some()).count();
-                let (ok, out) = worktree::prune();
-                self.toast = Some(if ok {
-                    Toast::new(format!("Pruned {before}"), theme::GREEN)
-                } else {
-                    Toast::new(first_lines(&out), theme::RED)
-                });
+                self.toast = Some(Toast::ran(&worktree::prune(), format!("Pruned {before}")));
             }
         }
         self.reload(None)

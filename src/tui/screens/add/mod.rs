@@ -25,6 +25,7 @@ use ratatui::{
 use crate::git::diff::Size;
 use std::collections::HashMap;
 
+use crate::git::run::Ran;
 use crate::git::stage::{self, Conflict, Side};
 use crate::git::status::{ChangeKind, FileChange, Status};
 use crate::tui::app::{self, Flow, Screen};
@@ -305,8 +306,8 @@ impl App {
     }
 
     /// Shows how a write went, then reloads in place.
-    fn done(&mut self, (ok, out): (bool, String), msg: String) -> Result<()> {
-        self.toast = Some(if ok { Toast::new(msg, theme::GREEN) } else { Toast::new(first_lines(&out), theme::RED) });
+    fn done(&mut self, ran: Ran, msg: String) -> Result<()> {
+        self.toast = Some(Toast::ran(&ran, msg));
         match self.place() {
             Some((g, pos)) => self.reload_at(g, pos),
             None => self.reload(),

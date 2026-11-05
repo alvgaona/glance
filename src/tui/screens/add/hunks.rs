@@ -307,8 +307,8 @@ impl App {
 
     /// After a hunk write: report, reload, and stay on the same file's next hunk if it's
     /// still in the same group; otherwise back to the file list where it was.
-    pub(super) fn after_hunk(&mut self, (ok, out): (bool, String), msg: String) -> Result<()> {
-        self.toast = Some(if ok { Toast::new(msg, theme::GREEN) } else { Toast::new(first_lines(&out), theme::RED) });
+    pub(super) fn after_hunk(&mut self, ran: Ran, msg: String) -> Result<()> {
+        self.toast = Some(Toast::ran(&ran, msg));
         self.pick = None;
         let Some((group, pos)) = self.place() else { return self.reload() };
         let path = self.current().map(|e| e.path.clone()).unwrap_or_default();

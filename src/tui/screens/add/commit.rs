@@ -112,24 +112,25 @@ impl App {
             self.pending = Some(Pending { message, amend, edit });
             return Ok(());
         }
-        let (ok, out) = commit::create(&self.repo, &message, amend);
-        if ok {
-            self.commit = None;
-            self.committed(amend)
-        } else {
+        match commit::create(&self.repo, &message, amend) {
+            Ok(_) => {
+                self.commit = None;
+                self.committed(amend)
+            }
             // The box stays open with the message, so a hook's complaint can be fixed.
-            self.toast = Some(Toast::new(first_lines(&out), theme::RED));
-            Ok(())
+            Err(out) => {
+                self.toast = Some(Toast::new(first_lines(&out), theme::RED));
+                Ok(())
+            }
         }
     }
 
     /// Runs a pending commit on the terminal (from `Screen::outside`).
     pub(super) fn commit_outside(&mut self) -> Result<()> {
         let Some(p) = self.pending.take() else { return Ok(()) };
-        let (ok, out) = commit::create_on_terminal(&self.repo, &p.message, p.amend, p.edit);
-        if ok {
+        let Err(out) = commit::create_on_terminal(&self.repo, &p.message, p.amend, p.edit) else {
             return self.committed(p.amend);
-        }
+        };
         let why = if out.is_empty() { "The commit was cancelled".to_string() } else { first_lines(&out) };
         self.toast = Some(Toast::new(why, theme::RED));
         self.reload()

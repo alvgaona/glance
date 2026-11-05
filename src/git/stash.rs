@@ -7,7 +7,7 @@ use anyhow::Result;
 use gix::ObjectId;
 use gix::bstr::ByteSlice;
 
-use super::run;
+use super::run::{self, Ran};
 use super::tree::{self, FileStat};
 
 #[derive(Debug, Clone)]
@@ -157,22 +157,22 @@ impl Push {
         a
     }
 
-    pub fn run(&self, message: &str) -> (bool, String) {
+    pub fn run(&self, message: &str) -> Ran {
         run::git(&self.args(message))
     }
 }
 
 /// `git stash apply` (or `pop`, which also drops it when it applies cleanly).
-pub fn apply(s: &Stash, pop: bool) -> (bool, String) {
+pub fn apply(s: &Stash, pop: bool) -> Ran {
     run::git(&run::args(&["stash", if pop { "pop" } else { "apply" }, &s.name()]))
 }
 
-pub fn drop(s: &Stash) -> (bool, String) {
+pub fn drop(s: &Stash) -> Ran {
     run::git(&run::args(&["stash", "drop", &s.name()]))
 }
 
 /// `git stash branch`: a new branch at the stash's base, with the stash applied and dropped.
-pub fn branch(s: &Stash, name: &str) -> (bool, String) {
+pub fn branch(s: &Stash, name: &str) -> Ran {
     run::git(&run::args(&["stash", "branch", name, &s.name()]))
 }
 

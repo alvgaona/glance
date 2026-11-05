@@ -126,13 +126,8 @@ impl App<'_> {
                 if let Some(r) = self.current() {
                     let on = r.wt.locked.is_none();
                     let done = if on { "Locked" } else { "Unlocked" };
-                    let (ok, out) = worktree::lock(&r.wt.path, on);
-                    let name = self.name(&r.wt.path);
-                    self.toast = Some(if ok {
-                        Toast::new(format!("{done} {name}"), theme::GREEN)
-                    } else {
-                        Toast::new(first_lines(&out), theme::RED)
-                    });
+                    let ran = worktree::lock(&r.wt.path, on);
+                    self.toast = Some(Toast::ran(&ran, format!("{done} {}", self.name(&r.wt.path))));
                     self.reload(None)?;
                 }
             }

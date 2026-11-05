@@ -23,6 +23,7 @@ use ratatui::{
 use crate::fmt::url;
 use crate::fmt::{now, relative_time};
 use crate::git::remote::{self, Fetched, Remote};
+use crate::git::run::Ran;
 use crate::process;
 use crate::tui::app::{self, Flow, Screen};
 use crate::tui::kit::{self, Command, Confirm, Input, InputEvent, Palette, PaletteEvent, Scroll, Toast, footer, list};
@@ -73,7 +74,7 @@ struct Job {
     /// "Fetching origin", for the header.
     what: String,
     kind: JobKind,
-    rx: Receiver<(bool, String)>,
+    rx: Receiver<Ran>,
 }
 
 enum JobKind {
@@ -242,17 +243,17 @@ impl App {
 
     fn poll_job(&mut self) -> Result<()> {
         let Some(job) = &self.job else { return Ok(()) };
-        let (ok, out) = match job.rx.try_recv() {
+        let ran = match job.rx.try_recv() {
             Ok(r) => r,
             Err(mpsc::TryRecvError::Empty) => return Ok(()),
-            Err(mpsc::TryRecvError::Disconnected) => (false, "git stopped".into()),
+            Err(mpsc::TryRecvError::Disconnected) => Err("git stopped".into()),
         };
         let job = self.job.take().unwrap();
         self.load(None)?;
-        self.toast = Some(match (ok, job.kind) {
-            (false, JobKind::Fetch(_)) => Toast::new(format!("Fetch failed: {}", remote::errors(&out)), theme::RED),
-            (false, JobKind::SetHead(_)) => Toast::new(remote::errors(&out), theme::RED),
-            (true, JobKind::Fetch(name)) => {
+        self.toast = Some(match (ran, job.kind) {
+            (Err(out), JobKind::Fetch(_)) => Toast::new(format!("Fetch failed: {}", remote::errors(&out)), theme::RED),
+            (Err(out), JobKind::SetHead(_)) => Toast::new(remote::errors(&out), theme::RED),
+            (Ok(out), JobKind::Fetch(name)) => {
                 let f = Fetched::read(&out);
                 let who = name.unwrap_or_else(|| "all remotes".into());
                 let mut parts = Vec::new();
@@ -269,7 +270,7 @@ impl App {
                     if parts.is_empty() { ": nothing new".to_string() } else { format!(" · {}", parts.join(" · ")) };
                 Toast::new(format!("Fetched {who}{what}"), theme::GREEN)
             }
-            (true, JobKind::SetHead(name)) => {
+            (Ok(_), JobKind::SetHead(name)) => {
                 let head = self.remotes.iter().find(|r| r.name == name).and_then(|r| r.head.clone());
                 Toast::new(
                     format!("{name}'s default branch is {}", head.unwrap_or_else(|| "unknown".into())),
@@ -282,7 +283,6 @@ impl App {
 
     /// What the text field gave, for what it was opened for.
     fn typed(&mut self, typing: Typing, text: String) -> Result<()> {
-        let fail = |out: &str| Some(Toast::new(first_lines(out), theme::RED));
         match typing {
             Typing::AddUrl => {
                 if text.is_empty() {
@@ -302,9 +302,8 @@ impl App {
                     self.toast = Some(Toast::new(format!("There's a remote called {text} already"), theme::YELLOW));
                     return Ok(());
                 }
-                let (ok, out) = remote::add(&text, &url);
-                if !ok {
-                    self.toast = fail(&out);
+                if let Err(out) = remote::add(&text, &url) {
+                    self.toast = Some(Toast::new(first_lines(&out), theme::RED));
                     return Ok(());
                 }
                 self.load(Some(&text))?;
@@ -315,12 +314,10 @@ impl App {
                 if text.is_empty() || text == old {
                     return Ok(());
                 }
-                let (ok, out) = remote::rename(&old, &text);
-                if ok {
-                    self.toast = Some(Toast::new(format!("Renamed {old} to {text}"), theme::GREEN));
+                let ran = remote::rename(&old, &text);
+                self.toast = Some(Toast::ran(&ran, format!("Renamed {old} to {text}")));
+                if ran.is_ok() {
                     self.load(Some(&text))?;
-                } else {
-                    self.toast = fail(&out);
                 }
             }
             Typing::Url { name } => {
@@ -332,12 +329,8 @@ impl App {
                 if Some(&text) == was.as_ref() {
                     return Ok(());
                 }
-                let (ok, out) = remote::set_url(&name, &text);
-                self.toast = if ok {
-                    Some(Toast::new(format!("{name} now fetches from {}", url::short(&text)), theme::GREEN))
-                } else {
-                    fail(&out)
-                };
+                let ran = remote::set_url(&name, &text);
+                self.toast = Some(Toast::ran(&ran, format!("{name} now fetches from {}", url::short(&text))));
                 self.load(None)?;
             }
             Typing::PushUrl { name } => {
@@ -349,14 +342,11 @@ impl App {
                 if new == was {
                     return Ok(());
                 }
-                let (ok, out) = remote::set_push_url(&name, new.as_deref());
-                self.toast = match (ok, &new) {
-                    (true, Some(u)) => {
-                        Some(Toast::new(format!("{name} now pushes to {}", url::short(u)), theme::GREEN))
-                    }
-                    (true, None) => Some(Toast::new(format!("{name} pushes to its fetch URL again"), theme::GREEN)),
-                    (false, _) => fail(&out),
+                let done = match &new {
+                    Some(u) => format!("{name} now pushes to {}", url::short(u)),
+                    None => format!("{name} pushes to its fetch URL again"),
                 };
+                self.toast = Some(Toast::ran(&remote::set_push_url(&name, new.as_deref()), done));
                 self.load(None)?;
             }
         }
@@ -398,12 +388,7 @@ impl App {
     fn answer(&mut self, ask: Ask) -> Result<()> {
         match ask {
             Ask::Remove(name) => {
-                let (ok, out) = remote::remove(&name);
-                self.toast = Some(if ok {
-                    Toast::new(format!("Removed {name}"), theme::GREEN)
-                } else {
-                    Toast::new(first_lines(&out), theme::RED)
-                });
+                self.toast = Some(Toast::ran(&remote::remove(&name), format!("Removed {name}")));
             }
         }
         self.load(None)

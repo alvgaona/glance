@@ -2,10 +2,11 @@
 
 All notable changes to glance are listed here, newest first.
 
-## Unreleased
+## [0.1.0](https://github.com/alvgaona/glance/releases/tag/v0.1.0) - 2026-11-05
 
 ### Features
 
+- rename the command to glance, published as glance-git ([a42d2d4](https://github.com/alvgaona/glance/commit/a42d2d4d05a56917afa7c022b3701f8199ac2490))
 - resolve conflicts in gg add ([55f6828](https://github.com/alvgaona/glance/commit/55f6828ac35cbb94b0d6cc6a981786528a101b85))
 - stage single lines of a hunk in gg add ([5206d66](https://github.com/alvgaona/glance/commit/5206d6615055aa4e17b2fa6fd120aed5127e0df8))
 - commit and amend from gg add ([73a6f31](https://github.com/alvgaona/glance/commit/73a6f317c0ba316a344abfd22f1386e1984adb83))
@@ -30,3 +31,16 @@ All notable changes to glance are listed here, newest first.
 - one event loop for every screen ([c76a453](https://github.com/alvgaona/glance/commit/c76a4538d7c82f067c1f4c2f59b7d2f28a7eee8b))
 - move git writes into git/ ([a66b611](https://github.com/alvgaona/glance/commit/a66b611852322bb8ce09444db153fd77d5bad66b))
 - reorganize modules by responsibility ([a12e1b4](https://github.com/alvgaona/glance/commit/a12e1b4a861441430e6ae7d596f586d03e532f02))
+
+### Documentation
+
+- clearer install section, no semicolons ([52c3dec](https://github.com/alvgaona/glance/commit/52c3decdb9d3a68df8a3bd10ace8d8c6a393ca4e))
+- readme, contributing guide, issue and PR templates ([99361d9](https://github.com/alvgaona/glance/commit/99361d90696cbdfb9deebdb0db7adeba1b625cb0))
+
+### Build and CI
+
+- release notes cover everything since the last stable tag ([31e80cf](https://github.com/alvgaona/glance/commit/31e80cf7131f4db9a32880be1baaadb6be53c90d))
+- lowercase short job names, fix setup-pixi and msrv refs ([ddfc16f](https://github.com/alvgaona/glance/commit/ddfc16f1d38225b3e6402274fd0f3757029a3142))
+- let pre-release tags pass the version check ([b333435](https://github.com/alvgaona/glance/commit/b33343541c62e55d7bb0b0a6b38dce12d055f660))
+- checks on every push, releases from tags, dependabot ([d06adb5](https://github.com/alvgaona/glance/commit/d06adb50483e117296b58c5024841ff73fa182f4))
+- dev tools with pixi, lefthook, commitlint and git-cliff ([649bdf1](https://github.com/alvgaona/glance/commit/649bdf1d0c4fdaeb6bb03f22bf7c226cdaa465b4))

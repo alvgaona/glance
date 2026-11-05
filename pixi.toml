@@ -1,0 +1,25 @@
+# Dev tools in one place: `pixi install`, then `pixi run hooks` once.
+# Plain cargo works too; pixi only saves installing these by hand.
+[workspace]
+name = "glance"
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "osx-64", "linux-64", "linux-aarch64"]
+
+[dependencies]
+rust = ">=1.88"
+lefthook = ">=2.2"
+git-cliff = ">=2.14"
+commitlint = ">=21.2"
+
+[tasks]
+build = "cargo build --release"
+test = "cargo test"
+fmt = "cargo fmt"
+lint = { depends-on = ["lint-tui", "lint-plain", "fmt-check"] }
+lint-tui = "cargo clippy --all-targets -- -D warnings"
+lint-plain = "cargo clippy --all-targets --no-default-features -- -D warnings"
+fmt-check = "cargo fmt --check"
+# Installs the git hooks in lefthook.yml.
+hooks = "lefthook install"
+# Rewrites CHANGELOG.md from the commit history.
+changelog = "git-cliff --output CHANGELOG.md"

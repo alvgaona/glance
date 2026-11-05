@@ -1,0 +1,21 @@
+# Git hooks. Install once with `pixi run hooks` (or `lefthook install`).
+pre-commit:
+  parallel: true
+  jobs:
+    - name: fmt
+      glob: "*.rs"
+      run: cargo fmt --check
+    - name: clippy
+      glob: "*.rs"
+      run: cargo clippy -q --all-targets -- -D warnings && cargo clippy -q --all-targets --no-default-features -- -D warnings
+
+commit-msg:
+  jobs:
+    - name: commitlint
+      # Outside `pixi shell`, commitlint lives in pixi's environment.
+      run: |
+        if command -v commitlint >/dev/null 2>&1; then
+          commitlint --edit {1}
+        else
+          pixi run --quiet commitlint --edit {1}
+        fi

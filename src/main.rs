@@ -30,6 +30,7 @@ fn main() -> Result<()> {
         Command::Branches => cmd::branches::run(&paint),
         Command::Stash => cmd::stash::run(&paint),
         Command::Worktrees { list } => cmd::worktree::run(list, &paint),
+        Command::Remote { list } => cmd::remote::run(list, &paint),
         Command::Repos { dir } => cmd::repos::run(&dir, &paint),
         Command::Rebase { args } => {
             let code = cmd::rebase::run(&args)?;

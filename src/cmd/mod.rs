@@ -4,6 +4,7 @@
 pub mod branches;
 pub mod log;
 pub mod rebase;
+pub mod remote;
 pub mod repos;
 pub mod stash;
 pub mod status;

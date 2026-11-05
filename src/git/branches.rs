@@ -299,15 +299,7 @@ pub fn delete_remote_args(remote: &str, branch: &str) -> Vec<String> {
 /// `git fetch --all --prune` that never prompts (a prompt would draw over the screen):
 /// a remote that needs a password fails and says so.
 pub fn fetch_command(repo: &gix::Repository) -> std::process::Command {
-    let mut cmd = std::process::Command::new("git");
-    cmd.args(["fetch", "--all", "--prune", "--quiet"]).env("GIT_TERMINAL_PROMPT", "0");
-    // Keep ssh from asking for a passphrase too, unless the user set their own ssh command.
-    let own_ssh =
-        std::env::var_os("GIT_SSH_COMMAND").is_some() || repo.config_snapshot().string("core.sshCommand").is_some();
-    if !own_ssh {
-        cmd.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
-    }
-    cmd
+    super::remote::no_prompt(repo, &run::args(&["fetch", "--all", "--prune", "--quiet"]))
 }
 
 #[cfg(test)]

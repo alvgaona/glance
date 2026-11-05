@@ -12,6 +12,9 @@ pub mod log;
 // The editor's settings are only read with the full-screen views.
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub mod rebase;
+// Branches, times and the writes are only used by the interactive view.
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
+pub mod remote;
 pub mod repos;
 // The writes are only made from the full-screen views.
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]

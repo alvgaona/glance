@@ -61,6 +61,14 @@ pub enum Command {
         list: bool,
     },
 
+    /// Remotes: see where each points, add, rename, remove, set URLs, fetch.
+    #[command(alias = "remotes")]
+    Remote {
+        /// Print the list instead of opening the full screen.
+        #[arg(short, long)]
+        list: bool,
+    },
+
     /// Every repo in a folder, at a glance.
     Repos {
         /// Folder holding the repos.

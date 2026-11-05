@@ -7,6 +7,8 @@ pub mod paths;
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub mod sync;
 mod time;
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
+pub mod url;
 
 pub use time::{now, relative_time};
 

@@ -3,6 +3,7 @@
 pub mod branches;
 pub mod log;
 mod paint;
+pub mod remote;
 pub mod repos;
 pub mod stash;
 pub mod status;

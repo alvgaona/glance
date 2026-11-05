@@ -152,7 +152,7 @@ impl Push {
         }
         if let Some(paths) = &self.paths {
             a.push("--".into());
-            a.extend(paths.iter().cloned());
+            a.extend(paths.iter().map(|p| run::top(p)));
         }
         a
     }
@@ -189,7 +189,7 @@ mod tests {
         assert_eq!(push(Mode::Everything, true, None).args(""), ["stash", "push", "--include-untracked"]);
         assert_eq!(
             push(Mode::Everything, false, Some(vec!["a.rs"])).args("wip"),
-            ["stash", "push", "-m", "wip", "--", "a.rs"]
+            ["stash", "push", "-m", "wip", "--", ":(top,literal)a.rs"]
         );
         assert_eq!(push(Mode::Staged, true, None).args(""), ["stash", "push", "--staged"]);
         assert_eq!(push(Mode::Unstaged, true, None).args(""), ["stash", "push", "--keep-index", "--include-untracked"]);

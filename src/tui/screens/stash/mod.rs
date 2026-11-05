@@ -56,6 +56,25 @@ enum Pane {
     Stashes,
 }
 
+/// What the screen does outside its own state; [`Screen::apply`] does it.
+enum Effect {
+    /// `git stash apply`, or `pop`.
+    Apply {
+        stash: Stash,
+        pop: bool,
+    },
+    Drop(Vec<Stash>),
+    Branch {
+        stash: Stash,
+        name: String,
+    },
+    Push {
+        picked: Picked,
+        message: String,
+    },
+    Copy(String),
+}
+
 /// What an open text field is for.
 enum Ask {
     /// `git stash branch <name> <stash>`.
@@ -76,15 +95,17 @@ struct App<'r> {
     query: String,
     searching: bool,
     focus: Pane,
-    /// Details by (stash, panel width).
+    /// Details by (stash, panel width), filled in `tick`.
     cache: HashMap<(ObjectId, u16), Rc<Vec<Line<'static>>>>,
+    /// The details panel's width at the last draw.
+    detail_width: u16,
     detail_scroll: Scroll,
     detail_for: Option<ObjectId>,
     detail_area: Rect,
     list_area: Rect,
     toast: Option<Toast>,
     palette: Option<Palette<Cmd>>,
-    confirm: Option<(Confirm, Vec<Stash>)>,
+    confirm: Option<(Confirm, Effect)>,
     input: Option<(Input, Ask)>,
     /// The working tree, and what to stash from it.
     changes: Picker,
@@ -107,6 +128,7 @@ pub fn run(repo: &gix::Repository) -> Result<()> {
         searching: false,
         focus: Pane::Stashes,
         cache: HashMap::new(),
+        detail_width: 0,
         detail_scroll: Scroll::default(),
         detail_for: None,
         detail_area: Rect::default(),
@@ -115,7 +137,8 @@ pub fn run(repo: &gix::Repository) -> Result<()> {
         palette: None,
         confirm: None,
         input: None,
-        changes: Picker::new(&crate::git::status::read(repo, true)?),
+        // Filled by `reload`.
+        changes: Picker::new(&Default::default()),
         changes_area: Rect::default(),
         repo_name: crate::git::repo_name(repo),
         branch: None,
@@ -132,16 +155,47 @@ pub fn run(repo: &gix::Repository) -> Result<()> {
 
 impl Screen for App<'_> {
     type Out = ();
-    type Effect = std::convert::Infallible;
+    type Effect = Effect;
 
     fn draw(&mut self, f: &mut Frame) {
         draw(f, self)
     }
-    fn apply(&mut self, e: Self::Effect) -> Result<Flow<Self::Out, Self::Effect>> {
-        match e {}
+    fn apply(&mut self, e: Effect) -> Result<Flow<(), Effect>> {
+        match e {
+            Effect::Apply { stash, pop } => self.apply_stash(&stash, pop)?,
+            Effect::Drop(list) => self.drop_stashes(list)?,
+            Effect::Branch { stash, name } => {
+                let done = format!("On new branch {name}, with {} applied", stash.name());
+                self.toast = Some(Toast::ran(&stash::branch(&stash, &name), done));
+                self.reload(None)?;
+            }
+            Effect::Push { picked, message } => {
+                let ran = picked.push.run(&message);
+                if ran.is_ok() {
+                    self.changes.reset_ticks();
+                }
+                self.toast = Some(Toast::ran(&ran, format!("Stashed {} as stash@{{0}}", picked.describe())));
+                self.reload(Some(0))?;
+                if self.changes.is_empty() {
+                    self.focus = Pane::Stashes;
+                }
+            }
+            Effect::Copy(id) => {
+                crate::clipboard::copy(&id);
+                self.toast = Some(Toast::new(format!("Copied {}", &id[..7.min(id.len())]), theme::ACCENT));
+            }
+        }
+        Ok(Flow::Stay)
     }
-    fn key(&mut self, k: KeyEvent) -> Result<Flow<(), Self::Effect>> {
-        Ok(if self.on_key(k)? { Flow::Done(()) } else { Flow::Stay })
+    fn tick(&mut self) -> Result<()> {
+        // Zero until the first draw has measured the panel.
+        if self.detail_width > 0 {
+            self.load_detail(self.detail_width);
+        }
+        Ok(())
+    }
+    fn key(&mut self, k: KeyEvent) -> Result<Flow<(), Effect>> {
+        Ok(self.on_key(k))
     }
     fn mouse(&mut self, m: MouseEvent) {
         self.on_mouse(m)
@@ -233,10 +287,9 @@ impl App<'_> {
         self.selected = (self.selected as isize + n).clamp(0, last) as usize;
     }
 
-    /// `git stash apply` or `git stash pop` on the current stash.
-    fn apply(&mut self, pop: bool) -> Result<()> {
-        let Some(s) = self.current().cloned() else { return Ok(()) };
-        self.toast = Some(match stash::apply(&s, pop) {
+    /// `git stash apply` or `git stash pop`.
+    fn apply_stash(&mut self, s: &Stash, pop: bool) -> Result<()> {
+        self.toast = Some(match stash::apply(s, pop) {
             Ok(_) => {
                 let done = if pop { "Popped" } else { "Applied" };
                 Toast::new(format!("{done} {}: {}", s.name(), s.title()), theme::GREEN)
@@ -281,7 +334,8 @@ impl App<'_> {
             body += "`git stash store <id>` brings one back (until git cleans up).";
             (format!("Drop {} stashes?", list.len()), body)
         };
-        self.confirm = Some((Confirm { title, body, yes: "Drop".into(), no: "Cancel".into(), danger: true }, list));
+        let confirm = Confirm { title, body, yes: "Drop".into(), no: "Cancel".into(), danger: true };
+        self.confirm = Some((confirm, Effect::Drop(list)));
     }
 
     /// Drops newest index last, so the indexes of the others don't shift under us.
@@ -297,28 +351,12 @@ impl App<'_> {
         self.reload(None)
     }
 
-    fn answer(&mut self, ask: Ask, text: String) -> Result<()> {
+    /// What the text field gave, for what it was opened for.
+    fn answer(&mut self, ask: Ask, text: String) -> Flow<(), Effect> {
         match ask {
-            Ask::Branch(s) => {
-                if text.is_empty() {
-                    return Ok(());
-                }
-                let done = format!("On new branch {text}, with {} applied", s.name());
-                self.toast = Some(Toast::ran(&stash::branch(&s, &text), done));
-                self.reload(None)
-            }
-            Ask::New(picked) => {
-                let ran = picked.push.run(&text);
-                if ran.is_ok() {
-                    self.changes.reset_ticks();
-                }
-                self.toast = Some(Toast::ran(&ran, format!("Stashed {} as stash@{{0}}", picked.describe())));
-                self.reload(Some(0))?;
-                if self.changes.is_empty() {
-                    self.focus = Pane::Stashes;
-                }
-                Ok(())
-            }
+            Ask::Branch(_) if text.is_empty() => Flow::Stay,
+            Ask::Branch(stash) => Flow::Run(Effect::Branch { stash, name: text }),
+            Ask::New(picked) => Flow::Run(Effect::Push { picked, message: text }),
         }
     }
 
@@ -350,15 +388,17 @@ impl App<'_> {
         }
     }
 
-    fn detail_lines(&mut self, width: u16) -> Option<Rc<Vec<Line<'static>>>> {
-        let s = self.current()?.clone();
-        let key = (s.oid, width);
-        if let Some(d) = self.cache.get(&key) {
-            return Some(d.clone());
+    /// Reads the current stash's details into the cache, unless they're there.
+    fn load_detail(&mut self, width: u16) {
+        let Some(s) = self.current().cloned() else { return };
+        if !self.cache.contains_key(&(s.oid, width)) {
+            let lines = build_detail(self.repo, &s, self.branch.as_deref(), width as usize);
+            self.cache.insert((s.oid, width), Rc::new(lines));
         }
-        let lines = Rc::new(build_detail(self.repo, &s, self.branch.as_deref(), width as usize));
-        self.cache.insert(key, lines.clone());
-        Some(lines)
+    }
+
+    fn detail(&self, width: u16) -> Option<Rc<Vec<Line<'static>>>> {
+        self.cache.get(&(self.current()?.oid, width)).cloned()
     }
 }
 

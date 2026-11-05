@@ -3,33 +3,32 @@
 use super::*;
 
 impl App<'_> {
-    /// Returns true to quit.
-    pub(super) fn on_key(&mut self, k: KeyEvent) -> Result<bool> {
+    pub(super) fn on_key(&mut self, k: KeyEvent) -> Flow<(), Effect> {
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         if let Some((input, _)) = &mut self.input {
             match input.key(k) {
                 Some(InputEvent::Cancel) => self.input = None,
                 Some(InputEvent::Done(text)) => {
                     let (_, ask) = self.input.take().unwrap();
-                    self.answer(ask, text)?;
+                    return self.answer(ask, text);
                 }
                 None => {}
             }
-            return Ok(false);
+            return Flow::Stay;
         }
         if ctrl && k.code == KeyCode::Char('c') {
-            return Ok(true);
+            return Flow::Done(());
         }
         if self.confirm.is_some() {
             match k.code {
                 KeyCode::Enter | KeyCode::Char('y') => {
-                    let (_, list) = self.confirm.take().unwrap();
-                    self.drop_stashes(list)?;
+                    let (_, effect) = self.confirm.take().unwrap();
+                    return Flow::Run(effect);
                 }
                 KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('q') => self.confirm = None,
                 _ => {}
             }
-            return Ok(false);
+            return Flow::Stay;
         }
         if let Some(p) = &mut self.palette {
             match p.key(k) {
@@ -40,7 +39,7 @@ impl App<'_> {
                 }
                 None => {}
             }
-            return Ok(false);
+            return Flow::Stay;
         }
         if self.searching {
             match k.code {
@@ -63,18 +62,18 @@ impl App<'_> {
                 }
                 _ => {}
             }
-            return Ok(false);
+            return Flow::Stay;
         }
 
         // Keys for both panes.
         match k.code {
             KeyCode::Char('p') if ctrl => {
                 self.palette = Some(Palette::new(commands()));
-                return Ok(false);
+                return Flow::Stay;
             }
             KeyCode::Char(':') => {
                 self.palette = Some(Palette::new(commands()));
-                return Ok(false);
+                return Flow::Stay;
             }
             KeyCode::Tab | KeyCode::BackTab => return self.run(Cmd::Focus),
             _ => {}
@@ -82,43 +81,43 @@ impl App<'_> {
 
         if self.focus == Pane::Changes {
             if matches!(k.code, KeyCode::Esc | KeyCode::Char('q')) {
-                return Ok(true);
+                return Flow::Done(());
             }
             if let Some(picked) = self.changes.key(k) {
                 let input =
                     Input::new("Stash", &picked.describe(), "", "Stash").spaces().placeholder("message (optional)");
                 self.input = Some((input, Ask::New(picked)));
             }
-            return Ok(false);
+            return Flow::Stay;
         }
 
         if self.detail_scroll.key(k, self.detail_area.height) {
-            return Ok(false);
+            return Flow::Stay;
         }
         let cmd = match k.code {
             KeyCode::Down | KeyCode::Char('j') => {
                 self.step(1);
-                return Ok(false);
+                return Flow::Stay;
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 self.step(-1);
-                return Ok(false);
+                return Flow::Stay;
             }
             KeyCode::PageDown => {
                 self.step(15);
-                return Ok(false);
+                return Flow::Stay;
             }
             KeyCode::PageUp => {
                 self.step(-15);
-                return Ok(false);
+                return Flow::Stay;
             }
             KeyCode::Home | KeyCode::Char('g') => {
                 self.selected = 0;
-                return Ok(false);
+                return Flow::Stay;
             }
             KeyCode::End | KeyCode::Char('G') => {
                 self.selected = self.visible.len().saturating_sub(1);
-                return Ok(false);
+                return Flow::Stay;
             }
             KeyCode::Enter | KeyCode::Char('a') => Cmd::Apply,
             KeyCode::Char('p') => Cmd::Pop,
@@ -132,17 +131,17 @@ impl App<'_> {
             KeyCode::Esc if !self.query.is_empty() => {
                 self.query.clear();
                 self.filter();
-                return Ok(false);
+                return Flow::Stay;
             }
             KeyCode::Esc | KeyCode::Char('q') => Cmd::Quit,
-            _ => return Ok(false),
+            _ => return Flow::Stay,
         };
         self.run(cmd)
     }
 
-    fn run(&mut self, cmd: Cmd) -> Result<bool> {
+    fn run(&mut self, cmd: Cmd) -> Flow<(), Effect> {
         match cmd {
-            Cmd::Quit => return Ok(true),
+            Cmd::Quit => return Flow::Done(()),
             Cmd::Search => {
                 self.focus = Pane::Stashes;
                 self.searching = true;
@@ -165,13 +164,14 @@ impl App<'_> {
             }
             Cmd::Copy => {
                 if let Some(s) = self.current() {
-                    let id = s.oid.to_string();
-                    crate::clipboard::copy(&id);
-                    self.toast = Some(Toast::new(format!("Copied {}", &id[..7.min(id.len())]), theme::ACCENT));
+                    return Flow::Run(Effect::Copy(s.oid.to_string()));
                 }
             }
-            Cmd::Apply => self.apply(false)?,
-            Cmd::Pop => self.apply(true)?,
+            Cmd::Apply | Cmd::Pop => {
+                if let Some(stash) = self.current().cloned() {
+                    return Flow::Run(Effect::Apply { stash, pop: matches!(cmd, Cmd::Pop) });
+                }
+            }
             Cmd::Drop => self.ask_drop(),
             Cmd::Branch => {
                 if let Some(s) = self.current().cloned() {
@@ -194,6 +194,6 @@ impl App<'_> {
                 self.changes.toggle_all();
             }
         }
-        Ok(false)
+        Flow::Stay
     }
 }

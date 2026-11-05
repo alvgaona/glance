@@ -1,4 +1,4 @@
-//! `gg log -i` (and the commit picker of `gg rebase -p`): commit list, details and diff, full screen.
+//! `gg log` (and the commit picker of `gg rebase -p`): commit list, details and diff, full screen.
 
 use std::collections::HashMap;
 use std::rc::Rc;

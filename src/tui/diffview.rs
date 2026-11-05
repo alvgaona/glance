@@ -1,4 +1,4 @@
-//! File lists and coloured diffs for details panels (`gg log -i`, `gg stash`).
+//! File lists and coloured diffs for details panels (`gg log`, `gg stash`).
 
 use ratatui::{
     style::{Color, Style},

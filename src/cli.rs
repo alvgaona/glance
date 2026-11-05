@@ -24,14 +24,15 @@ pub enum Command {
     #[command(visible_alias = "st")]
     Status,
 
-    /// Compact commit history.
+    /// Commit history: full screen in a terminal, a compact list when piped.
     #[command(visible_alias = "l")]
     Log {
-        /// Number of commits to show [default: 20, or 5000 with -i].
+        /// Number of commits to load [default: 5000, or 20 when piped].
         #[arg(short = 'n', long)]
         count: Option<usize>,
 
-        /// Pick a commit in fzf with a diff preview; Enter copies its id.
+        /// Full screen even when piped: `$(gg log -i)` gives the picked commit id.
+        /// Without the TUI build, picks in fzf.
         #[arg(short, long)]
         interactive: bool,
 
@@ -47,17 +48,6 @@ pub enum Command {
     /// Stashes: browse, apply, pop, drop, or turn one into a branch.
     #[command(visible_alias = "sh")]
     Stash,
-
-    /// One commit with a per-file summary.
-    Show {
-        /// Revision to show.
-        #[arg(default_value = "HEAD")]
-        rev: String,
-
-        /// Also print the full diff (through delta when installed).
-        #[arg(short, long)]
-        patch: bool,
-    },
 
     /// Every repo in a folder, at a glance.
     Repos {

@@ -319,7 +319,7 @@ impl App<'_> {
 
         let half = self.detail_area.height / 2;
         let cmd = match k.code {
-            // Details scrolling, as in `gg log -i`.
+            // Details scrolling, as in `gg log`.
             KeyCode::Char('d') if ctrl => {
                 self.detail_scroll = self.detail_scroll.saturating_add(half);
                 return Ok(false);

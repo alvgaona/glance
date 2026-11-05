@@ -549,7 +549,7 @@ impl App<'_> {
                 self.palette = Some(Palette::new(commands()));
                 return Ok(None);
             }
-            // Details scrolling, as in `gg log -i`.
+            // Details scrolling, as in `gg log`.
             KeyCode::Char('d') if ctrl => {
                 self.detail_scroll = self.detail_scroll.saturating_add(self.detail_area.height / 2);
                 return Ok(None);

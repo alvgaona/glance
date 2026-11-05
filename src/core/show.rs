@@ -8,14 +8,12 @@ use super::status::ChangeKind;
 
 #[derive(Debug)]
 pub struct Shown {
-    pub oid: gix::ObjectId,
     pub id: String,
     pub refs: Vec<RefLabel>,
     pub author: String,
     pub email: String,
-    /// Seconds since the Unix epoch, and the author's UTC offset in seconds.
+    /// Seconds since the Unix epoch.
     pub time: i64,
-    pub offset: i32,
     pub subject: String,
     pub body: String,
     pub parents: Vec<String>,
@@ -54,15 +52,12 @@ pub fn read(repo: &gix::Repository, rev: &str) -> Result<Shown> {
     };
     let files = tree_changes(repo, &old_tree, &new_tree)?;
 
-    let time = commit.time()?;
     Ok(Shown {
-        oid: commit.id,
         id: commit.id().shorten_or_id().to_string(),
         refs: ref_labels(repo)?.remove(&commit.id).unwrap_or_default(),
         author: author.name.to_str_lossy().into_owned(),
         email: author.email.to_str_lossy().into_owned(),
-        time: time.seconds,
-        offset: time.offset,
+        time: commit.time()?.seconds,
         subject: message.summary().to_str_lossy().into_owned(),
         body: message.body().map(|b| b.to_str_lossy().trim().to_string()).unwrap_or_default(),
         parents: parents.iter().map(|p| p.to_hex_with_len(id.shorten_or_id().hex_len()).to_string()).collect(),

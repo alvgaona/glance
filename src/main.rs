@@ -3,7 +3,6 @@ mod core;
 // With the TUI, fzf only provides the clipboard helper; its picker is the no-TUI fallback.
 #[cfg_attr(feature = "tui", allow(dead_code))]
 mod fzf;
-mod patch;
 mod rebase;
 mod render;
 #[cfg(feature = "tui")]
@@ -26,8 +25,12 @@ fn main() -> Result<()> {
         }
         Command::Log { count, interactive, all } => {
             let repo = core::open()?;
-            let count = count.unwrap_or(if interactive { 5000 } else { 20 });
-            if interactive {
+            // Full screen in a terminal; the plain list when piped (or built without the TUI).
+            // `-i` forces it, so `$(gg log -i)` can pick a commit id.
+            let full_screen =
+                interactive || (cfg!(feature = "tui") && std::io::IsTerminal::is_terminal(&std::io::stdout()));
+            let count = count.unwrap_or(if full_screen { 5000 } else { 20 });
+            if full_screen {
                 return log_interactive(&repo, count, all);
             }
             let commits = core::log::read(&repo, count, all)?;
@@ -49,15 +52,6 @@ fn main() -> Result<()> {
                 return tui::stash::run(&repo);
             }
             render::stash::print(&core::stash::list(&repo)?, &paint);
-        }
-        Command::Show { rev, patch } => {
-            let repo = core::open()?;
-            let shown = core::show::read(&repo, &rev)?;
-            render::show::print(&shown, &paint);
-            if patch {
-                println!();
-                patch::print(&shown.oid.to_string(), paint.on)?;
-            }
         }
         Command::Repos { dir } => {
             render::repos::print(&core::repos::read(&dir)?, &paint);

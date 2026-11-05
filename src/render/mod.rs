@@ -3,7 +3,6 @@
 pub mod branches;
 pub mod log;
 pub mod repos;
-pub mod show;
 pub mod stash;
 pub mod status;
 

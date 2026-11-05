@@ -490,9 +490,8 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     let now = crate::core::now();
     for (n, item) in app.visible.iter().enumerate().skip(app.scroll).take(height) {
         let r = Rect { y: inner.y + (n - app.scroll) as u16, height: 1, ..inner };
-        // A label belongs to the commit below it, so it lights up with it.
-        let selected = n == app.selected || (matches!(item, Item::Label(_)) && n + 1 == app.selected);
-        let bg = if selected { theme::ELEMENT } else { theme::PANEL };
+        // Only the commit row is highlighted, never its label.
+        let bg = if n == app.selected { theme::ELEMENT } else { theme::PANEL };
 
         match *item {
             Item::Label(index) => {

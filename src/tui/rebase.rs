@@ -12,8 +12,8 @@ use ratatui::{
     widgets::{Block, Padding, Paragraph, Wrap},
 };
 
-use super::widgets::{self, Command, Confirm, Palette, PaletteEvent, Toast};
 use super::app::{self, Flow, Screen};
+use super::kit::{self, Command, Confirm, Palette, PaletteEvent, Toast, footer};
 use super::theme;
 use crate::fmt::{now, relative_time};
 use crate::git::commit::{self, Details};
@@ -376,7 +376,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     let [l, _, r] =
         Layout::horizontal([Constraint::Min(1), Constraint::Length(3), Constraint::Length(right.width() as u16)])
             .areas(area);
-    f.render_widget(Paragraph::new(widgets::truncate(left, l.width)), l);
+    f.render_widget(Paragraph::new(kit::truncate(left, l.width)), l);
     f.render_widget(Paragraph::new(right), r);
 }
 
@@ -425,7 +425,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 }
                 let left = vec![
                     bar,
-                    widgets::pill(&format!("{:<6}", action.word()), pbg, pfg),
+                    kit::pill(&format!("{:<6}", action.word()), pbg, pfg),
                     Span::raw("  "),
                     Span::styled(hash.clone(), theme::faint()),
                     Span::raw("  "),
@@ -447,7 +447,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
             Todo::Other(raw) => (
                 vec![
                     bar,
-                    widgets::pill("  ··  ", theme::ELEMENT, theme::MUTED),
+                    kit::pill("  ··  ", theme::ELEMENT, theme::MUTED),
                     Span::raw("  "),
                     Span::styled(raw.clone(), theme::muted()),
                 ],
@@ -457,13 +457,13 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
 
         let right = Line::from(right);
         let [l, rr] = Layout::horizontal([Constraint::Min(1), Constraint::Length(right.width() as u16)]).areas(r);
-        f.render_widget(Paragraph::new(widgets::truncate(Line::from(left), l.width)).style(Style::new().bg(bg)), l);
+        f.render_widget(Paragraph::new(kit::truncate(Line::from(left), l.width)).style(Style::new().bg(bg)), l);
         f.render_widget(Paragraph::new(right).style(Style::new().bg(bg)), rr);
     }
 }
 
 fn draw_details(f: &mut Frame, app: &App, area: Rect) {
-    let block = widgets::panel(theme::PANEL);
+    let block = kit::panel(theme::PANEL);
     let text: Vec<Line> = match app.lines.get(app.selected) {
         Some(Todo::Commit { hash, action, .. }) => match app.info.get(hash).and_then(|i| i.as_ref()) {
             Some(s) => details(s, *action, app.newest_first),
@@ -559,10 +559,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             left.push(Span::styled(format!("{n} {}", a.word()), theme::muted()));
         }
     }
-    let right = widgets::hints(&[("ctrl+p", "commands"), ("w", "apply"), ("esc", "abort")]);
-    let [l, r] = Layout::horizontal([Constraint::Min(1), Constraint::Length(right.width() as u16)]).areas(area);
-    f.render_widget(Paragraph::new(Line::from(left)), l);
-    f.render_widget(Paragraph::new(right), r);
+    footer::draw(f, area, Line::from(left), vec![("ctrl+p", "commands"), ("w", "apply"), ("esc", "abort")]);
 }
 
 fn totals(s: &Details) -> (u32, u32) {

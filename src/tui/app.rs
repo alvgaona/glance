@@ -7,8 +7,8 @@ use anyhow::Result;
 use crossterm::event::{self, Event, KeyEvent, KeyEventKind, MouseEvent};
 use ratatui::Frame;
 
+use super::kit::Toast;
 use super::term::{enter, leave};
-use super::widgets::Toast;
 
 /// What a screen wants after a key.
 pub(crate) enum Flow<T> {

@@ -18,8 +18,8 @@ use ratatui::{
     widgets::{Block, Padding, Paragraph},
 };
 
-use super::widgets::{self, Command, Confirm, Input, InputEvent, Palette, PaletteEvent, Toast};
 use super::app::{self, Flow, Screen};
+use super::kit::{self, Command, Confirm, Input, InputEvent, Palette, PaletteEvent, Toast, footer};
 use super::{diffview, first_lines, theme};
 use crate::fmt::paths::tilde;
 use crate::fmt::{now, relative_time};
@@ -599,7 +599,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     if gone > 0 {
         spans.push(Span::styled(format!(" · {gone} prunable"), Style::new().fg(theme::YELLOW)));
     }
-    f.render_widget(Paragraph::new(widgets::truncate(Line::from(spans), area.width)), area);
+    f.render_widget(Paragraph::new(kit::truncate(Line::from(spans), area.width)), area);
 }
 
 /// `3 changed` / `clean` / `…`, and its colour.
@@ -685,13 +685,13 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
 
         let [l, rr] =
             Layout::horizontal([Constraint::Min(1), Constraint::Length(right.width() as u16 + 2)]).areas(area);
-        f.render_widget(Paragraph::new(widgets::truncate(Line::from(left), l.width)).style(Style::new().bg(bg)), l);
+        f.render_widget(Paragraph::new(kit::truncate(Line::from(left), l.width)).style(Style::new().bg(bg)), l);
         f.render_widget(Paragraph::new(right).alignment(Alignment::Right).style(Style::new().bg(bg)), rr);
     }
 }
 
 fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
-    let block = widgets::panel(theme::PANEL);
+    let block = kit::panel(theme::PANEL);
     let inner = block.inner(area);
     f.render_widget(block, area);
     app.detail_area = area;
@@ -704,7 +704,7 @@ fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
         .into_iter()
         .skip(app.detail_scroll as usize)
         .take(inner.height as usize)
-        .map(|l| widgets::truncate(l, inner.width))
+        .map(|l| kit::truncate(l, inner.width))
         .collect();
     f.render_widget(Paragraph::new(shown), inner);
 
@@ -742,10 +742,7 @@ fn build_detail(r: &Row, width: usize) -> Vec<Line<'static>> {
     if !r.short.is_empty() {
         let mut commit = vec![label("commit"), Span::styled(format!("{}  ", r.short), theme::muted())];
         commit.extend(
-            widgets::wrap(&r.subject, width.saturating_sub(20))
-                .into_iter()
-                .take(1)
-                .map(|s| Span::styled(s, theme::text())),
+            kit::wrap(&r.subject, width.saturating_sub(20)).into_iter().take(1).map(|s| Span::styled(s, theme::text())),
         );
         out.push(Line::from(commit));
         out.push(Line::from(vec![label(""), Span::styled(relative_time(r.time, now), theme::faint())]));
@@ -844,7 +841,7 @@ fn names(out: &mut Vec<Line<'static>>, title: &str, list: &[String], color: rata
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let go = if app.captured { "go there" } else { "copy path" };
-    let mut pairs: Vec<(&str, &str)> = vec![
+    let pairs = vec![
         ("enter", go),
         ("n", "new"),
         ("d", "remove"),
@@ -853,11 +850,5 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         ("l", "lock"),
         ("q", "quit"),
     ];
-    let room = area.width as usize;
-    while pairs.len() > 2 && widgets::hints(&pairs).width() > room {
-        pairs.remove(pairs.len() - 2);
-    }
-    let right = widgets::hints(&pairs);
-    let [_, r] = Layout::horizontal([Constraint::Min(1), Constraint::Length(right.width() as u16)]).areas(area);
-    f.render_widget(Paragraph::new(right), r);
+    footer::draw(f, area, Line::default(), pairs);
 }

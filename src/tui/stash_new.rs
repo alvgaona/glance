@@ -11,7 +11,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use super::{theme, widgets};
+use super::{kit, theme};
 use crate::fmt::change_letter;
 use crate::git::diff::Size;
 pub use crate::git::stash::Mode;
@@ -305,7 +305,7 @@ impl Picker {
         let blocked = self.blocked();
         let red = blocked.is_some();
         let text = blocked.unwrap_or_else(|| self.explain(&self.picked()));
-        (text.lines().flat_map(|l| widgets::wrap(l, width as usize)).collect(), red)
+        (text.lines().flat_map(|l| kit::wrap(l, width as usize)).collect(), red)
     }
 
     fn others_rows(&self) -> usize {
@@ -325,7 +325,7 @@ impl Picker {
 
     /// The pane: title, mode tabs, the files, and a note on what enter does.
     pub fn draw(&mut self, f: &mut Frame, area: Rect, focused: bool) {
-        let block = widgets::panel(theme::PANEL);
+        let block = kit::panel(theme::PANEL);
         let inner = block.inner(area);
         f.render_widget(block, area);
 
@@ -406,7 +406,7 @@ impl Picker {
         lines.push(Line::raw(""));
         let note_style = if red { Style::new().fg(theme::RED) } else { theme::muted() };
         lines.extend(note.into_iter().map(|l| Line::styled(l, note_style)));
-        let lines: Vec<Line> = lines.into_iter().map(|l| widgets::truncate(l, inner.width)).collect();
+        let lines: Vec<Line> = lines.into_iter().map(|l| kit::truncate(l, inner.width)).collect();
         f.render_widget(Paragraph::new(lines), inner);
     }
 

@@ -3,13 +3,13 @@
 mod app;
 pub mod branches;
 mod diffview;
+mod kit;
 pub mod log;
 pub mod rebase;
 pub mod stash;
 mod stash_new;
 mod term;
 pub mod theme;
-pub mod widgets;
 pub mod worktree;
 
 /// First two non-empty lines of git's output, for a toast.

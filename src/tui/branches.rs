@@ -16,8 +16,8 @@ use ratatui::{
     widgets::{Block, Padding, Paragraph, Wrap},
 };
 
-use super::widgets::{self, Command, Confirm, Input, InputEvent, Palette, PaletteEvent, Toast};
 use super::app::{self, Flow, Screen};
+use super::kit::{self, Command, Confirm, Input, InputEvent, Palette, PaletteEvent, Toast, footer};
 use super::{first_lines, theme};
 use crate::fmt::paths::short as short_path;
 use crate::fmt::{now, relative_time};
@@ -83,9 +83,9 @@ impl RemotePick {
     fn draw(&self, f: &mut Frame, area: Rect) {
         let shown = self.items.len().min(12);
         let start = self.cursor.saturating_sub(shown - 1);
-        let r = widgets::centered(area, 68, shown as u16 + 9);
+        let r = kit::centered(area, 68, shown as u16 + 9);
         f.render_widget(ratatui::widgets::Clear, r);
-        let block = widgets::panel(theme::ELEMENT);
+        let block = kit::panel(theme::ELEMENT);
         let inner = block.inner(r);
         f.render_widget(block, r);
 
@@ -111,7 +111,7 @@ impl RemotePick {
             ]);
             let w = line.width();
             line.spans.push(Span::styled(" ".repeat((inner.width as usize).saturating_sub(w)), Style::new().bg(bg)));
-            lines.push(widgets::truncate(line, inner.width));
+            lines.push(kit::truncate(line, inner.width));
         }
         let n = self.items.iter().filter(|i| i.on).count();
         lines.push(Line::raw(""));
@@ -121,11 +121,11 @@ impl RemotePick {
         ));
         lines.push(Line::raw(""));
         lines.push(Line::from(vec![
-            widgets::pill(&format!("enter  Delete {n}"), if n > 0 { theme::RED } else { theme::BORDER }, theme::BG),
+            kit::pill(&format!("enter  Delete {n}"), if n > 0 { theme::RED } else { theme::BORDER }, theme::BG),
             Span::raw("  "),
-            widgets::pill("space  toggle", theme::BORDER, theme::TEXT),
+            kit::pill("space  toggle", theme::BORDER, theme::TEXT),
             Span::raw("  "),
-            widgets::pill("esc  Cancel", theme::BORDER, theme::TEXT),
+            kit::pill("esc  Cancel", theme::BORDER, theme::TEXT),
         ]));
         f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
     }
@@ -945,7 +945,7 @@ fn sync_note((ahead, behind): (usize, usize)) -> String {
 // ---------------------------------------------------------------- drawing
 
 fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
-    let block = widgets::panel(theme::PANEL);
+    let block = kit::panel(theme::PANEL);
     let inner = block.inner(area);
     f.render_widget(block, area);
     app.detail_area = area;
@@ -964,7 +964,7 @@ fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
         .iter()
         .skip(app.detail_scroll as usize)
         .take(inner.height as usize)
-        .map(|l| widgets::truncate(l.clone(), inner.width))
+        .map(|l| kit::truncate(l.clone(), inner.width))
         .collect();
     f.render_widget(Paragraph::new(shown), inner);
 
@@ -1059,7 +1059,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         Prs::Failed => spans.push(Span::styled("  · no pull requests (R retries)", theme::faint())),
         Prs::Ready(_) | Prs::Off => {}
     }
-    f.render_widget(Paragraph::new(widgets::truncate(Line::from(spans), area.width)), area);
+    f.render_widget(Paragraph::new(kit::truncate(Line::from(spans), area.width)), area);
 }
 
 fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
@@ -1158,7 +1158,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
         let right = Line::from(right);
 
         let [l, rr] = Layout::horizontal([Constraint::Min(1), Constraint::Length(right.width() as u16)]).areas(r);
-        f.render_widget(Paragraph::new(widgets::truncate(left, l.width)).style(Style::new().bg(bg)), l);
+        f.render_widget(Paragraph::new(kit::truncate(left, l.width)).style(Style::new().bg(bg)), l);
         f.render_widget(Paragraph::new(right).style(Style::new().bg(bg)), rr);
     }
 }
@@ -1229,7 +1229,7 @@ fn pr_lines(pr: &Pr, b: &Branch, label: &dyn Fn(&str) -> Span<'static>, width: u
     }
     let mut out = vec![Line::from(first)];
     // Title wrapped under the label column (10 wide).
-    for part in widgets::wrap(&pr.title, width.saturating_sub(10)) {
+    for part in kit::wrap(&pr.title, width.saturating_sub(10)) {
         out.push(Line::from(vec![label(""), Span::styled(part, theme::text())]));
     }
     // Local work the PR doesn't have (pushed later, or never pushed).
@@ -1286,7 +1286,7 @@ fn build_detail(
             Span::styled(relative_time(b.time, now), theme::muted()),
         ]),
     ];
-    for part in widgets::wrap(&b.summary, width) {
+    for part in kit::wrap(&b.summary, width) {
         out.push(Line::styled(part, theme::text()));
     }
     out.push(Line::raw(""));
@@ -1415,13 +1415,7 @@ fn build_detail(
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let left = if app.searching || !app.query.is_empty() {
-        let mut spans =
-            vec![Span::styled("/ ", Style::new().fg(theme::ACCENT)), Span::styled(app.query.clone(), theme::text())];
-        if app.searching {
-            spans.push(Span::styled("▏", Style::new().fg(theme::ACCENT)));
-        }
-        spans.push(Span::styled(format!("   {} of {}", app.visible.len(), app.data.list.len()), theme::muted()));
-        Line::from(spans)
+        footer::search(&app.query, app.searching, app.visible.len(), app.data.list.len())
     } else if !app.marked.is_empty() {
         Line::styled(format!("✓ {} selected", app.marked.len()), Style::new().fg(theme::ACCENT))
     } else {
@@ -1430,9 +1424,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             theme::muted(),
         )
     };
-    // Most important first; the tail of the middle goes when the line is too narrow,
-    // keeping the last one ("q quit" / "esc clear").
-    let mut pairs: Vec<(&str, &str)> = if app.searching {
+    let pairs = if app.searching {
         vec![("enter", "keep filter"), ("esc", "clear")]
     } else if !app.marked.is_empty() {
         vec![("d", "delete"), ("D", "delete on remote"), ("space", "select"), ("esc", "clear")]
@@ -1446,12 +1438,5 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             ("q", "quit"),
         ]
     };
-    let room = (area.width as usize).saturating_sub(left.width() + 3);
-    while pairs.len() > 2 && widgets::hints(&pairs).width() > room {
-        pairs.remove(pairs.len() - 2);
-    }
-    let right = widgets::hints(&pairs);
-    let [l, r] = Layout::horizontal([Constraint::Min(1), Constraint::Length(right.width() as u16)]).areas(area);
-    f.render_widget(Paragraph::new(widgets::truncate(left, l.width)), l);
-    f.render_widget(Paragraph::new(right), r);
+    footer::draw(f, area, left, pairs);
 }

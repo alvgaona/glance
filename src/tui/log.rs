@@ -13,8 +13,8 @@ use ratatui::{
     widgets::{Block, Padding, Paragraph},
 };
 
-use super::widgets::{self, Command, Palette, PaletteEvent, Toast};
 use super::app::{self, Flow, Screen};
+use super::kit::{self, Command, Palette, PaletteEvent, Toast, footer};
 use super::{diffview, theme};
 use crate::fmt::{now, relative_time};
 use crate::git::commit::{self, Details};
@@ -504,7 +504,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                     spans.push(ref_pill(label));
                 }
                 f.render_widget(
-                    Paragraph::new(widgets::truncate(Line::from(spans), r.width)).style(Style::new().bg(bg)),
+                    Paragraph::new(kit::truncate(Line::from(spans), r.width)).style(Style::new().bg(bg)),
                     r,
                 );
             }
@@ -531,7 +531,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 ]);
                 let [l, rr] =
                     Layout::horizontal([Constraint::Min(1), Constraint::Length(right.width() as u16)]).areas(r);
-                f.render_widget(Paragraph::new(widgets::truncate(left, l.width)).style(Style::new().bg(bg)), l);
+                f.render_widget(Paragraph::new(kit::truncate(left, l.width)).style(Style::new().bg(bg)), l);
                 f.render_widget(Paragraph::new(right).style(Style::new().bg(bg)), rr);
             }
         }
@@ -552,7 +552,7 @@ fn label_order(refs: &[RefLabel]) -> Vec<&RefLabel> {
 
 fn ref_pill(r: &RefLabel) -> Span<'static> {
     match r {
-        RefLabel::Head(n) => widgets::pill(n, theme::ACCENT, theme::BG),
+        RefLabel::Head(n) => kit::pill(n, theme::ACCENT, theme::BG),
         RefLabel::Branch(n) => Span::styled(format!(" {n} "), Style::new().bg(theme::BORDER).fg(theme::GREEN)),
         RefLabel::Remote(n) => Span::styled(format!(" {n} "), Style::new().bg(theme::ELEMENT).fg(theme::MUTED)),
         RefLabel::Tag(n) => Span::styled(format!(" #{n} "), Style::new().bg(theme::ELEMENT).fg(theme::PURPLE)),
@@ -560,7 +560,7 @@ fn ref_pill(r: &RefLabel) -> Span<'static> {
 }
 
 fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
-    let block = widgets::panel(theme::PANEL);
+    let block = kit::panel(theme::PANEL);
     let inner_h = block.inner(area).height;
     let Some(d) = app.detail() else {
         f.render_widget(block, area);
@@ -609,25 +609,14 @@ fn detail_lines(repo: &gix::Repository, s: &Details) -> Vec<Line<'static>> {
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     let total = app.commits.len();
     let left = if app.searching || !app.query.is_empty() {
-        let found = app.commit_count();
-        let mut spans =
-            vec![Span::styled("/ ", Style::new().fg(theme::ACCENT)), Span::styled(app.query.clone(), theme::text())];
-        if app.searching {
-            spans.push(Span::styled("▏", Style::new().fg(theme::ACCENT)));
-        }
-        spans.push(Span::styled(format!("   {found} of {total}"), theme::muted()));
-        Line::from(spans)
+        footer::search(&app.query, app.searching, app.commit_count(), total)
     } else {
         Line::styled(format!("{total} commit{}", if total == 1 { "" } else { "s" }), theme::muted())
     };
-    let right = match (app.opts.mode, app.searching) {
-        (_, true) => widgets::hints(&[("enter", "keep filter"), ("esc", "clear")]),
-        (Mode::Browse, false) => {
-            widgets::hints(&[("/", "search"), ("enter", "copy"), ("ctrl+p", "commands"), ("esc", "quit")])
-        }
-        (Mode::Pick, false) => widgets::hints(&[("/", "search"), ("enter", "rebase from here"), ("esc", "cancel")]),
+    let pairs = match (app.opts.mode, app.searching) {
+        (_, true) => vec![("enter", "keep filter"), ("esc", "clear")],
+        (Mode::Browse, false) => vec![("/", "search"), ("enter", "copy"), ("ctrl+p", "commands"), ("esc", "quit")],
+        (Mode::Pick, false) => vec![("/", "search"), ("enter", "rebase from here"), ("esc", "cancel")],
     };
-    let [l, r] = Layout::horizontal([Constraint::Min(1), Constraint::Length(right.width() as u16)]).areas(area);
-    f.render_widget(Paragraph::new(left), l);
-    f.render_widget(Paragraph::new(right), r);
+    footer::draw(f, area, left, pairs);
 }

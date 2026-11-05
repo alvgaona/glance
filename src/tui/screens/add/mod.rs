@@ -3,9 +3,11 @@
 //! Writes go through `git::stage`.
 
 mod draw;
+mod hunks;
 mod keys;
 
 use draw::draw;
+use hunks::View;
 
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -28,6 +30,7 @@ use crate::tui::{first_lines, theme};
 #[derive(Clone)]
 enum Cmd {
     Toggle,
+    Hunks,
     StageAll,
     UnstageAll,
     Discard,
@@ -44,6 +47,16 @@ enum Ask {
     Delete(String),
     /// Stage a conflicted file that still has conflict markers.
     Resolve(String),
+    /// Throw away one unstaged hunk.
+    DiscardHunk { path: String, hunk: stage::Hunk },
+}
+
+/// Which pane the keys work on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Focus {
+    Files,
+    /// The diff, hunk by hunk.
+    Hunks,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -129,7 +142,10 @@ struct App {
     list_area: Rect,
     shown: Vec<Option<usize>>,
     /// The diff on the right, kept until the cursor moves or the files change.
-    diff: Option<(usize, Vec<Line<'static>>)>,
+    diff: Option<View>,
+    focus: Focus,
+    /// The hunk worked on while the diff has focus.
+    hunk: usize,
     detail_scroll: Scroll,
     detail_area: Rect,
     toast: Option<Toast>,
@@ -149,6 +165,8 @@ pub fn run(repo: gix::Repository) -> Result<()> {
         list_area: Rect::default(),
         shown: Vec::new(),
         diff: None,
+        focus: Focus::Files,
+        hunk: 0,
         detail_scroll: Scroll::default(),
         detail_area: Rect::default(),
         toast: None,
@@ -181,6 +199,7 @@ impl Screen for App {
 fn commands() -> Vec<Command<Cmd>> {
     vec![
         Command { label: "Stage or unstage file", keys: "space", action: Cmd::Toggle },
+        Command { label: "Stage hunk by hunk", keys: "enter", action: Cmd::Hunks },
         Command { label: "Stage everything", keys: "a", action: Cmd::StageAll },
         Command { label: "Unstage everything", keys: "u", action: Cmd::UnstageAll },
         Command { label: "Discard changes to file", keys: "d", action: Cmd::Discard },
@@ -204,14 +223,20 @@ impl App {
     /// so space, space, space walks down a list.
     fn reload_at(&mut self, group: Group, pos: usize) -> Result<()> {
         self.reload()?;
+        self.put_at(group, pos);
+        Ok(())
+    }
+
+    /// The cursor on the `pos`-th file of `group`, or as near as there is.
+    fn put_at(&mut self, group: Group, pos: usize) {
         let in_group: Vec<usize> = (0..self.entries.len()).filter(|&i| self.entries[i].group == group).collect();
         self.selected = match in_group.get(pos.min(in_group.len().saturating_sub(1))) {
             Some(&i) => i,
             // That group is empty now: the next group's first file, or the last file.
             None => self.entries.iter().position(|e| e.group > group).unwrap_or(self.entries.len().saturating_sub(1)),
         };
+        self.hunk = 0;
         self.detail_scroll.reset();
-        Ok(())
     }
 
     fn current(&self) -> Option<&Entry> {
@@ -230,6 +255,7 @@ impl App {
         let to = (self.selected as isize + n).clamp(0, last) as usize;
         if to != self.selected {
             self.selected = to;
+            self.hunk = 0;
             self.detail_scroll.reset();
         }
     }
@@ -351,19 +377,11 @@ impl App {
                 let r = stage::add(&self.repo, std::slice::from_ref(&p));
                 self.done(r, format!("Marked {p} resolved"))
             }
+            Ask::DiscardHunk { path, hunk } => {
+                let r = stage::apply_hunk(&self.repo, &path, &hunk, stage::HunkAction::Discard);
+                self.after_hunk(r, "Discarded the hunk".into())
+            }
         }
-    }
-
-    /// The diff lines for the file under the cursor, built once per selection.
-    fn diff_lines(&mut self) -> &[Line<'static>] {
-        if self.diff.as_ref().map(|(i, _)| *i) != Some(self.selected) {
-            let lines = match self.current() {
-                Some(e) => build_diff(&self.repo, e),
-                None => Vec::new(),
-            };
-            self.diff = Some((self.selected, lines));
-        }
-        &self.diff.as_ref().unwrap().1
     }
 
     fn on_mouse(&mut self, m: MouseEvent) {
@@ -381,7 +399,16 @@ impl App {
                     && let Some(Some(i)) = self.shown.get(row)
                 {
                     self.selected = *i;
+                    self.focus = Focus::Files;
                     self.detail_scroll.reset();
+                } else if in_details && self.view().has_hunks() {
+                    // A click in the diff works on the hunk under it.
+                    let line =
+                        self.detail_scroll.top() as usize + m.row.saturating_sub(self.detail_area.y + 1) as usize;
+                    if let Some(h) = self.view().hunk_at(line) {
+                        self.focus = Focus::Hunks;
+                        self.hunk = h;
+                    }
                 }
             }
             _ => {}
@@ -393,40 +420,4 @@ impl App {
 fn has_markers(repo: &gix::Repository, path: &str) -> bool {
     let Some(dir) = repo.workdir() else { return false };
     std::fs::read(dir.join(path)).map(|b| b.split(|&c| c == b'\n').any(|l| l.starts_with(b"<<<<<<< "))).unwrap_or(false)
-}
-
-/// Title row, then the diff of the entry's half of the change.
-fn build_diff(repo: &gix::Repository, e: &Entry) -> Vec<Line<'static>> {
-    let what = match e.group {
-        Group::Conflicts => "conflicted: the file as it is now",
-        Group::Staged => "staged",
-        Group::Changes => "not staged",
-        Group::Untracked => "new, not tracked yet",
-    };
-    let mut title =
-        vec![Span::styled(e.path.clone(), theme::bold()), Span::styled(format!("   {what}"), theme::faint())];
-    let c = changes::counts(e.size);
-    if !c.is_empty() {
-        title.push(Span::raw("   "));
-        title.extend(c);
-    }
-    let mut out = vec![Line::from(title)];
-    if let Some(from) = &e.from {
-        out.push(Line::styled(format!("renamed from {from}"), Style::new().fg(theme::BLUE)));
-    }
-    out.push(Line::raw(""));
-
-    if e.is_folder() {
-        out.push(Line::styled("A new folder: space stages everything in it.", theme::muted()));
-        return out;
-    }
-    match stage::patch(repo, &e.path, e.from.as_deref(), e.group.side()) {
-        Ok(Some(p)) if p.is_empty() => {
-            out.push(Line::styled("No line changes (only the file mode, or an empty file).", theme::muted()))
-        }
-        Ok(Some(p)) => out.extend(p.into_iter().map(diff::line)),
-        Ok(None) => out.push(Line::styled("Binary or very large file.", theme::muted())),
-        Err(err) => out.push(Line::styled(format!("Couldn't read it: {err}"), Style::new().fg(theme::RED))),
-    }
-    out
 }

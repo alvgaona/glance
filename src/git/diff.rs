@@ -81,23 +81,73 @@ pub enum PatchLine {
     },
 }
 
-/// Unified diff with `context` lines around each change. `None` for binary or huge files.
+/// Unified diff with `context` lines around each change, for drawing: text with tabs
+/// expanded and line endings taken off. `None` for binary or huge files.
 pub fn patch(old: &[u8], new: &[u8], context: u32) -> Option<Vec<PatchLine>> {
+    Some(hunks(old, new, context)?.iter().flat_map(Hunk::patch_lines).collect())
+}
+
+/// One hunk of a unified diff, byte for byte, so it can be applied again.
+#[derive(Debug, Clone)]
+pub struct Hunk {
+    /// First line on each side, counting from 1.
+    pub old_start: u32,
+    pub new_start: u32,
+    pub lines: Vec<HunkLine>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Op {
+    Context,
+    Removed,
+    Added,
+}
+
+#[derive(Debug, Clone)]
+pub struct HunkLine {
+    pub op: Op,
+    /// Line numbers on each side (the side a line isn't on keeps the last one seen).
+    pub old: u32,
+    pub new: u32,
+    /// The line as it is in the file, ending included (none on a last line without one).
+    pub bytes: Vec<u8>,
+}
+
+impl Hunk {
+    /// How many lines it covers on the old and on the new side.
+    pub fn lens(&self) -> (u32, u32) {
+        let old = self.lines.iter().filter(|l| l.op != Op::Added).count() as u32;
+        let new = self.lines.iter().filter(|l| l.op != Op::Removed).count() as u32;
+        (old, new)
+    }
+
+    /// For drawing: its `@@` line, then its lines as text (tabs expanded, no endings).
+    pub fn patch_lines(&self) -> Vec<PatchLine> {
+        let text = |b: &[u8]| String::from_utf8_lossy(b).trim_end_matches(['\n', '\r']).replace('\t', "    ");
+        let mut out = vec![PatchLine::Hunk { old_start: self.old_start, new_start: self.new_start }];
+        out.extend(self.lines.iter().map(|l| match l.op {
+            Op::Context => PatchLine::Context { old: l.old, new: l.new, text: text(&l.bytes) },
+            Op::Removed => PatchLine::Removed { old: l.old, text: text(&l.bytes) },
+            Op::Added => PatchLine::Added { new: l.new, text: text(&l.bytes) },
+        }));
+        out
+    }
+}
+
+/// The hunks between `old` and `new`, with `context` lines around each change; changes
+/// whose context would touch share a hunk. `None` for binary or huge files.
+pub fn hunks(old: &[u8], new: &[u8], context: u32) -> Option<Vec<Hunk>> {
     if old.len() > MAX_BYTES || new.len() > MAX_BYTES || old.contains(&0) || new.contains(&0) {
         return None;
     }
     let input = InternedInput::new(byte_lines(old), byte_lines(new));
     let mut diff = Diff::compute(Algorithm::Histogram, &input);
     diff.postprocess_lines(&input);
-    let text = |t: gix::diff::blob::Token| {
-        String::from_utf8_lossy(input.interner[t]).trim_end_matches(['\n', '\r']).replace('\t', "    ")
-    };
+    let bytes = |t: gix::diff::blob::Token| input.interner[t].to_vec();
     let (n_old, n_new) = (input.before.len() as u32, input.after.len() as u32);
 
-    // Group hunks whose context would touch.
-    let hunks: Vec<_> = diff.hunks().collect();
     let mut groups: Vec<Vec<gix::diff::blob::Hunk>> = Vec::new();
-    for h in hunks {
+    for h in diff.hunks() {
         match groups.last_mut() {
             Some(g) if h.before.start <= g.last().unwrap().before.end + 2 * context => g.push(h),
             _ => groups.push(vec![h]),
@@ -109,28 +159,30 @@ pub fn patch(old: &[u8], new: &[u8], context: u32) -> Option<Vec<PatchLine>> {
         let first = &g[0];
         let lead = first.before.start.min(context);
         let (mut o, mut n) = (first.before.start - lead, first.after.start - lead);
-        out.push(PatchLine::Hunk { old_start: o + 1, new_start: n + 1 });
+        let mut hunk = Hunk { old_start: o + 1, new_start: n + 1, lines: Vec::new() };
+        let mut push = |op, old, new, b| hunk.lines.push(HunkLine { op, old, new, bytes: b });
         for h in &g {
             while o < h.before.start {
-                out.push(PatchLine::Context { old: o + 1, new: n + 1, text: text(input.before[o as usize]) });
+                push(Op::Context, o + 1, n + 1, bytes(input.before[o as usize]));
                 o += 1;
                 n += 1;
             }
             for i in h.before.clone() {
-                out.push(PatchLine::Removed { old: i + 1, text: text(input.before[i as usize]) });
+                push(Op::Removed, i + 1, n, bytes(input.before[i as usize]));
             }
             for i in h.after.clone() {
-                out.push(PatchLine::Added { new: i + 1, text: text(input.after[i as usize]) });
+                push(Op::Added, h.before.end, i + 1, bytes(input.after[i as usize]));
             }
             o = h.before.end;
             n = h.after.end;
         }
         let end = (o + context).min(n_old);
         while o < end && n < n_new {
-            out.push(PatchLine::Context { old: o + 1, new: n + 1, text: text(input.before[o as usize]) });
+            push(Op::Context, o + 1, n + 1, bytes(input.before[o as usize]));
             o += 1;
             n += 1;
         }
+        out.push(hunk);
     }
     Some(out)
 }

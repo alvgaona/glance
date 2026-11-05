@@ -14,6 +14,14 @@ pub fn git_in(dir: Option<&std::path::Path>, args: &[String]) -> (bool, String) 
     }
 }
 
+/// [`git_in`] with `input` on git's stdin (a patch for `git apply -`).
+pub fn git_with_input(dir: Option<&std::path::Path>, args: &[String], input: &[u8]) -> (bool, String) {
+    match crate::process::run_with_input("git", args, dir, input) {
+        Ok(out) => (out.ok, out.text()),
+        Err(e) => (false, format!("could not run git: {e}")),
+    }
+}
+
 /// A path from the repository root, as a pathspec that means exactly that file even
 /// when gg runs in a subfolder or the name has `*` in it.
 pub fn top(path: &str) -> String {

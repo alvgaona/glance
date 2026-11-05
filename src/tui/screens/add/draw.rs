@@ -120,8 +120,10 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
             Some(i) => {
                 let e = &app.entries[i];
                 let selected = i == app.selected;
+                // The bar dims while the diff has the keys.
+                let bar = if app.focus == Focus::Files { theme::ACCENT } else { theme::FAINT };
                 let mut spans =
-                    vec![if selected { Span::styled("┃ ", Style::new().fg(theme::ACCENT)) } else { Span::raw("  ") }];
+                    vec![if selected { Span::styled("┃ ", Style::new().fg(bar)) } else { Span::raw("  ") }];
                 spans.extend(changes::row(&e.item()).spans);
                 let line = Line::from(spans);
                 if selected { line.style(Style::new().bg(theme::ELEMENT)) } else { line }
@@ -156,19 +158,45 @@ fn draw_diff(f: &mut Frame, app: &mut App, area: Rect) {
     if app.entries.is_empty() {
         return;
     }
-    let len = app.diff_lines().len();
+    let focused = app.focus == Focus::Hunks;
+    let current = app.hunk;
+    let len = app.view().lines.len();
     app.detail_scroll.fit(len, inner.height);
     let top = (app.detail_scroll.top() as usize).min(len);
-    let shown: Vec<Line> = app.diff_lines()[top..]
+    let view = app.view();
+    // While the diff has the keys, a bar marks the hunk they work on.
+    let bar = focused.then(|| view.ranges.get(current).cloned()).flatten();
+    let shown: Vec<Line> = view.lines[top..]
         .iter()
+        .enumerate()
         .take(inner.height as usize)
-        .map(|l| kit::truncate(l.clone(), inner.width))
+        .map(|(n, l)| {
+            let mark = match &bar {
+                Some(r) if r.contains(&(top + n)) => Span::styled("┃ ", Style::new().fg(theme::ACCENT)),
+                _ => Span::raw("  "),
+            };
+            let mut spans = vec![mark];
+            spans.extend(l.spans.iter().cloned());
+            kit::truncate(Line::from(spans).style(l.style), inner.width)
+        })
         .collect();
     f.render_widget(Paragraph::new(shown), inner);
     app.detail_scroll.draw_more(f, area);
 }
 
-fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
+fn draw_footer(f: &mut Frame, app: &mut App, area: Rect) {
+    if app.focus == Focus::Hunks {
+        let staged = app.current().is_some_and(|e| e.group == Group::Staged);
+        let n = app.view().ranges.len();
+        let left = Line::styled(format!("hunk {} of {n}", app.hunk + 1), theme::muted());
+        let mut pairs = vec![("space", if staged { "unstage hunk" } else { "stage hunk" })];
+        if !staged {
+            pairs.push(("d", "discard hunk"));
+        }
+        pairs.extend([("j/k", "hunks"), ("esc", "files"), ("q", "quit")]);
+        footer::draw(f, area, left, pairs);
+        return;
+    }
     let toggle = match app.current().map(|e| e.group) {
         Some(Group::Staged) => "unstage",
         Some(Group::Conflicts) => "resolved",
@@ -179,6 +207,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     } else {
         vec![
             ("space", toggle),
+            ("enter", "hunks"),
             ("a", "stage all"),
             ("u", "unstage all"),
             ("d", "discard"),

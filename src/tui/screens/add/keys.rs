@@ -35,6 +35,25 @@ impl App {
         if self.detail_scroll.key(k, self.detail_area.height) {
             return Ok(false);
         }
+        if self.focus == Focus::Hunks {
+            match k.code {
+                KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('n') => self.step_hunk(1),
+                KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('N') => self.step_hunk(-1),
+                KeyCode::Home | KeyCode::Char('g') => self.step_hunk(isize::MIN / 2),
+                KeyCode::End | KeyCode::Char('G') => self.step_hunk(isize::MAX / 2),
+                KeyCode::Char(' ') | KeyCode::Enter => self.toggle_hunk()?,
+                KeyCode::Char('d') => self.ask_discard_hunk(),
+                KeyCode::Esc | KeyCode::Tab | KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => {
+                    self.focus = Focus::Files
+                }
+                KeyCode::Char('q') => return Ok(true),
+                KeyCode::Char('p') if ctrl => self.palette = Some(Palette::new(commands())),
+                KeyCode::Char(':') => self.palette = Some(Palette::new(commands())),
+                KeyCode::Char('y') => return self.run(Cmd::Copy),
+                _ => {}
+            }
+            return Ok(false);
+        }
         let cmd = match k.code {
             KeyCode::Char('p') if ctrl => {
                 self.palette = Some(Palette::new(commands()));
@@ -61,7 +80,8 @@ impl App {
                 self.step(isize::MAX / 2);
                 return Ok(false);
             }
-            KeyCode::Char(' ') | KeyCode::Enter => Cmd::Toggle,
+            KeyCode::Char(' ') => Cmd::Toggle,
+            KeyCode::Enter | KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => Cmd::Hunks,
             KeyCode::Char('a') => Cmd::StageAll,
             KeyCode::Char('u') => Cmd::UnstageAll,
             KeyCode::Char('d') => Cmd::Discard,
@@ -77,6 +97,7 @@ impl App {
             Cmd::Quit => return Ok(true),
             Cmd::Reload => self.reload()?,
             Cmd::Toggle => self.toggle()?,
+            Cmd::Hunks => self.enter_hunks(),
             Cmd::Discard => self.ask_discard(),
             Cmd::StageAll => {
                 let n = self.entries.iter().filter(|e| e.group != Group::Staged).count();

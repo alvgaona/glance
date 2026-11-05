@@ -6,8 +6,9 @@ use std::path::Path;
 use anyhow::Result;
 use gix::bstr::BStr;
 
-use super::diff::{self, PatchLine};
-use super::run::{args, git_in, top};
+pub use super::diff::Hunk;
+use super::diff::{self, Op};
+use super::run::{args, git_in, git_with_input, top};
 
 /// Which half of a change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,10 +55,59 @@ fn on_disk(p: &Path) -> Vec<u8> {
     }
 }
 
-/// The diff of one half of a file, 3 lines of context. `None` for binary or huge files.
-pub fn patch(repo: &gix::Repository, path: &str, from: Option<&str>, side: Side) -> Result<Option<Vec<PatchLine>>> {
+/// The diff of one half of a file, 3 lines of context, hunk by hunk and byte for byte
+/// (so parts of it can be staged). `None` for binary or huge files.
+pub fn hunks(repo: &gix::Repository, path: &str, from: Option<&str>, side: Side) -> Result<Option<Vec<Hunk>>> {
     let (old, new) = contents(repo, path, from, side)?;
-    Ok(diff::patch(&old, &new, 3))
+    Ok(diff::hunks(&old, &new, 3))
+}
+
+/// What to do with one hunk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HunkAction {
+    /// An unstaged hunk into the index.
+    Stage,
+    /// A staged hunk out of the index again.
+    Unstage,
+    /// An unstaged hunk thrown away from the working tree.
+    Discard,
+}
+
+/// The patch `git apply` needs for one hunk of `path`.
+pub fn hunk_patch(path: &str, h: &Hunk) -> Vec<u8> {
+    let (old_len, new_len) = h.lens();
+    // An empty side starts at the line before it: `-0,0` for a new file.
+    let old_start = if old_len == 0 { h.old_start - 1 } else { h.old_start };
+    let new_start = if new_len == 0 { h.new_start - 1 } else { h.new_start };
+    let mut out = format!(
+        "diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -{old_start},{old_len} +{new_start},{new_len} @@\n"
+    )
+    .into_bytes();
+    for l in &h.lines {
+        out.push(match l.op {
+            Op::Context => b' ',
+            Op::Removed => b'-',
+            Op::Added => b'+',
+        });
+        out.extend_from_slice(&l.bytes);
+        if !l.bytes.ends_with(b"\n") {
+            out.extend_from_slice(b"\n\\ No newline at end of file\n");
+        }
+    }
+    out
+}
+
+/// Applies one hunk of `path` (taken from the side the action works on).
+pub fn apply_hunk(repo: &gix::Repository, path: &str, h: &Hunk, action: HunkAction) -> (bool, String) {
+    let how: &[&str] = match action {
+        HunkAction::Stage => &["--cached"],
+        HunkAction::Unstage => &["--cached", "--reverse"],
+        HunkAction::Discard => &["--reverse"],
+    };
+    let mut a = args(&["apply", "--recount", "--whitespace=nowarn"]);
+    a.extend(args(how));
+    a.push("-".into());
+    git_with_input(repo.workdir(), &a, &hunk_patch(path, h))
 }
 
 // The writes run in the repository's root folder: paths come from status, so they're
@@ -185,9 +235,9 @@ mod tests {
         s.write("a.txt", "three\n");
         assert_eq!(s.halves("a.txt"), ("one\n".into(), "two\n".into(), "three\n".into()));
 
-        let p = patch(&s.repo(), "a.txt", None, Side::Unstaged).unwrap().unwrap();
-        assert!(matches!(&p[1], PatchLine::Removed { text, .. } if text == "two"));
-        assert!(matches!(&p[2], PatchLine::Added { text, .. } if text == "three"));
+        let h = hunks(&s.repo(), "a.txt", None, Side::Unstaged).unwrap().unwrap();
+        let lines: Vec<(Op, &[u8])> = h[0].lines.iter().map(|l| (l.op, l.bytes.as_slice())).collect();
+        assert_eq!(lines, [(Op::Removed, b"two\n".as_slice()), (Op::Added, b"three\n".as_slice())]);
 
         // A file that's only on disk.
         s.write("new.txt", "hi\n");
@@ -235,6 +285,70 @@ mod tests {
         s.run(|r| delete_untracked(r, &["dir/".into(), "loose.txt".into()]));
         assert!(!s.0.join("dir").exists() && !s.0.join("loose.txt").exists());
         assert!(s.0.join("kept.log").exists());
+    }
+
+    fn hunk(s: &Scratch, path: &str, side: Side, i: usize) -> Hunk {
+        hunks(&s.repo(), path, None, side).unwrap().unwrap().swap_remove(i)
+    }
+
+    #[test]
+    fn stages_unstages_and_discards_single_hunks() {
+        let s = Scratch::new("hunks");
+        // Lines 1 to 20, with line 2 and/or line 18 spelled out: two hunks far apart.
+        let text = |two: bool, eighteen: bool| -> String {
+            (1..=20)
+                .map(|i| match i {
+                    2 if two => "two\n".to_string(),
+                    18 if eighteen => "eighteen\n".to_string(),
+                    i => format!("{i}\n"),
+                })
+                .collect()
+        };
+        let (base, second, both) = (text(false, false), text(false, true), text(true, true));
+        s.write("f.txt", &base);
+        s.git(&["add", "f.txt"]);
+        s.git(&["commit", "-q", "-m", "base"]);
+        s.write("f.txt", &both);
+        assert_eq!(hunks(&s.repo(), "f.txt", None, Side::Unstaged).unwrap().unwrap().len(), 2);
+
+        // Only the second change goes in; the file on disk doesn't move.
+        let h = hunk(&s, "f.txt", Side::Unstaged, 1);
+        s.run(|r| apply_hunk(r, "f.txt", &h, HunkAction::Stage));
+        assert_eq!(s.halves("f.txt"), (base.clone(), second.clone(), both.clone()));
+
+        // And out again.
+        let h = hunk(&s, "f.txt", Side::Staged, 0);
+        s.run(|r| apply_hunk(r, "f.txt", &h, HunkAction::Unstage));
+        assert_eq!(s.halves("f.txt"), (base.clone(), base.clone(), both.clone()));
+
+        // Throw the first change away; the second stays on disk.
+        let h = hunk(&s, "f.txt", Side::Unstaged, 0);
+        s.run(|r| apply_hunk(r, "f.txt", &h, HunkAction::Discard));
+        assert_eq!(s.halves("f.txt").2, second);
+    }
+
+    #[test]
+    fn hunks_keep_the_bytes_exactly() {
+        let cases = [
+            ("crlf.txt", "a\r\nb\r\nc\r\n", "a\r\nB\r\nc\r\n"),
+            ("tabs.txt", "\tx\n\ty\n", "\tx\n\t\tY\n"),
+            ("no-eol.txt", "a\nb", "a\nB"),
+            ("adds-eol.txt", "a", "a\nb\n"),
+            ("drops-eol.txt", "a\nb\n", "a\nb"),
+            ("with space.txt", "1\n", "2\n"),
+        ];
+        let s = Scratch::new("bytes");
+        for (path, old, _) in cases {
+            s.write(path, old);
+        }
+        s.run(add_all);
+        s.git(&["commit", "-q", "-m", "base"]);
+        for (path, old, new) in cases {
+            s.write(path, new);
+            let h = hunk(&s, path, Side::Unstaged, 0);
+            s.run(|r| apply_hunk(r, path, &h, HunkAction::Stage));
+            assert_eq!(s.halves(path), (old.into(), new.into(), new.into()), "{path}");
+        }
     }
 
     #[test]

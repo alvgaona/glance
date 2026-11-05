@@ -24,6 +24,13 @@ impl Scroll {
         self.top = 0;
     }
 
+    /// Scrolls just enough to show lines `first..=last` in a panel `height` rows tall
+    /// (the top of them, if they don't all fit).
+    pub fn show(&mut self, first: usize, last: usize, height: u16) {
+        let last = last.min(first + (height as usize).saturating_sub(1));
+        self.top = super::list::follow(self.top as usize, first, last, height as usize).min(u16::MAX as usize) as u16;
+    }
+
     /// The details keys; true if `k` was one of them. `height` is the panel's.
     pub fn key(&mut self, k: KeyEvent, height: u16) -> bool {
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);

@@ -36,6 +36,8 @@ enum Prs {
 #[derive(Clone)]
 enum Cmd {
     Checkout,
+    Rename,
+    Fetch,
     OpenPr,
     ReloadPrs,
     DeleteLocal,
@@ -128,6 +130,116 @@ impl RemotePick {
     }
 }
 
+/// Typing a new name for a branch.
+struct Rename {
+    from: String,
+    /// The branch is on a remote: say that copy keeps the old name.
+    pushed: bool,
+    input: Vec<char>,
+    /// Cursor position in `input`.
+    at: usize,
+}
+
+enum RenameEvent {
+    Cancel,
+    Done(String),
+}
+
+impl Rename {
+    fn new(from: &str, pushed: bool) -> Self {
+        let input: Vec<char> = from.chars().collect();
+        Self { from: from.to_string(), pushed, at: input.len(), input }
+    }
+
+    fn key(&mut self, k: KeyEvent) -> Option<RenameEvent> {
+        let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        match k.code {
+            KeyCode::Esc => return Some(RenameEvent::Cancel),
+            KeyCode::Enter => return Some(RenameEvent::Done(self.input.iter().collect::<String>().trim().to_string())),
+            KeyCode::Left => self.at = self.at.saturating_sub(1),
+            KeyCode::Right => self.at = (self.at + 1).min(self.input.len()),
+            KeyCode::Home => self.at = 0,
+            KeyCode::End => self.at = self.input.len(),
+            KeyCode::Char('a') if ctrl => self.at = 0,
+            KeyCode::Char('e') if ctrl => self.at = self.input.len(),
+            KeyCode::Char('u') if ctrl => {
+                self.input.drain(..self.at);
+                self.at = 0;
+            }
+            // Delete back to the previous '/', '-', '_' or space.
+            KeyCode::Char('w') if ctrl => {
+                let stop = |c: &char| matches!(c, '/' | '-' | '_' | ' ');
+                let mut start = self.at;
+                while start > 0 && stop(&self.input[start - 1]) {
+                    start -= 1;
+                }
+                while start > 0 && !stop(&self.input[start - 1]) {
+                    start -= 1;
+                }
+                self.input.drain(start..self.at);
+                self.at = start;
+            }
+            KeyCode::Backspace if self.at > 0 => {
+                self.at -= 1;
+                self.input.remove(self.at);
+            }
+            KeyCode::Delete if self.at < self.input.len() => {
+                self.input.remove(self.at);
+            }
+            KeyCode::Char(c) if !ctrl && !c.is_whitespace() => {
+                self.input.insert(self.at, c);
+                self.at += 1;
+            }
+            _ => {}
+        }
+        None
+    }
+
+    fn draw(&self, f: &mut Frame, area: Rect) {
+        let rows = if self.pushed { 10 } else { 8 };
+        let r = widgets::centered(area, 64, rows);
+        f.render_widget(ratatui::widgets::Clear, r);
+        let block = widgets::panel(theme::ELEMENT);
+        let inner = block.inner(r);
+        f.render_widget(block, r);
+
+        // The input on a slightly lighter strip, with the cursor as a block.
+        let w = inner.width as usize;
+        let start = (self.at + 1).saturating_sub(w.saturating_sub(1));
+        let field = Style::new().bg(theme::BORDER).fg(theme::TEXT);
+        let mut input = Vec::new();
+        for (i, c) in self.input.iter().enumerate().skip(start) {
+            let style = if i == self.at { Style::new().bg(theme::ACCENT).fg(theme::BG) } else { field };
+            input.push(Span::styled(c.to_string(), style));
+        }
+        if self.at == self.input.len() {
+            input.push(Span::styled(" ", Style::new().bg(theme::ACCENT)));
+        }
+        let used = Line::from(input.clone()).width();
+        input.push(Span::styled(" ".repeat(w.saturating_sub(used)), field));
+
+        let mut lines = vec![
+            Line::from(vec![
+                Span::styled("Rename ", theme::bold()),
+                Span::styled(self.from.clone(), theme::bold().fg(theme::ACCENT)),
+            ]),
+            Line::raw(""),
+            Line::from(input),
+            Line::raw(""),
+        ];
+        if self.pushed {
+            lines.push(Line::styled("The copy on the remote keeps its old name.", theme::muted()));
+            lines.push(Line::raw(""));
+        }
+        lines.push(Line::from(vec![
+            widgets::pill("enter  Rename", theme::ACCENT, theme::BG),
+            Span::raw("  "),
+            widgets::pill("esc  Cancel", theme::BORDER, theme::TEXT),
+        ]));
+        f.render_widget(Paragraph::new(lines), inner);
+    }
+}
+
 /// What the event loop has to do after a key press.
 enum Effect {
     Quit,
@@ -148,11 +260,19 @@ struct App<'r> {
     query: String,
     searching: bool,
     details: bool,
-    cache: HashMap<(String, gix::ObjectId), Rc<Vec<Line<'static>>>>,
+    /// Details by (branch, tip, panel width): text is wrapped to the width.
+    cache: HashMap<(String, gix::ObjectId, u16), Rc<Vec<Line<'static>>>>,
+    detail_scroll: u16,
+    /// Which branch `detail_scroll` belongs to; another one starts at the top.
+    detail_for: String,
+    detail_area: Rect,
     toast: Option<Toast>,
     palette: Option<Palette<Cmd>>,
     confirm: Option<(Confirm, Pending)>,
     pick: Option<RemotePick>,
+    rename: Option<Rename>,
+    /// A background `git fetch`, while it runs.
+    fetching: Option<mpsc::Receiver<(bool, String)>>,
     list_area: Rect,
     repo_name: String,
     /// What the last single delete removed, for its toast.
@@ -177,10 +297,15 @@ pub fn run(repo: &gix::Repository) -> Result<()> {
         searching: false,
         details: true,
         cache: HashMap::new(),
+        detail_scroll: 0,
+        detail_for: String::new(),
+        detail_area: Rect::default(),
         toast: None,
         palette: None,
         confirm: None,
         pick: None,
+        rename: None,
+        fetching: None,
         list_area: Rect::default(),
         repo_name: crate::core::repo_name(repo),
         last_deleted: String::new(),
@@ -202,6 +327,7 @@ pub fn run(repo: &gix::Repository) -> Result<()> {
                 app.toast = None;
             }
             app.poll_prs();
+            app.poll_fetch()?;
             terminal.draw(|f| draw(f, &mut app))?;
             if !event::poll(Duration::from_millis(200))? {
                 continue;
@@ -257,6 +383,8 @@ fn git(args: &[String]) -> (bool, String) {
 fn commands() -> Vec<Command<Cmd>> {
     vec![
         Command { label: "Check out this branch", keys: "enter", action: Cmd::Checkout },
+        Command { label: "Rename branch", keys: "r", action: Cmd::Rename },
+        Command { label: "Fetch all remotes (and prune)", keys: "f", action: Cmd::Fetch },
         Command { label: "Delete local branch", keys: "d", action: Cmd::DeleteLocal },
         Command { label: "Delete branch on remotes", keys: "D", action: Cmd::DeleteRemote },
         Command { label: "Select or unselect", keys: "space", action: Cmd::Mark },
@@ -286,7 +414,12 @@ impl App<'_> {
     }
 
     fn reload(&mut self) -> Result<()> {
-        let keep = self.current().map(|b| b.name.clone());
+        self.reload_selecting(None)
+    }
+
+    /// Reloads, then puts the cursor on `name` (or back on the branch it was on).
+    fn reload_selecting(&mut self, name: Option<String>) -> Result<()> {
+        let keep = name.or_else(|| self.current().map(|b| b.name.clone()));
         self.data = branches::read(self.repo, self.remotes)?;
         self.cache.clear();
         let names: BTreeSet<String> = self.data.list.iter().map(|b| b.name.clone()).collect();
@@ -303,6 +436,57 @@ impl App<'_> {
 
     fn current(&self) -> Option<&Branch> {
         self.visible.get(self.selected).map(|&i| &self.data.list[i])
+    }
+
+    /// `git fetch --all --prune` on a background thread; `poll_fetch` picks up the result.
+    /// It must never prompt (that would draw over the screen), so prompts are turned off:
+    /// a remote that needs a password fails and says so.
+    fn fetch(&mut self) {
+        if self.fetching.is_some() {
+            return;
+        }
+        let mut cmd = Process::new("git");
+        cmd.args(["fetch", "--all", "--prune", "--quiet"])
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        // Keep ssh from asking for a passphrase too, unless the user set their own ssh command.
+        let own_ssh = std::env::var_os("GIT_SSH_COMMAND").is_some()
+            || self.repo.config_snapshot().string("core.sshCommand").is_some();
+        if !own_ssh {
+            cmd.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
+        }
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let result = match cmd.output() {
+                Ok(out) => (out.status.success(), String::from_utf8_lossy(&out.stderr).trim().to_string()),
+                Err(e) => (false, format!("could not run git: {e}")),
+            };
+            let _ = tx.send(result);
+        });
+        self.fetching = Some(rx);
+    }
+
+    fn poll_fetch(&mut self) -> Result<()> {
+        let Some(rx) = &self.fetching else { return Ok(()) };
+        let (ok, out) = match rx.try_recv() {
+            Ok(r) => r,
+            Err(mpsc::TryRecvError::Empty) => return Ok(()),
+            Err(mpsc::TryRecvError::Disconnected) => (false, "fetch stopped".into()),
+        };
+        self.fetching = None;
+        self.toast = Some(if ok {
+            Toast::new("Fetched all remotes", theme::GREEN)
+        } else {
+            Toast::new(format!("Fetch failed: {}", first_lines(&out)), theme::RED)
+        });
+        self.reload()?;
+        // Pushes and merges may have changed PRs too.
+        if !matches!(self.prs, Prs::Loading(_) | Prs::Off) {
+            self.load_prs();
+        }
+        Ok(())
     }
 
     /// Asks gh for PRs on a background thread; `poll_prs` picks up the answer.
@@ -379,6 +563,30 @@ impl App<'_> {
 
     fn key(&mut self, k: KeyEvent) -> Result<Option<Effect>> {
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        let shift = k.modifiers.contains(KeyModifiers::SHIFT);
+        if let Some(r) = &mut self.rename {
+            match r.key(k) {
+                Some(RenameEvent::Cancel) => self.rename = None,
+                Some(RenameEvent::Done(to)) => {
+                    let from = r.from.clone();
+                    self.rename = None;
+                    if !to.is_empty() && to != from {
+                        let (ok, out) = git(&["branch".into(), "-m".into(), from.clone(), to.clone()]);
+                        if ok {
+                            self.toast = Some(Toast::new(format!("Renamed {from} → {to}"), theme::GREEN));
+                            if self.marked.remove(&from) {
+                                self.marked.insert(to.clone());
+                            }
+                            self.reload_selecting(Some(to))?;
+                        } else {
+                            self.toast = Some(Toast::new(first_lines(&out), theme::RED));
+                        }
+                    }
+                }
+                None => {}
+            }
+            return Ok(None);
+        }
         if ctrl && k.code == KeyCode::Char('c') {
             return Ok(Some(Effect::Quit));
         }
@@ -473,6 +681,32 @@ impl App<'_> {
                 self.palette = Some(Palette::new(commands()));
                 return Ok(None);
             }
+            // Details scrolling, as in `gg log -i`.
+            KeyCode::Char('d') if ctrl => {
+                self.detail_scroll = self.detail_scroll.saturating_add(self.detail_area.height / 2);
+                return Ok(None);
+            }
+            KeyCode::Char('u') if ctrl => {
+                self.detail_scroll = self.detail_scroll.saturating_sub(self.detail_area.height / 2);
+                return Ok(None);
+            }
+            // Some terminals send shift+j as 'j' with SHIFT rather than 'J'.
+            KeyCode::Down | KeyCode::Char('j') if shift => {
+                self.detail_scroll = self.detail_scroll.saturating_add(3);
+                return Ok(None);
+            }
+            KeyCode::Up | KeyCode::Char('k') if shift => {
+                self.detail_scroll = self.detail_scroll.saturating_sub(3);
+                return Ok(None);
+            }
+            KeyCode::Char('J') => {
+                self.detail_scroll = self.detail_scroll.saturating_add(3);
+                return Ok(None);
+            }
+            KeyCode::Char('K') => {
+                self.detail_scroll = self.detail_scroll.saturating_sub(3);
+                return Ok(None);
+            }
             KeyCode::Down | KeyCode::Char('j') => {
                 self.step(1);
                 return Ok(None);
@@ -506,7 +740,9 @@ impl App<'_> {
             KeyCode::Char('y') => Cmd::Copy,
             KeyCode::Char('o') => Cmd::OpenPr,
             KeyCode::Char('R') => Cmd::ReloadPrs,
-            KeyCode::Char('r') if k.modifiers.contains(KeyModifiers::SHIFT) => Cmd::ReloadPrs,
+            KeyCode::Char('r') if shift => Cmd::ReloadPrs,
+            KeyCode::Char('r') => Cmd::Rename,
+            KeyCode::Char('f') => Cmd::Fetch,
             KeyCode::Char('a') => Cmd::ToggleRemotes,
             KeyCode::Char('/') => Cmd::Search,
             KeyCode::Tab => Cmd::Details,
@@ -540,6 +776,14 @@ impl App<'_> {
                     self.toast = Some(Toast::new(format!("Copied {name}"), theme::ACCENT));
                 }
             }
+            Cmd::Rename => match self.current() {
+                Some(b) if b.remote => {
+                    self.toast = Some(Toast::new("Remote branches are renamed on the remote", theme::YELLOW));
+                }
+                Some(b) => self.rename = Some(Rename::new(&b.name, !b.copies.is_empty())),
+                None => {}
+            },
+            Cmd::Fetch => self.fetch(),
             Cmd::OpenPr => {
                 let msg = match (&self.prs, self.current().and_then(|b| self.pr(b))) {
                     (_, Some(pr)) => {
@@ -789,10 +1033,14 @@ impl App<'_> {
     }
 
     fn mouse(&mut self, m: crossterm::event::MouseEvent) {
-        if self.palette.is_some() || self.confirm.is_some() || self.pick.is_some() {
+        if self.palette.is_some() || self.confirm.is_some() || self.pick.is_some() || self.rename.is_some() {
             return;
         }
+        let d = self.detail_area;
+        let in_details = m.column >= d.x && m.column < d.right() && m.row >= d.y && m.row < d.bottom();
         match m.kind {
+            MouseEventKind::ScrollDown if in_details => self.detail_scroll = self.detail_scroll.saturating_add(3),
+            MouseEventKind::ScrollUp if in_details => self.detail_scroll = self.detail_scroll.saturating_sub(3),
             MouseEventKind::ScrollDown => self.step(1),
             MouseEventKind::ScrollUp => self.step(-1),
             MouseEventKind::Down(MouseButton::Left) => {
@@ -808,14 +1056,15 @@ impl App<'_> {
         }
     }
 
-    fn detail_lines(&mut self) -> Option<Rc<Vec<Line<'static>>>> {
+    fn detail_lines(&mut self, width: u16) -> Option<Rc<Vec<Line<'static>>>> {
         let b = self.current()?.clone();
-        let key = (b.name.clone(), b.oid);
+        let key = (b.name.clone(), b.oid, width);
         if let Some(d) = self.cache.get(&key) {
             return Some(d.clone());
         }
         let default = self.data.default.clone();
-        let lines = Rc::new(build_detail(self.repo, &b, default.as_ref(), self.protected(&b), self.pr(&b)));
+        let lines =
+            Rc::new(build_detail(self.repo, &b, default.as_ref(), self.protected(&b), self.pr(&b), width as usize));
         self.cache.insert(key, lines.clone());
         Some(lines)
     }
@@ -854,6 +1103,43 @@ fn first_lines(s: &str) -> String {
 
 // ---------------------------------------------------------------- drawing
 
+fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
+    let block = widgets::panel(theme::PANEL);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    app.detail_area = area;
+    let Some(lines) = app.detail_lines(inner.width) else { return };
+
+    // A new branch starts at the top.
+    let name = app.current().map(|b| b.name.clone()).unwrap_or_default();
+    if name != app.detail_for {
+        app.detail_for = name;
+        app.detail_scroll = 0;
+    }
+    let max = (lines.len() as u16).saturating_sub(inner.height);
+    app.detail_scroll = app.detail_scroll.min(max);
+
+    let shown: Vec<Line> = lines
+        .iter()
+        .skip(app.detail_scroll as usize)
+        .take(inner.height as usize)
+        .map(|l| widgets::truncate(l.clone(), inner.width))
+        .collect();
+    f.render_widget(Paragraph::new(shown), inner);
+
+    // More below (or above): say so in the bottom-right corner.
+    if max > 0 {
+        let text = if app.detail_scroll < max {
+            format!(" ↓ {} more · J/K ", max - app.detail_scroll)
+        } else {
+            " ↑ J/K ".to_string()
+        };
+        let w = text.chars().count() as u16;
+        let r = Rect { x: area.right().saturating_sub(w + 1), y: area.bottom().saturating_sub(1), width: w, height: 1 };
+        f.render_widget(Paragraph::new(Span::styled(text, theme::faint())), r.intersection(area));
+    }
+}
+
 fn draw(f: &mut Frame, app: &mut App) {
     let full = f.area();
     f.render_widget(Block::new().style(Style::new().bg(theme::BG)), full);
@@ -881,11 +1167,9 @@ fn draw(f: &mut Frame, app: &mut App) {
     };
     draw_list(f, app, list);
     if let Some(d) = details {
-        let block = widgets::panel(theme::PANEL);
-        match app.detail_lines() {
-            Some(lines) => f.render_widget(Paragraph::new((*lines).clone()).wrap(Wrap { trim: false }).block(block), d),
-            None => f.render_widget(block, d),
-        }
+        draw_details(f, app, d);
+    } else {
+        app.detail_area = Rect::default();
     }
     draw_footer(f, app, footer);
 
@@ -897,6 +1181,9 @@ fn draw(f: &mut Frame, app: &mut App) {
     }
     if let Some(p) = &app.pick {
         p.draw(f, full);
+    }
+    if let Some(r) = &app.rename {
+        r.draw(f, full);
     }
     if let Some(t) = &app.toast {
         t.draw(f, full);
@@ -922,6 +1209,9 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     }
     if app.remotes {
         spans.push(Span::styled("  · with remotes", theme::faint()));
+    }
+    if app.fetching.is_some() {
+        spans.push(Span::styled("  · fetching…", Style::new().fg(theme::ACCENT)));
     }
     match &app.prs {
         Prs::Loading(_) => spans.push(Span::styled("  · loading pull requests…", theme::faint())),
@@ -1055,7 +1345,7 @@ fn checks_glyph(c: &github::Checks) -> Option<(&'static str, ratatui::style::Col
 }
 
 /// The "pr" rows of the details panel.
-fn pr_lines(pr: &Pr, b: &Branch, label: &dyn Fn(&str) -> Span<'static>) -> Vec<Line<'static>> {
+fn pr_lines(pr: &Pr, b: &Branch, label: &dyn Fn(&str) -> Span<'static>, width: usize) -> Vec<Line<'static>> {
     let state = match pr.state {
         github::State::Open => "open",
         github::State::Draft => "draft",
@@ -1096,7 +1386,11 @@ fn pr_lines(pr: &Pr, b: &Branch, label: &dyn Fn(&str) -> Span<'static>) -> Vec<L
             }
         }
     }
-    let mut out = vec![Line::from(first), Line::from(vec![label(""), Span::styled(pr.title.clone(), theme::text())])];
+    let mut out = vec![Line::from(first)];
+    // Title wrapped under the label column (10 wide).
+    for part in widgets::wrap(&pr.title, width.saturating_sub(10)) {
+        out.push(Line::from(vec![label(""), Span::styled(part, theme::text())]));
+    }
     // Local work the PR doesn't have (pushed later, or never pushed).
     if pr.head.is_some_and(|h| h != b.oid) {
         let note = match pr.state {
@@ -1120,6 +1414,7 @@ fn build_detail(
     default: Option<&(String, gix::ObjectId)>,
     protected: bool,
     pr: Option<&Pr>,
+    width: usize,
 ) -> Vec<Line<'static>> {
     let now = crate::core::now();
     let label = |s: &str| Span::styled(format!("{s:<10}"), theme::faint());
@@ -1149,12 +1444,14 @@ fn build_detail(
             Span::styled("  ·  ", theme::faint()),
             Span::styled(relative_time(b.time, now), theme::muted()),
         ]),
-        Line::styled(b.summary.clone(), theme::text()),
-        Line::raw(""),
     ];
+    for part in widgets::wrap(&b.summary, width) {
+        out.push(Line::styled(part, theme::text()));
+    }
+    out.push(Line::raw(""));
 
     if let Some(pr) = pr {
-        out.extend(pr_lines(pr, b, &label));
+        out.extend(pr_lines(pr, b, &label, width));
         out.push(Line::raw(""));
     }
 
@@ -1292,19 +1589,27 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             theme::muted(),
         )
     };
-    let right = if app.searching {
-        widgets::hints(&[("enter", "keep filter"), ("esc", "clear")])
+    // Most important first; the tail of the middle goes when the line is too narrow,
+    // keeping the last one ("q quit" / "esc clear").
+    let mut pairs: Vec<(&str, &str)> = if app.searching {
+        vec![("enter", "keep filter"), ("esc", "clear")]
     } else if !app.marked.is_empty() {
-        widgets::hints(&[("space", "select"), ("d", "delete"), ("D", "delete on remote"), ("esc", "clear")])
+        vec![("d", "delete"), ("D", "delete on remote"), ("space", "select"), ("esc", "clear")]
     } else {
-        widgets::hints(&[
+        vec![
             ("enter", "checkout"),
-            ("space", "select"),
-            ("d", "delete"),
             ("ctrl+p", "commands"),
+            ("d", "delete"),
+            ("f", "fetch"),
+            ("r", "rename"),
             ("q", "quit"),
-        ])
+        ]
     };
+    let room = (area.width as usize).saturating_sub(left.width() + 3);
+    while pairs.len() > 2 && widgets::hints(&pairs).width() > room {
+        pairs.remove(pairs.len() - 2);
+    }
+    let right = widgets::hints(&pairs);
     let [l, r] = Layout::horizontal([Constraint::Min(1), Constraint::Length(right.width() as u16)]).areas(area);
     f.render_widget(Paragraph::new(widgets::truncate(left, l.width)), l);
     f.render_widget(Paragraph::new(right), r);

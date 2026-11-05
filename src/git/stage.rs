@@ -97,6 +97,53 @@ pub fn hunk_patch(path: &str, h: &Hunk) -> Vec<u8> {
     out
 }
 
+/// `h` cut down to the changed lines at `picked` (indices into `h.lines`), for `action`.
+/// The rest must stay as the file the patch lands on has it: staging goes forward onto
+/// the index, so an unpicked removal stays (becomes context) and an unpicked addition
+/// goes; unstaging and discarding go backwards, so it's the other way round.
+///
+/// In a run of changes, the n-th removal pairs with the n-th addition (its
+/// replacement), and a line kept as context goes after that pair's picked lines:
+/// staging "1 → one" out of "1 2 → one two" gives "one 2", not "2 one".
+pub fn pick_lines(h: &Hunk, picked: &[usize], action: HunkAction) -> Hunk {
+    let forward = action == HunkAction::Stage;
+    let mut out = Hunk { lines: Vec::new(), ..h.clone() };
+    let mut i = 0;
+    while i < h.lines.len() {
+        if h.lines[i].op == Op::Context {
+            out.lines.push(h.lines[i].clone());
+            i += 1;
+            continue;
+        }
+        // One run: its removals, then its additions.
+        let end = (i..h.lines.len()).find(|&j| h.lines[j].op == Op::Context).unwrap_or(h.lines.len());
+        let removed: Vec<usize> = (i..end).filter(|&j| h.lines[j].op == Op::Removed).collect();
+        let added: Vec<usize> = (i..end).filter(|&j| h.lines[j].op == Op::Added).collect();
+        for n in 0..removed.len().max(added.len()) {
+            let mut kept_as_context = None;
+            for j in [removed.get(n), added.get(n)].into_iter().flatten().copied() {
+                let l = &h.lines[j];
+                if picked.contains(&j) {
+                    out.lines.push(l.clone());
+                } else if (l.op == Op::Removed) == forward {
+                    // Still in the file the patch lands on.
+                    let mut l = l.clone();
+                    l.op = Op::Context;
+                    kept_as_context = Some(l);
+                }
+            }
+            out.lines.extend(kept_as_context);
+        }
+        i = end;
+    }
+    out
+}
+
+/// Does the hunk still change anything?
+pub fn changes_anything(h: &Hunk) -> bool {
+    h.lines.iter().any(|l| l.op != Op::Context)
+}
+
 /// Applies one hunk of `path` (taken from the side the action works on).
 pub fn apply_hunk(repo: &gix::Repository, path: &str, h: &Hunk, action: HunkAction) -> (bool, String) {
     let how: &[&str] = match action {
@@ -325,6 +372,49 @@ mod tests {
         let h = hunk(&s, "f.txt", Side::Unstaged, 0);
         s.run(|r| apply_hunk(r, "f.txt", &h, HunkAction::Discard));
         assert_eq!(s.halves("f.txt").2, second);
+    }
+
+    /// Indices of the lines in `h` whose text is one of `texts`.
+    fn lines_of(h: &Hunk, texts: &[&str]) -> Vec<usize> {
+        (0..h.lines.len()).filter(|&i| texts.iter().any(|t| h.lines[i].bytes == format!("{t}\n").as_bytes())).collect()
+    }
+
+    #[test]
+    fn stages_unstages_and_discards_picked_lines() {
+        let s = Scratch::new("lines");
+        s.write("f.txt", "1\n2\n3\n");
+        s.git(&["add", "f.txt"]);
+        s.git(&["commit", "-q", "-m", "base"]);
+        // One hunk: -1 -2 +one +two, then 3.
+        s.write("f.txt", "one\ntwo\n3\n");
+
+        // Stage only "1 → one".
+        let h = hunk(&s, "f.txt", Side::Unstaged, 0);
+        let part = pick_lines(&h, &lines_of(&h, &["1", "one"]), HunkAction::Stage);
+        s.run(|r| apply_hunk(r, "f.txt", &part, HunkAction::Stage));
+        assert_eq!(s.halves("f.txt"), ("1\n2\n3\n".into(), "one\n2\n3\n".into(), "one\ntwo\n3\n".into()));
+
+        // A single added line on its own stages too (the removal stays put).
+        let h = hunk(&s, "f.txt", Side::Unstaged, 0);
+        let part = pick_lines(&h, &lines_of(&h, &["two"]), HunkAction::Stage);
+        s.run(|r| apply_hunk(r, "f.txt", &part, HunkAction::Stage));
+        assert_eq!(s.halves("f.txt").1, "one\ntwo\n2\n3\n");
+
+        // Unstage just the "two" again.
+        let h = hunk(&s, "f.txt", Side::Staged, 0);
+        let part = pick_lines(&h, &lines_of(&h, &["two"]), HunkAction::Unstage);
+        s.run(|r| apply_hunk(r, "f.txt", &part, HunkAction::Unstage));
+        assert_eq!(s.halves("f.txt").1, "one\n2\n3\n");
+
+        // Discard only the added "two" from the working tree, keeping the removal of 2.
+        let h = hunk(&s, "f.txt", Side::Unstaged, 0);
+        let part = pick_lines(&h, &lines_of(&h, &["two"]), HunkAction::Discard);
+        assert!(changes_anything(&part));
+        s.run(|r| apply_hunk(r, "f.txt", &part, HunkAction::Discard));
+        assert_eq!(s.halves("f.txt").2, "one\n3\n");
+
+        // Nothing picked: nothing to do.
+        assert!(!changes_anything(&pick_lines(&h, &[], HunkAction::Stage)));
     }
 
     #[test]

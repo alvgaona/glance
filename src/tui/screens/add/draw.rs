@@ -164,16 +164,24 @@ fn draw_diff(f: &mut Frame, app: &mut App, area: Rect) {
     let len = app.view().lines.len();
     app.detail_scroll.fit(len, inner.height);
     let top = (app.detail_scroll.top() as usize).min(len);
+    let picked = app.picked_rows();
     let view = app.view();
-    // While the diff has the keys, a bar marks the hunk they work on.
+    // While the diff has the keys, a bar marks the hunk they work on; while picking
+    // lines, it marks the picked ones and `›` the cursor.
     let bar = focused.then(|| view.ranges.get(current).cloned()).flatten();
+    let accent = Style::new().fg(theme::ACCENT);
     let shown: Vec<Line> = view.lines[top..]
         .iter()
         .enumerate()
         .take(inner.height as usize)
         .map(|(n, l)| {
-            let mark = match &bar {
-                Some(r) if r.contains(&(top + n)) => Span::styled("┃ ", Style::new().fg(theme::ACCENT)),
+            let row = top + n;
+            let in_hunk = bar.as_ref().is_some_and(|r| r.contains(&row));
+            let mark = match &picked {
+                Some((cursor, _)) if *cursor == row => Span::styled("› ", accent),
+                Some((_, range)) if range.contains(&row) => Span::styled("┃ ", accent),
+                Some(_) if in_hunk => Span::styled("│ ", theme::faint()),
+                None if in_hunk => Span::styled("┃ ", accent),
                 _ => Span::raw("  "),
             };
             let mut spans = vec![mark];
@@ -188,13 +196,26 @@ fn draw_diff(f: &mut Frame, app: &mut App, area: Rect) {
 fn draw_footer(f: &mut Frame, app: &mut App, area: Rect) {
     if app.focus == Focus::Hunks {
         let staged = app.current().is_some_and(|e| e.group == Group::Staged);
+        if app.pick().is_some() {
+            let left = Line::styled("picking lines", Style::new().fg(theme::ACCENT));
+            let n = app.picked_changes();
+            let s = if n == 1 { "" } else { "s" };
+            let space = if staged { format!("unstage {n} line{s}") } else { format!("stage {n} line{s}") };
+            let mut pairs = vec![("space", space.as_str())];
+            if !staged {
+                pairs.push(("d", "discard"));
+            }
+            pairs.extend([("j/k", "move"), ("J/K", "extend"), ("esc", "cancel")]);
+            footer::draw(f, area, left, pairs);
+            return;
+        }
         let n = app.view().ranges.len();
         let left = Line::styled(format!("hunk {} of {n}", app.hunk + 1), theme::muted());
         let mut pairs = vec![("space", if staged { "unstage hunk" } else { "stage hunk" })];
         if !staged {
             pairs.push(("d", "discard hunk"));
         }
-        pairs.extend([("j/k", "hunks"), ("esc", "files"), ("q", "quit")]);
+        pairs.extend([("v", "pick lines"), ("j/k", "hunks"), ("esc", "files"), ("q", "quit")]);
         footer::draw(f, area, left, pairs);
         return;
     }

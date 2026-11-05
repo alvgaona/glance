@@ -28,6 +28,22 @@ impl View {
     }
 }
 
+/// Lines picked inside one hunk (`v`): indices into its `lines`, `anchor..=cursor`.
+/// It belongs to one entry and hunk, and lapses when either changes.
+pub(super) struct Pick {
+    entry: usize,
+    hunk: usize,
+    anchor: usize,
+    pub(super) cursor: usize,
+}
+
+impl Pick {
+    /// The picked range, changed lines and the context between them.
+    pub(super) fn range(&self) -> std::ops::RangeInclusive<usize> {
+        self.anchor.min(self.cursor)..=self.anchor.max(self.cursor)
+    }
+}
+
 /// Title rows, then the entry's half of the change, hunk by hunk.
 fn build(repo: &gix::Repository, entry: usize, e: &Entry) -> View {
     let what = match e.group {
@@ -179,13 +195,117 @@ impl App {
             no: "Cancel".into(),
             danger: true,
         };
-        self.confirm = Some((confirm, Ask::DiscardHunk { path, hunk }));
+        self.confirm = Some((confirm, Ask::DiscardHunk { path, hunk, done: "Discarded the hunk".into() }));
+    }
+
+    /// The line pick, if it still belongs to the hunk in the diff.
+    pub(super) fn pick(&self) -> Option<&Pick> {
+        self.pick.as_ref().filter(|p| self.focus == Focus::Hunks && p.entry == self.selected && p.hunk == self.hunk)
+    }
+
+    /// The picked lines as view rows (the hunk's `@@` row comes first).
+    pub(super) fn picked_rows(&mut self) -> Option<(usize, std::ops::RangeInclusive<usize>)> {
+        let (cursor, range) = self.pick().map(|p| (p.cursor, p.range()))?;
+        let i = self.hunk;
+        let start = self.view().ranges.get(i)?.start + 1;
+        Some((start + cursor, start + range.start()..=start + range.end()))
+    }
+
+    /// How many changed lines are picked.
+    pub(super) fn picked_changes(&mut self) -> usize {
+        let Some(range) = self.pick().map(Pick::range) else { return 0 };
+        let i = self.hunk;
+        let Some(h) = self.view().hunks.get(i) else { return 0 };
+        range.filter(|&j| h.lines.get(j).is_some_and(|l| l.op != Op::Context)).count()
+    }
+
+    /// `v`: starts picking lines on the hunk's first change, or stops.
+    pub(super) fn toggle_pick(&mut self) {
+        if self.pick().is_some() {
+            self.pick = None;
+            return;
+        }
+        let Some(e) = self.current() else { return };
+        if whole_file(e) {
+            self.toast = Some(Toast::new("This file goes whole: space stages all of it", theme::YELLOW));
+            return;
+        }
+        let Some((_, hunk)) = self.current_hunk() else { return };
+        let Some(first) = hunk.lines.iter().position(|l| l.op != Op::Context) else { return };
+        self.pick = Some(Pick { entry: self.selected, hunk: self.hunk, anchor: first, cursor: first });
+        self.show_pick();
+    }
+
+    /// j/k while picking: the cursor to the next changed line that way, alone; with
+    /// `extend` (J/K) the pick grows or shrinks from where it started.
+    pub(super) fn step_pick(&mut self, down: bool, extend: bool) {
+        let Some((_, hunk)) = self.current_hunk() else { return };
+        let Some(p) = self.pick.as_mut() else { return };
+        let changed = |i: &usize| hunk.lines[*i].op != Op::Context;
+        let next =
+            if down { (p.cursor + 1..hunk.lines.len()).find(changed) } else { (0..p.cursor).rev().find(changed) };
+        p.cursor = next.unwrap_or(p.cursor);
+        if !extend {
+            p.anchor = p.cursor;
+        }
+        self.show_pick();
+    }
+
+    fn show_pick(&mut self) {
+        let height = self.detail_area.height.saturating_sub(2);
+        if let Some((row, _)) = self.picked_rows() {
+            self.detail_scroll.show(row, row, height);
+        }
+    }
+
+    /// The current hunk cut down to the picked lines for `action`, and how many changed
+    /// lines that is; `None` (with a toast) when nothing changed is picked.
+    fn picked_hunk(&mut self, action: HunkAction) -> Option<(String, Hunk, usize)> {
+        let range = self.pick()?.range();
+        let (path, hunk) = self.current_hunk()?;
+        let picked: Vec<usize> = range.filter(|&i| hunk.lines[i].op != Op::Context).collect();
+        let part = stage::pick_lines(&hunk, &picked, action);
+        if !stage::changes_anything(&part) {
+            self.toast = Some(Toast::new("No changed lines picked", theme::YELLOW));
+            return None;
+        }
+        Some((path, part, picked.len()))
+    }
+
+    /// Space while picking: the picked lines into the index, or out of it.
+    pub(super) fn toggle_lines(&mut self) -> Result<()> {
+        let staged = self.current().is_some_and(|e| e.group == Group::Staged);
+        let action = if staged { HunkAction::Unstage } else { HunkAction::Stage };
+        let Some((path, part, n)) = self.picked_hunk(action) else { return Ok(()) };
+        let r = stage::apply_hunk(&self.repo, &path, &part, action);
+        self.pick = None;
+        let done = if staged { "Unstaged" } else { "Staged" };
+        self.after_hunk(r, format!("{done} {}", lines(n)))
+    }
+
+    /// d while picking: asks before throwing the picked lines away.
+    pub(super) fn ask_discard_lines(&mut self) {
+        if self.current().is_some_and(|e| e.group == Group::Staged) {
+            self.toast = Some(Toast::new("Those are staged: space unstages them first", theme::YELLOW));
+            return;
+        }
+        let Some((path, hunk, n)) = self.picked_hunk(HunkAction::Discard) else { return };
+        let confirm = Confirm {
+            title: format!("Discard {} of {path}?", lines(n)),
+            body: "They go back to what's staged.\nThe rest of the file stays as it is.".into(),
+            yes: "Discard".into(),
+            no: "Cancel".into(),
+            danger: true,
+        };
+        let done = format!("Discarded {}", lines(n));
+        self.confirm = Some((confirm, Ask::DiscardHunk { path, hunk, done }));
     }
 
     /// After a hunk write: report, reload, and stay on the same file's next hunk if it's
     /// still in the same group; otherwise back to the file list where it was.
     pub(super) fn after_hunk(&mut self, (ok, out): (bool, String), msg: String) -> Result<()> {
         self.toast = Some(if ok { Toast::new(msg, theme::GREEN) } else { Toast::new(first_lines(&out), theme::RED) });
+        self.pick = None;
         let Some((group, pos)) = self.place() else { return self.reload() };
         let path = self.current().map(|e| e.path.clone()).unwrap_or_default();
         let hunk = self.hunk;
@@ -208,4 +328,9 @@ impl App {
         }
         Ok(())
     }
+}
+
+/// "1 line", "3 lines".
+fn lines(n: usize) -> String {
+    if n == 1 { "1 line".into() } else { format!("{n} lines") }
 }

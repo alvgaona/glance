@@ -39,8 +39,28 @@ impl App {
         if self.detail_scroll.key(k, self.detail_area.height) {
             return Ok(false);
         }
+        if self.focus == Focus::Hunks && self.pick().is_some() {
+            let shift = k.modifiers.contains(KeyModifiers::SHIFT);
+            match k.code {
+                KeyCode::Down | KeyCode::Char('j') => self.step_pick(true, shift),
+                KeyCode::Up | KeyCode::Char('k') => self.step_pick(false, shift),
+                KeyCode::Char('J') => self.step_pick(true, true),
+                KeyCode::Char('K') => self.step_pick(false, true),
+                KeyCode::Char(' ') | KeyCode::Enter => self.toggle_lines()?,
+                KeyCode::Char('d') => self.ask_discard_lines(),
+                KeyCode::Char('v') | KeyCode::Esc => self.pick = None,
+                KeyCode::Char('q') => return Ok(true),
+                // Anything else leaves the pick behind and works as usual.
+                _ => {
+                    self.pick = None;
+                    return self.on_key(k);
+                }
+            }
+            return Ok(false);
+        }
         if self.focus == Focus::Hunks {
             match k.code {
+                KeyCode::Char('v') => self.toggle_pick(),
                 KeyCode::Down | KeyCode::Char('j') | KeyCode::Char('n') => self.step_hunk(1),
                 KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('N') => self.step_hunk(-1),
                 KeyCode::Home | KeyCode::Char('g') => self.step_hunk(isize::MIN / 2),

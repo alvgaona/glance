@@ -9,7 +9,7 @@ mod keys;
 
 use commit::{CommitBox, Pending};
 use draw::draw;
-use hunks::View;
+use hunks::{Pick, View};
 
 use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -52,7 +52,7 @@ enum Ask {
     /// Stage a conflicted file that still has conflict markers.
     Resolve(String),
     /// Throw away one unstaged hunk.
-    DiscardHunk { path: String, hunk: stage::Hunk },
+    DiscardHunk { path: String, hunk: stage::Hunk, done: String },
 }
 
 /// Which pane the keys work on.
@@ -150,6 +150,8 @@ struct App {
     focus: Focus,
     /// The hunk worked on while the diff has focus.
     hunk: usize,
+    /// Lines picked inside that hunk (`v`).
+    pick: Option<Pick>,
     detail_scroll: Scroll,
     detail_area: Rect,
     toast: Option<Toast>,
@@ -176,6 +178,7 @@ pub fn run(repo: gix::Repository) -> Result<()> {
         diff: None,
         focus: Focus::Files,
         hunk: 0,
+        pick: None,
         detail_scroll: Scroll::default(),
         detail_area: Rect::default(),
         toast: None,
@@ -400,9 +403,9 @@ impl App {
                 let r = stage::add(&self.repo, std::slice::from_ref(&p));
                 self.done(r, format!("Marked {p} resolved"))
             }
-            Ask::DiscardHunk { path, hunk } => {
+            Ask::DiscardHunk { path, hunk, done } => {
                 let r = stage::apply_hunk(&self.repo, &path, &hunk, stage::HunkAction::Discard);
-                self.after_hunk(r, "Discarded the hunk".into())
+                self.after_hunk(r, done)
             }
         }
     }

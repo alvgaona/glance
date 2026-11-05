@@ -546,7 +546,8 @@ fn draw(f: &mut Frame, app: &mut App) {
             Layout::horizontal([Constraint::Percentage(55), Constraint::Length(1), Constraint::Min(40)]).areas(body);
         (l, r)
     } else {
-        let rows = (app.rows.len() as u16 + 2).clamp(4, body.height / 2);
+        // Not `clamp`: it panics when a short terminal makes the upper bound the smaller one.
+        let rows = (app.rows.len() as u16 + 2).min(body.height / 2).max(4);
         let [t, _, b] =
             Layout::vertical([Constraint::Length(rows), Constraint::Length(1), Constraint::Min(5)]).areas(body);
         (t, b)

@@ -592,7 +592,8 @@ fn draw(f: &mut Frame, app: &mut App) {
     draw_header(f, app, header);
     // Wide: changes on the left, stashes and the selected one's details on the right.
     // Narrow: all three stacked.
-    let list_rows = (app.visible.len() as u16 + 4).clamp(5, body.height / 3);
+    // Not `clamp`: it panics when a short terminal makes the upper bound the smaller one.
+    let list_rows = (app.visible.len() as u16 + 4).min(body.height / 3).max(5);
     let (changes, right) = if body.width >= 110 {
         let [l, _, r] =
             Layout::horizontal([Constraint::Percentage(40), Constraint::Length(1), Constraint::Min(40)]).areas(body);

@@ -24,6 +24,13 @@ pub enum Command {
     #[command(visible_alias = "st")]
     Status,
 
+    /// Stage files on a full screen, with each file's diff.
+    ///
+    ///   gg add              full screen: space stages or unstages a file
+    ///   gg add <path>…      plain `git add`, then the short status
+    #[command(verbatim_doc_comment)]
+    Add { paths: Vec<String> },
+
     /// Commit history: full screen in a terminal, a compact list when piped.
     #[command(visible_alias = "l")]
     Log {

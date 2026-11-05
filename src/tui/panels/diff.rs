@@ -16,8 +16,6 @@ const MAX_DIFF_LINES: usize = 4000;
 
 /// A header bar per file and its diff, added lines on green and removed on red.
 pub fn patches(repo: &gix::Repository, files: &[FileStat]) -> Vec<Line<'static>> {
-    let added_bg = Color::Rgb(22, 44, 30);
-    let removed_bg = Color::Rgb(52, 24, 27);
     let mut out = Vec::new();
     let mut shown = 0;
     for f in files {
@@ -42,28 +40,32 @@ pub fn patches(repo: &gix::Repository, files: &[FileStat]) -> Vec<Line<'static>>
             out.push(Line::styled("   binary or very large file", theme::faint()));
             continue;
         };
-        for l in lines {
-            shown += 1;
-            out.push(match l {
-                PatchLine::Hunk { new_start, .. } => Line::styled(format!("   ⋯ line {new_start}"), theme::faint()),
-                PatchLine::Context { new, text, .. } => Line::from(vec![
-                    Span::styled(format!("{new:>5}  "), theme::faint()),
-                    Span::styled(text, theme::muted()),
-                ]),
-                PatchLine::Added { new, text } => Line::from(vec![
-                    Span::styled(format!("{new:>5} "), Style::new().fg(theme::GREEN)),
-                    Span::styled("+", Style::new().fg(theme::GREEN)),
-                    Span::styled(text, theme::text()),
-                ])
-                .style(Style::new().bg(added_bg)),
-                PatchLine::Removed { old, text } => Line::from(vec![
-                    Span::styled(format!("{old:>5} "), Style::new().fg(theme::RED)),
-                    Span::styled("-", Style::new().fg(theme::RED)),
-                    Span::styled(text, theme::text()),
-                ])
-                .style(Style::new().bg(removed_bg)),
-            });
-        }
+        shown += lines.len();
+        out.extend(lines.into_iter().map(line));
     }
     out
+}
+
+/// One diff line: line number, `+`/`-`, text; added lines on green, removed on red.
+pub fn line(l: PatchLine) -> Line<'static> {
+    let added_bg = Color::Rgb(22, 44, 30);
+    let removed_bg = Color::Rgb(52, 24, 27);
+    match l {
+        PatchLine::Hunk { new_start, .. } => Line::styled(format!("   ⋯ line {new_start}"), theme::faint()),
+        PatchLine::Context { new, text, .. } => {
+            Line::from(vec![Span::styled(format!("{new:>5}  "), theme::faint()), Span::styled(text, theme::muted())])
+        }
+        PatchLine::Added { new, text } => Line::from(vec![
+            Span::styled(format!("{new:>5} "), Style::new().fg(theme::GREEN)),
+            Span::styled("+", Style::new().fg(theme::GREEN)),
+            Span::styled(text, theme::text()),
+        ])
+        .style(Style::new().bg(added_bg)),
+        PatchLine::Removed { old, text } => Line::from(vec![
+            Span::styled(format!("{old:>5} "), Style::new().fg(theme::RED)),
+            Span::styled("-", Style::new().fg(theme::RED)),
+            Span::styled(text, theme::text()),
+        ])
+        .style(Style::new().bg(removed_bg)),
+    }
 }

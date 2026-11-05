@@ -7,7 +7,7 @@ use anyhow::Result;
 use gix::bstr::BStr;
 
 use super::diff::{self, PatchLine};
-use super::run::{args, git};
+use super::run::{args, git_in, top};
 
 /// Which half of a change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,44 +60,60 @@ pub fn patch(repo: &gix::Repository, path: &str, from: Option<&str>, side: Side)
     Ok(diff::patch(&old, &new, 3))
 }
 
-fn with_paths(cmd: &[&str], paths: &[String]) -> Vec<String> {
+// The writes run in the repository's root folder: paths come from status, so they're
+// relative to it, wherever gg was started.
+
+fn run(repo: &gix::Repository, cmd: &[&str], paths: Option<&[String]>) -> (bool, String) {
     let mut a = args(cmd);
-    a.push("--".into());
+    if let Some(paths) = paths {
+        a.push("--".into());
+        a.extend(paths.iter().map(|p| top(p)));
+    }
+    git_in(repo.workdir(), &a)
+}
+
+/// No commit yet: there's no HEAD to unstage back to.
+fn unborn(repo: &gix::Repository) -> bool {
+    repo.head_id().is_err()
+}
+
+/// `gg add <paths>`: plain `git add`, paths as typed (from the current folder).
+pub fn add_typed(paths: &[String]) -> (bool, String) {
+    let mut a = args(&["add", "--"]);
     a.extend(paths.iter().cloned());
-    a
+    git_in(None, &a)
 }
 
 /// Stages whole files: changes, new files and deletions.
-pub fn add(paths: &[String]) -> (bool, String) {
-    git(&with_paths(&["add", "--all"], paths))
+pub fn add(repo: &gix::Repository, paths: &[String]) -> (bool, String) {
+    run(repo, &["add", "--all"], Some(paths))
 }
 
 /// Takes whole files out of the index again; the working tree keeps them.
-/// `unborn`: nothing is committed yet, so there's no HEAD to go back to.
-pub fn unstage(paths: &[String], unborn: bool) -> (bool, String) {
-    if unborn {
-        git(&with_paths(&["rm", "--cached", "-r", "-q"], paths))
+pub fn unstage(repo: &gix::Repository, paths: &[String]) -> (bool, String) {
+    if unborn(repo) {
+        run(repo, &["rm", "--cached", "-r", "-q"], Some(paths))
     } else {
-        git(&with_paths(&["restore", "--staged"], paths))
+        run(repo, &["restore", "--staged"], Some(paths))
     }
 }
 
-pub fn add_all() -> (bool, String) {
-    git(&args(&["add", "--all"]))
+pub fn add_all(repo: &gix::Repository) -> (bool, String) {
+    run(repo, &["add", "--all"], None)
 }
 
-pub fn unstage_all(unborn: bool) -> (bool, String) {
-    if unborn { git(&args(&["rm", "--cached", "-r", "-q", "."])) } else { git(&args(&["reset", "-q"])) }
+pub fn unstage_all(repo: &gix::Repository) -> (bool, String) {
+    if unborn(repo) { run(repo, &["rm", "--cached", "-r", "-q", "."], None) } else { run(repo, &["reset", "-q"], None) }
 }
 
 /// Throws away unstaged changes to tracked files: back to what's staged.
-pub fn discard(paths: &[String]) -> (bool, String) {
-    git(&with_paths(&["restore", "--worktree"], paths))
+pub fn discard(repo: &gix::Repository, paths: &[String]) -> (bool, String) {
+    run(repo, &["restore", "--worktree"], Some(paths))
 }
 
 /// Deletes untracked files or folders (never ignored ones).
-pub fn delete_untracked(paths: &[String]) -> (bool, String) {
-    git(&with_paths(&["clean", "-f", "-d", "-q"], paths))
+pub fn delete_untracked(repo: &gix::Repository, paths: &[String]) -> (bool, String) {
+    run(repo, &["clean", "-f", "-d", "-q"], Some(paths))
 }
 
 #[cfg(test)]
@@ -131,13 +147,9 @@ mod tests {
                 .success();
             assert!(ok, "git {a:?}");
         }
-        /// Runs one of our writes inside the repo.
-        fn run(&self, f: impl FnOnce() -> (bool, String)) {
-            let here = std::env::current_dir().unwrap();
-            let _guard = CWD.lock().unwrap();
-            std::env::set_current_dir(&self.0).unwrap();
-            let (ok, out) = f();
-            std::env::set_current_dir(here).unwrap();
+        /// Runs one of our writes on the repo, opened afresh.
+        fn run(&self, f: impl FnOnce(&gix::Repository) -> (bool, String)) {
+            let (ok, out) = f(&self.repo());
             assert!(ok, "{out}");
         }
         fn write(&self, path: &str, text: &str) {
@@ -161,9 +173,6 @@ mod tests {
             let _ = std::fs::remove_dir_all(&self.0);
         }
     }
-
-    /// Tests changing the working directory take turns.
-    static CWD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[test]
     fn reads_both_halves() {
@@ -189,28 +198,32 @@ mod tests {
     fn stages_unstages_and_discards() {
         let s = Scratch::new("writes");
         s.write("a.txt", "one\n");
+        let a = || vec!["a.txt".to_string()];
         // Unborn: unstaging can't go back to HEAD.
-        s.run(|| add(&["a.txt".into()]));
+        s.run(|r| add(r, &a()));
         assert_eq!(s.halves("a.txt").1, "one\n");
-        s.run(|| unstage(&["a.txt".into()], true));
+        s.run(|r| unstage(r, &a()));
         assert_eq!(s.halves("a.txt").1, "");
         assert_eq!(s.halves("a.txt").2, "one\n");
+        s.run(add_all);
+        s.run(unstage_all);
+        assert_eq!(s.halves("a.txt").1, "");
 
         s.run(add_all);
         s.git(&["commit", "-q", "-m", "one"]);
         s.write("a.txt", "two\n");
-        s.run(|| add(&["a.txt".into()]));
-        s.run(|| unstage(&["a.txt".into()], false));
+        s.run(|r| add(r, &a()));
+        s.run(|r| unstage(r, &a()));
         assert_eq!(s.halves("a.txt"), ("one\n".into(), "one\n".into(), "two\n".into()));
 
-        s.run(|| discard(&["a.txt".into()]));
+        s.run(|r| discard(r, &a()));
         assert_eq!(s.halves("a.txt").2, "one\n");
 
         // Deletions stage too.
         std::fs::remove_file(s.0.join("a.txt")).unwrap();
-        s.run(|| add(&["a.txt".into()]));
+        s.run(|r| add(r, &a()));
         assert_eq!(s.halves("a.txt"), ("one\n".into(), String::new(), String::new()));
-        s.run(|| unstage_all(false));
+        s.run(unstage_all);
         assert_eq!(s.halves("a.txt").1, "one\n");
 
         // Untracked files and folders go; ignored ones stay.
@@ -219,8 +232,19 @@ mod tests {
         s.write("loose.txt", "x\n");
         s.write(".gitignore", "kept.log\n");
         s.write("kept.log", "x\n");
-        s.run(|| delete_untracked(&["dir/".into(), "loose.txt".into()]));
+        s.run(|r| delete_untracked(r, &["dir/".into(), "loose.txt".into()]));
         assert!(!s.0.join("dir").exists() && !s.0.join("loose.txt").exists());
         assert!(s.0.join("kept.log").exists());
+    }
+
+    #[test]
+    fn names_are_taken_literally() {
+        let s = Scratch::new("literal");
+        s.write("a*.txt", "star\n");
+        s.write("ab.txt", "plain\n");
+        s.run(|r| add(r, &["a*.txt".into()]));
+        assert_eq!(s.halves("a*.txt").1, "star\n");
+        // Not matched by the `*`.
+        assert_eq!(s.halves("ab.txt").1, "");
     }
 }

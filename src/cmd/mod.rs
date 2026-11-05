@@ -1,6 +1,7 @@
 //! One module per subcommand: read what it needs from `git`, then print it or open its
 //! full screen. The only layer that knows both `print` and `tui`.
 
+pub mod add;
 pub mod branches;
 pub mod log;
 pub mod rebase;

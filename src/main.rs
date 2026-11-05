@@ -26,6 +26,7 @@ fn main() -> Result<()> {
     let paint = print::Paint::detect(cli.color);
     match cli.command {
         Command::Status => cmd::status::run(&paint),
+        Command::Add { paths } => cmd::add::run(&paths, &paint),
         Command::Log { count, interactive, all } => cmd::log::run(count, interactive, all, &paint),
         Command::Branches => cmd::branches::run(&paint),
         Command::Stash => cmd::stash::run(&paint),

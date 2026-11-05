@@ -19,9 +19,8 @@ pub mod repos;
 // The writes are only made from the full-screen views.
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub mod run;
-// Staging is only done from the interactive view.
-// TODO(gg add step 3): back to `cfg_attr(not(feature = "tui"), …)` once the screen uses it.
-#[allow(dead_code)]
+// Staging is only done from the interactive view (but `gg add <path>` is everywhere).
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub mod stage;
 // Files and details are only shown by the interactive view.
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]

@@ -122,6 +122,15 @@ impl Paint {
     pub fn dim(&self) -> Style {
         self.pick(Style::new().dimmed())
     }
+    /// `↑2` green and `↓1` red, each only when not zero.
+    pub fn arrows(&self, ahead: usize, behind: usize) -> Vec<String> {
+        let up = (ahead > 0)
+            .then(|| owo_colors::OwoColorize::style(&format!("↑{ahead}"), self.tone(Tone::Green)).to_string());
+        let down = (behind > 0)
+            .then(|| owo_colors::OwoColorize::style(&format!("↓{behind}"), self.tone(Tone::Red)).to_string());
+        up.into_iter().chain(down).collect()
+    }
+
     /// Current branch name.
     pub fn head(&self) -> Style {
         self.pick(Style::new().bold().cyan())

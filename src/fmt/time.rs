@@ -12,7 +12,8 @@ pub fn relative_time(then: i64, now: i64) -> String {
         3600..86400 => format!("{}h ago", s / 3600),
         86400..604800 => format!("{}d ago", s / 86400),
         604800..2_592_000 => format!("{}w ago", s / 604800),
-        2_592_000..31_536_000 => format!("{}mo ago", s / 2_592_000),
+        // Days 360 to 364 would be "12mo".
+        2_592_000..31_536_000 => format!("{}mo ago", (s / 2_592_000).min(11)),
         _ => format!("{}y ago", s / 31_536_000),
     }
 }
@@ -26,5 +27,6 @@ mod tests {
         assert_eq!(relative_time(100, 130), "now");
         assert_eq!(relative_time(0, 7200), "2h ago");
         assert_eq!(relative_time(50, 0), "now");
+        assert_eq!(relative_time(0, 362 * 86400), "11mo ago");
     }
 }

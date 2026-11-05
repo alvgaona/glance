@@ -1,5 +1,6 @@
 //! `gg wt --list`: one line per worktree.
 
+use crate::fmt::{pad, width};
 use owo_colors::OwoColorize;
 
 use super::{Paint, Tone};
@@ -11,7 +12,7 @@ pub fn print(list: &[Worktree], p: &Paint) {
 
 pub fn lines(list: &[Worktree], p: &Paint) -> Vec<String> {
     let paths: Vec<String> = list.iter().map(|w| w.path.display().to_string()).collect();
-    let path_w = paths.iter().map(|s| s.chars().count()).max().unwrap_or(0);
+    let path_w = paths.iter().map(|s| width(s)).max().unwrap_or(0);
     list.iter()
         .zip(&paths)
         .map(|(w, path)| {
@@ -22,8 +23,8 @@ pub fn lines(list: &[Worktree], p: &Paint) -> Vec<String> {
             };
             let tags = [w.locked.as_ref().map(|_| "locked"), w.prunable.as_ref().map(|_| "prunable")];
             format!(
-                "{:<path_w$}  {}  {}",
-                path,
+                "{path}{}  {}  {}",
+                pad(path, path_w),
                 branch.style(p.tone(if w.branch.is_some() { Tone::Accent } else { Tone::Muted })),
                 tags.into_iter().flatten().collect::<Vec<_>>().join(" ").style(p.tone(Tone::Yellow))
             )

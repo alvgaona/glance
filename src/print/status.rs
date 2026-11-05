@@ -3,7 +3,7 @@
 use owo_colors::OwoColorize;
 
 use super::{Paint, Tone};
-use crate::fmt::change_letter;
+use crate::fmt::{change_letter, pad, width};
 use crate::git::diff::Size;
 use crate::git::status::{ChangeKind, FileChange, Status};
 
@@ -32,8 +32,8 @@ pub fn lines(st: &Status, p: &Paint) -> Vec<String> {
     let rows: Vec<&FileChange> = st.staged.iter().chain(&st.unstaged).collect();
     let name_w = rows
         .iter()
-        .map(|f| display_name(f).chars().count())
-        .chain(st.conflicted.iter().chain(&st.untracked).map(|s| s.chars().count()))
+        .map(|f| width(&display_name(f)))
+        .chain(st.conflicted.iter().chain(&st.untracked).map(|s| width(s)))
         .max()
         .unwrap_or(0);
     let (add_w, del_w, biggest) = rows.iter().filter_map(|f| f.size).fold((0, 0, 0u32), |(a, d, m), s| match s {
@@ -101,11 +101,8 @@ fn header(st: &Status, p: &Paint) -> Vec<String> {
         if up.ahead == 0 && up.behind == 0 {
             s += &format!(" {}", "up to date".style(p.tone(Tone::Faint)));
         }
-        if up.ahead > 0 {
-            s += &format!(" {}", format!("↑{}", up.ahead).style(p.tone(Tone::Green)));
-        }
-        if up.behind > 0 {
-            s += &format!(" {}", format!("↓{}", up.behind).style(p.tone(Tone::Red)));
+        for a in p.arrows(up.ahead, up.behind) {
+            s += &format!(" {a}");
         }
         parts.push(s);
     } else if st.branch.is_some() && st.head.is_some() {
@@ -166,7 +163,7 @@ fn file_row(f: &FileChange, c: &Columns, p: &Paint) -> String {
         ),
         None => path_text(&f.path, if f.kind == ChangeKind::Deleted { Tone::Muted } else { Tone::Text }, p),
     };
-    let pad = " ".repeat(c.name_w.saturating_sub(display_name(f).chars().count()));
+    let pad = pad(&display_name(f), c.name_w);
 
     let mut tail = String::new();
     match f.size {

@@ -213,6 +213,50 @@ pub fn delete_untracked(repo: &gix::Repository, paths: &[String]) -> (bool, Stri
     run(repo, &["clean", "-f", "-d", "-q"], Some(paths))
 }
 
+/// Which sides of a conflicted file have it: the merge base, HEAD ("ours") and the
+/// incoming side ("theirs"). One missing means that side deleted it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Conflict {
+    pub base: bool,
+    pub ours: bool,
+    pub theirs: bool,
+}
+
+impl Conflict {
+    /// Both sides have it, so the file holds conflict markers to fix.
+    pub fn in_content(&self) -> bool {
+        self.ours && self.theirs
+    }
+}
+
+/// Every conflicted path in the index, and its kind.
+pub fn conflicts(repo: &gix::Repository) -> Result<std::collections::HashMap<String, Conflict>> {
+    use gix::index::entry::Stage;
+    let index = repo.index_or_empty()?;
+    let mut out = std::collections::HashMap::new();
+    for e in index.entries() {
+        let stage = e.stage();
+        if stage == Stage::Unconflicted {
+            continue;
+        }
+        let path = e.path(&index).to_string();
+        let c = out.entry(path).or_insert(Conflict { base: false, ours: false, theirs: false });
+        match stage {
+            Stage::Base => c.base = true,
+            Stage::Ours => c.ours = true,
+            Stage::Theirs => c.theirs = true,
+            Stage::Unconflicted => {}
+        }
+    }
+    Ok(out)
+}
+
+/// Deletes files from the index and the working tree; for a conflict, that's taking
+/// the side that deleted it.
+pub fn remove(repo: &gix::Repository, paths: &[String]) -> (bool, String) {
+    run(repo, &["rm", "-q", "--ignore-unmatch"], Some(paths))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -450,5 +494,42 @@ mod tests {
         assert_eq!(s.halves("a*.txt").1, "star\n");
         // Not matched by the `*`.
         assert_eq!(s.halves("ab.txt").1, "");
+    }
+
+    #[test]
+    fn reads_and_resolves_conflicts() {
+        let s = Scratch::new("conflicts");
+        s.write("both.txt", "base\n");
+        s.write("they-del.txt", "base\n");
+        s.write("we-del.txt", "base\n");
+        s.git(&["add", "."]);
+        s.git(&["commit", "-q", "-m", "base"]);
+        s.git(&["switch", "-q", "-c", "side"]);
+        s.write("both.txt", "side\n");
+        s.write("we-del.txt", "side\n");
+        s.git(&["rm", "-q", "they-del.txt"]);
+        s.git(&["commit", "-q", "-a", "-m", "side"]);
+        s.git(&["switch", "-q", "main"]);
+        s.write("both.txt", "main\n");
+        s.write("they-del.txt", "main\n");
+        s.git(&["rm", "-q", "we-del.txt"]);
+        s.git(&["commit", "-q", "-a", "-m", "main"]);
+        // Fails: that's the conflict.
+        let _ = Command::new("git").args(["merge", "-q", "side"]).current_dir(&s.0).output();
+
+        let c = conflicts(&s.repo()).unwrap();
+        assert_eq!(c.len(), 3);
+        assert_eq!(c["both.txt"], Conflict { base: true, ours: true, theirs: true });
+        assert_eq!(c["they-del.txt"], Conflict { base: true, ours: true, theirs: false });
+        assert_eq!(c["we-del.txt"], Conflict { base: true, ours: false, theirs: true });
+        assert!(c["both.txt"].in_content() && !c["we-del.txt"].in_content());
+
+        // Keep one, take the other's deletion.
+        s.run(|r| add(r, &["they-del.txt".into()]));
+        s.run(|r| remove(r, &["we-del.txt".into()]));
+        let c = conflicts(&s.repo()).unwrap();
+        assert_eq!(c.keys().collect::<Vec<_>>(), ["both.txt"]);
+        assert_eq!(s.halves("they-del.txt").1, "main\n");
+        assert!(!s.0.join("we-del.txt").exists());
     }
 }

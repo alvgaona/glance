@@ -30,6 +30,21 @@ pub fn git_on_terminal(dir: Option<&std::path::Path>, args: &[String]) -> (bool,
     }
 }
 
+/// Opens `path` (from the repository root) in git's editor (core.editor, $VISUAL,
+/// $EDITOR, vi), on the terminal; started the way git starts it, through the shell.
+pub fn edit(repo: &gix::Repository, path: &str) -> (bool, String) {
+    let dir = repo.workdir();
+    let (ok, editor) = git_in(dir, &args(&["var", "GIT_EDITOR"]));
+    if !ok {
+        return (false, editor);
+    }
+    let script = format!("{} \"$@\"", editor.trim());
+    match crate::process::run_on_terminal("sh", &args(&["-c", &script, "sh", path]), dir) {
+        Ok(out) => (out.ok, out.text()),
+        Err(e) => (false, format!("could not run the editor: {e}")),
+    }
+}
+
 /// A path from the repository root, as a pathspec that means exactly that file even
 /// when gg runs in a subfolder or the name has `*` in it.
 pub fn top(path: &str) -> String {

@@ -47,7 +47,7 @@ impl Pick {
 /// Title rows, then the entry's half of the change, hunk by hunk.
 fn build(repo: &gix::Repository, entry: usize, e: &Entry) -> View {
     let what = match e.group {
-        Group::Conflicts => "conflicted: the file as it is now",
+        Group::Conflicts => super::conflict::what(e.conflict),
         Group::Staged => "staged",
         Group::Changes => "not staged",
         Group::Untracked => "new, not tracked yet",
@@ -68,6 +68,10 @@ fn build(repo: &gix::Repository, entry: usize, e: &Entry) -> View {
 
     if e.is_folder() {
         view.lines.push(Line::styled("A new folder: space stages everything in it.", theme::muted()));
+        return view;
+    }
+    if e.group == Group::Conflicts {
+        view.lines.extend(super::conflict::body(repo, e));
         return view;
     }
     match stage::hunks(repo, &e.path, e.from.as_deref(), e.group.side()) {
@@ -112,7 +116,7 @@ impl App {
     pub(super) fn enter_hunks(&mut self) {
         let Some(e) = self.current() else { return };
         let why = match e.group {
-            Group::Conflicts => Some("Fix the conflict in the file, then space marks it resolved"),
+            Group::Conflicts => Some("A conflict is fixed in the file: e opens it, then space marks it resolved"),
             _ if e.is_folder() => Some("A new folder: space stages all of it"),
             _ => None,
         };

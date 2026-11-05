@@ -126,6 +126,9 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 let mut spans =
                     vec![if selected { Span::styled("┃ ", Style::new().fg(bar)) } else { Span::raw("  ") }];
                 spans.extend(changes::row(&e.item()).spans);
+                if e.group == Group::Conflicts {
+                    spans.push(Span::styled(format!("  {}", super::conflict::what(e.conflict)), theme::faint()));
+                }
                 let line = Line::from(spans);
                 if selected { line.style(Style::new().bg(theme::ELEMENT)) } else { line }
             }
@@ -219,11 +222,17 @@ fn draw_footer(f: &mut Frame, app: &mut App, area: Rect) {
         footer::draw(f, area, left, pairs);
         return;
     }
-    let toggle = match app.current().map(|e| e.group) {
-        Some(Group::Staged) => "unstage",
-        Some(Group::Conflicts) => "resolved",
-        _ => "stage",
-    };
+    if let Some(c) = app.current().filter(|e| e.group == Group::Conflicts).map(|e| e.conflict) {
+        let mut pairs = match c {
+            Some(c) if !c.ours && !c.theirs => vec![("space", "remove")],
+            Some(c) if !c.in_content() => vec![("space", "keep"), ("d", "delete")],
+            _ => vec![("space", "resolved")],
+        };
+        pairs.extend([("e", "edit"), ("j/k", "files"), ("ctrl+p", "commands"), ("q", "quit")]);
+        footer::draw(f, area, Line::default(), pairs);
+        return;
+    }
+    let toggle = if app.current().is_some_and(|e| e.group == Group::Staged) { "unstage" } else { "stage" };
     let pairs = if app.entries.is_empty() {
         vec![("ctrl+r", "reload"), ("q", "quit")]
     } else {

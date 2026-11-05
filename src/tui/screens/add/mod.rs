@@ -3,6 +3,7 @@
 //! Writes go through `git::stage`.
 
 mod commit;
+mod conflict;
 mod draw;
 mod hunks;
 mod keys;
@@ -22,7 +23,9 @@ use ratatui::{
 };
 
 use crate::git::diff::Size;
-use crate::git::stage::{self, Side};
+use std::collections::HashMap;
+
+use crate::git::stage::{self, Conflict, Side};
 use crate::git::status::{ChangeKind, FileChange, Status};
 use crate::tui::app::{self, Flow, Screen};
 use crate::tui::kit::{self, Command, Confirm, Palette, PaletteEvent, Scroll, Toast, footer, list};
@@ -38,6 +41,7 @@ enum Cmd {
     StageAll,
     UnstageAll,
     Discard,
+    Edit,
     Copy,
     Reload,
     Quit,
@@ -51,6 +55,8 @@ enum Ask {
     Delete(String),
     /// Stage a conflicted file that still has conflict markers.
     Resolve(String),
+    /// Take the deletion in a delete/modify conflict.
+    Remove(String),
     /// Throw away one unstaged hunk.
     DiscardHunk { path: String, hunk: stage::Hunk, done: String },
 }
@@ -94,15 +100,17 @@ struct Entry {
     from: Option<String>,
     kind: Option<ChangeKind>,
     size: Option<Size>,
+    /// For a conflicted file: which sides still have it.
+    conflict: Option<Conflict>,
 }
 
 impl Entry {
     fn change(group: Group, c: &FileChange) -> Self {
-        Entry { group, path: c.path.clone(), from: c.from.clone(), kind: Some(c.kind), size: c.size }
+        Entry { group, path: c.path.clone(), from: c.from.clone(), kind: Some(c.kind), size: c.size, conflict: None }
     }
 
     fn bare(group: Group, path: &str) -> Self {
-        Entry { group, path: path.to_string(), from: None, kind: None, size: None }
+        Entry { group, path: path.to_string(), from: None, kind: None, size: None, conflict: None }
     }
 
     fn item(&self) -> changes::Item<'_> {
@@ -123,8 +131,12 @@ impl Entry {
     }
 }
 
-fn entries(st: &Status) -> Vec<Entry> {
-    let mut out: Vec<Entry> = st.conflicted.iter().map(|p| Entry::bare(Group::Conflicts, p)).collect();
+fn entries(st: &Status, conflicts: &HashMap<String, Conflict>) -> Vec<Entry> {
+    let mut out: Vec<Entry> = st
+        .conflicted
+        .iter()
+        .map(|p| Entry { conflict: conflicts.get(p).copied(), ..Entry::bare(Group::Conflicts, p) })
+        .collect();
     out.extend(st.staged.iter().map(|c| Entry::change(Group::Staged, c)));
     // A conflicted path also shows as unstaged; once is enough.
     out.extend(
@@ -162,6 +174,8 @@ struct App {
     draft: Option<String>,
     /// A commit to run once the screen steps aside.
     pending: Option<Pending>,
+    /// A file to open in the editor once the screen steps aside.
+    editing: Option<String>,
     repo_name: String,
 }
 
@@ -187,6 +201,7 @@ pub fn run(repo: gix::Repository) -> Result<()> {
         commit: None,
         draft: None,
         pending: None,
+        editing: None,
     };
     app.reload()?;
     // Start on the first file not staged yet: that's usually the next thing to look at.
@@ -203,7 +218,7 @@ impl Screen for App {
     fn key(&mut self, k: KeyEvent) -> Result<Flow<()>> {
         Ok(if self.on_key(k)? {
             Flow::Done(())
-        } else if self.pending.is_some() {
+        } else if self.pending.is_some() || self.editing.is_some() {
             Flow::Outside
         } else {
             Flow::Stay
@@ -216,7 +231,8 @@ impl Screen for App {
         &mut self.toast
     }
     fn outside(&mut self) -> Result<()> {
-        self.commit_outside()
+        self.commit_outside()?;
+        self.edit_outside()
     }
 }
 
@@ -229,6 +245,7 @@ fn commands() -> Vec<Command<Cmd>> {
         Command { label: "Stage everything", keys: "a", action: Cmd::StageAll },
         Command { label: "Unstage everything", keys: "u", action: Cmd::UnstageAll },
         Command { label: "Discard changes to file", keys: "d", action: Cmd::Discard },
+        Command { label: "Open file in the editor", keys: "e", action: Cmd::Edit },
         Command { label: "Copy path", keys: "y", action: Cmd::Copy },
         Command { label: "Reload", keys: "ctrl+r", action: Cmd::Reload },
         Command { label: "Quit", keys: "q", action: Cmd::Quit },
@@ -239,7 +256,8 @@ impl App {
     fn reload(&mut self) -> Result<()> {
         self.repo = gix::open(self.repo.git_dir())?;
         self.st = crate::git::status::read(&self.repo, true)?;
-        self.entries = entries(&self.st);
+        let conflicts = if self.st.conflicted.is_empty() { Default::default() } else { stage::conflicts(&self.repo)? };
+        self.entries = entries(&self.st, &conflicts);
         self.selected = self.selected.min(self.entries.len().saturating_sub(1));
         self.diff = None;
         Ok(())
@@ -304,24 +322,7 @@ impl App {
                 let r = stage::unstage(&self.repo, &paths);
                 self.done(r, format!("Unstaged {path}"))
             }
-            Group::Conflicts if has_markers(&self.repo, &path) => {
-                self.confirm = Some((
-                    Confirm {
-                        title: format!("Mark {path} resolved?"),
-                        body: "It still has conflict markers (<<<<<<<).\nStaged as it is, they'd be committed too."
-                            .into(),
-                        yes: "Stage anyway".into(),
-                        no: "Cancel".into(),
-                        danger: true,
-                    },
-                    Ask::Resolve(path),
-                ));
-                Ok(())
-            }
-            Group::Conflicts => {
-                let r = stage::add(&self.repo, &paths);
-                self.done(r, format!("Marked {path} resolved"))
-            }
+            Group::Conflicts => self.resolve(),
             Group::Changes | Group::Untracked => {
                 let r = stage::add(&self.repo, &paths);
                 self.done(r, format!("Staged {path}"))
@@ -337,10 +338,7 @@ impl App {
                 self.toast = Some(Toast::new("That's staged: space unstages it first", theme::YELLOW));
                 return;
             }
-            Group::Conflicts => {
-                self.toast = Some(Toast::new("Conflicts are resolved by editing the file", theme::YELLOW));
-                return;
-            }
+            Group::Conflicts => return self.ask_remove(),
             Group::Untracked => (
                 Confirm {
                     title: format!("Delete {path}?"),
@@ -402,6 +400,10 @@ impl App {
             Ask::Resolve(p) => {
                 let r = stage::add(&self.repo, std::slice::from_ref(&p));
                 self.done(r, format!("Marked {p} resolved"))
+            }
+            Ask::Remove(p) => {
+                let r = stage::remove(&self.repo, std::slice::from_ref(&p));
+                self.done(r, format!("Deleted {p}"))
             }
             Ask::DiscardHunk { path, hunk, done } => {
                 let r = stage::apply_hunk(&self.repo, &path, &hunk, stage::HunkAction::Discard);

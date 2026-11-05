@@ -74,6 +74,7 @@ impl App {
                 KeyCode::Char('p') if ctrl => self.palette = Some(Palette::new(commands())),
                 KeyCode::Char(':') => self.palette = Some(Palette::new(commands())),
                 KeyCode::Char('y') => return self.run(Cmd::Copy),
+                KeyCode::Char('e') => self.ask_edit(),
                 KeyCode::Char('c') => self.open_commit(false),
                 KeyCode::Char('C') => self.open_commit(true),
                 _ => {}
@@ -112,6 +113,7 @@ impl App {
             KeyCode::Char('u') => Cmd::UnstageAll,
             KeyCode::Char('d') => Cmd::Discard,
             KeyCode::Char('y') => Cmd::Copy,
+            KeyCode::Char('e') => Cmd::Edit,
             KeyCode::Char('c') => Cmd::Commit,
             KeyCode::Char('C') => Cmd::Amend,
             KeyCode::Esc | KeyCode::Char('q') => Cmd::Quit,
@@ -129,6 +131,7 @@ impl App {
             Cmd::Commit => self.open_commit(false),
             Cmd::Amend => self.open_commit(true),
             Cmd::Discard => self.ask_discard(),
+            Cmd::Edit => self.ask_edit(),
             Cmd::StageAll => {
                 let n = self.entries.iter().filter(|e| e.group != Group::Staged).count();
                 if n == 0 {

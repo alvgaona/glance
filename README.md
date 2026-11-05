@@ -30,17 +30,24 @@ rebase) should be obvious, quick, and hard to get wrong.
 ## Install
 
 ```sh
-cargo install glance-git          # builds from source; the command is `glance`
+cargo install glance-git          # builds from source, the command is `glance`
 cargo binstall glance-git         # downloads a release binary instead
 ```
 
 Or download a binary for macOS or Linux from the
 [releases](https://github.com/alvgaona/glance/releases).
 
-glance needs `git`. Optional: [`gh`](https://cli.github.com) shows pull request
-status in `glance branches`; [`fzf`](https://github.com/junegunn/fzf) picks where
-`glance rebase -p` starts, with [`delta`](https://github.com/dandavison/delta) for its
-previews when you have it.
+### Dependencies
+
+| Tool | | Used for |
+| --- | --- | --- |
+| [`git`](https://git-scm.com) | required | every change glance makes (stage, commit, fetch, rebase…) |
+| [`gh`](https://cli.github.com) | optional | pull request status and links in `glance branches` |
+| [`fzf`](https://github.com/junegunn/fzf) | optional | picking where `glance rebase -p` starts |
+| [`delta`](https://github.com/dandavison/delta) | optional | nicer diffs in the `fzf` previews |
+
+Without an optional tool, only the feature that uses it is missing. Copying with `y`
+works on macOS only for now.
 
 Like a shorter name? `alias gg=glance`.
 
@@ -49,12 +56,12 @@ Like a shorter name? `alias gg=glance`.
 | Command | Alias | What it does |
 | --- | --- | --- |
 | `glance status` | `st` | Branch, upstream and changed files, grouped. Printed, like `git status` but easier to scan. |
-| `glance add` | | Stage on a full screen: files next to their diff; stage files, hunks or single lines; commit and amend; resolve conflicts. `glance add <path>…` stages directly. |
+| `glance add` | | Stage on a full screen, with each file next to its diff. Stage files, hunks or single lines, commit and amend, resolve conflicts. `glance add <path>…` stages directly. |
 | `glance log` | `l` | Commit history with details and refs. Full screen in a terminal, a compact list when piped. |
 | `glance branches` | `br` | Local and remote branches by last commit, with ahead/behind, merged or gone, and pull request status. |
-| `glance stash` | `sh` | Browse stashes with their changes; apply, pop, drop, branch; stash picked files. |
-| `glance worktrees` | `wt` | Every worktree; add, remove, prune, lock. `cd "$(glance wt)"` jumps to one. |
-| `glance remote` | | Remotes and where they point; add, rename, remove, set URLs, fetch. |
+| `glance stash` | `sh` | Browse stashes with their changes. Apply, pop, drop, turn one into a branch, or stash just the files you pick. |
+| `glance worktrees` | `wt` | Every worktree at once. Add, remove, prune, lock. `cd "$(glance wt)"` jumps to one. |
+| `glance remote` | | Remotes and where they point. Add, rename, remove, set URLs, fetch. |
 | `glance repos` | | Every repository in a folder, one line each: branch, last commit, merges or rebases in progress, changes, upstream, stashes. |
 | `glance rebase` | `rb` | Interactive rebase with a visual todo editor instead of a text file. |
 
@@ -83,7 +90,8 @@ asks first.
 | --- | --- |
 | `/` | search commits |
 | `tab` | show or hide details |
-| `y` | copy the commit id; `enter` copies and quits |
+| `y` | copy the commit id |
+| `enter` | copy the commit id and quit |
 
 **`glance branches`**
 
@@ -92,7 +100,8 @@ asks first.
 | `enter` | check out |
 | `r` | rename |
 | `d` / `D` | delete locally / on the remote |
-| `space`, `m` | select; select every merged or gone branch |
+| `space` | select a branch |
+| `m` | select every merged or gone branch |
 | `f` | fetch all remotes and prune |
 | `a` | show remote branches |
 | `o` | open the pull request |

@@ -124,3 +124,40 @@ fn connect(cells: &mut [Cell], from: usize, to: usize, end: char) {
     }
     cells[2 * to] = Cell { ch: end, lane: to };
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn commit(n: u8, parents: &[u8]) -> Commit {
+        let oid = |n: u8| ObjectId::from_bytes_or_panic(&[n; 20]);
+        Commit {
+            oid: oid(n),
+            id: n.to_string(),
+            parents: parents.iter().map(|&p| oid(p)).collect(),
+            summary: String::new(),
+            author: String::new(),
+            time: 0,
+            is_merge: parents.len() > 1,
+            refs: Vec::new(),
+        }
+    }
+
+    fn drawn(commits: &[Commit]) -> Vec<String> {
+        layout(commits)
+            .iter()
+            .map(|r| match r {
+                Row::Commit { cells, .. } | Row::Edge { cells } => {
+                    cells.iter().map(|c| c.ch).collect::<String>().trim_end().to_string()
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn octopus_merge() {
+        // 4 merges 1, 2 and 3, which all come from 0.
+        let commits = [commit(4, &[1, 2, 3]), commit(1, &[0]), commit(2, &[0]), commit(3, &[0]), commit(0, &[])];
+        assert_eq!(drawn(&commits), ["●", "├─┬─╮", "● │ │", "│ ● │", "│ │ ●", "●─┴─╯"]);
+    }
+}

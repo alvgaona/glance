@@ -75,3 +75,15 @@ fn first_hash(line: &str) -> Option<&str> {
     line.split(|c: char| !c.is_ascii_hexdigit())
         .find(|w| w.len() >= 7 && w.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn finds_the_hash_after_the_graph_and_colours() {
+        let line = "\x1b[33m│\x1b[0m ● \x1b[33m1a2b3c4\x1b[0m  2h ago  Ana  fix: abc";
+        assert_eq!(super::first_hash(line), Some("1a2b3c4"));
+        // "abc" and "2h" are too short; a connector row has none.
+        assert_eq!(super::first_hash("├─╮"), None);
+        assert_eq!(super::first_hash("● deadbee"), Some("deadbee"));
+    }
+}

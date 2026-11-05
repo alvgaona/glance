@@ -322,9 +322,8 @@ fn draw(f: &mut Frame, app: &mut App) {
     let full = f.area();
     f.render_widget(Block::new().style(Style::new().bg(theme::BG)), full);
 
-    // Centred column with breathing room, like a page.
-    let width = full.width.saturating_sub(4).min(150);
-    let area = Rect { x: full.x + (full.width - width) / 2, y: full.y + 1, width, height: full.height.saturating_sub(2) };
+    // Whole screen, with a one-column gutter so text doesn't touch the edges.
+    let area = Rect { x: full.x + 1, width: full.width.saturating_sub(2), ..full };
     let [header, _, body, _, footer] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),

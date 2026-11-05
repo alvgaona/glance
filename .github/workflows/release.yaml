@@ -1,4 +1,4 @@
-name: Release
+name: release
 
 # Push a tag `vX.Y.Z` whose version matches Cargo.toml: binaries for macOS and Linux go
 # to a GitHub release with git-cliff's notes, and the crate goes to crates.io.
@@ -10,8 +10,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # The tag must match the version in Cargo.toml.
   version:
-    name: tag matches Cargo.toml
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}
@@ -28,7 +28,6 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
   build:
-    name: build (${{ matrix.target }})
     needs: version
     runs-on: ${{ matrix.os }}
     strategy:
@@ -60,8 +59,7 @@ jobs:
           name: ${{ matrix.target }}
           path: glance-v*.tar.gz*
 
-  release:
-    name: GitHub release
+  github-release:
     needs: [version, build]
     runs-on: ubuntu-latest
     permissions:
@@ -86,8 +84,7 @@ jobs:
           prerelease: ${{ contains(github.ref_name, '-') }}
 
   crates-io:
-    name: publish to crates.io
-    needs: release
+    needs: github-release
     # Release candidates (v0.1.0-rc.1) stop at the GitHub release.
     if: ${{ !contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest

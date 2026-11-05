@@ -4,6 +4,8 @@
 
 mod draw;
 mod keys;
+#[cfg(test)]
+mod tests;
 
 use draw::draw;
 
@@ -122,6 +124,11 @@ struct App<'r> {
 
 /// Returns the folder picked with enter.
 pub fn run(repo: &gix::Repository) -> Result<Option<PathBuf>> {
+    app::run(&mut start(repo)?)
+}
+
+/// The screen as it opens, before the first draw.
+fn start(repo: &gix::Repository) -> Result<App<'_>> {
     let mut app = App {
         repo,
         rows: Vec::new(),
@@ -142,8 +149,7 @@ pub fn run(repo: &gix::Repository) -> Result<Option<PathBuf>> {
     app.reload(None)?;
     // Start on the worktree we're in.
     app.selected = app.rows.iter().position(|r| r.here).unwrap_or(0);
-
-    app::run(&mut app)
+    Ok(app)
 }
 
 impl Screen for App<'_> {

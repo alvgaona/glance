@@ -130,6 +130,11 @@ struct App {
 }
 
 pub fn run(repo: gix::Repository) -> Result<()> {
+    app::run(&mut start(repo)?)
+}
+
+/// The screen as it opens, before the first draw.
+fn start(repo: gix::Repository) -> Result<App> {
     let mut app = App {
         repo_name: crate::git::repo_name(&repo),
         repo,
@@ -149,8 +154,7 @@ pub fn run(repo: gix::Repository) -> Result<()> {
     app.load(None)?;
     // Start on the remote this branch tracks.
     app.selected = app.remotes.iter().position(|r| app.tracked_here(r)).unwrap_or(0);
-
-    app::run(&mut app)
+    Ok(app)
 }
 
 impl Screen for App {
@@ -463,6 +467,21 @@ mod tests {
             tracking: Vec::new(),
             fetched: None,
         }
+    }
+
+    #[test]
+    fn add_asks_for_the_url_then_the_name() {
+        use crate::tui::app::{press, type_in};
+        let s = crate::git::run::Scratch::new("remote-add");
+        let mut app = start(s.repo()).unwrap();
+        // No remotes: nothing to copy.
+        assert!(matches!(app.key(press(KeyCode::Char('y'))), Flow::Stay));
+
+        app.key(press(KeyCode::Char('a')));
+        type_in(&mut app, "git@github.com:me/x.git");
+        assert!(matches!(app.key(press(KeyCode::Enter)), Flow::Stay));
+        let Flow::Run(Effect::Add { name, url }) = app.key(press(KeyCode::Enter)) else { panic!("enter should add") };
+        assert_eq!((name.as_str(), url.as_str()), ("origin", "git@github.com:me/x.git"));
     }
 
     #[test]

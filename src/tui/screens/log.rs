@@ -82,6 +82,11 @@ enum Effect {
 
 /// Returns the chosen commit's short id, or `None` if the user quit.
 pub fn run(repo: &gix::Repository, opts: Options) -> Result<Option<String>> {
+    app::run(&mut start(repo, opts)?)
+}
+
+/// The screen as it opens, before the first draw.
+fn start(repo: &gix::Repository, opts: Options) -> Result<App<'_>> {
     let mut app = App {
         repo,
         commits: Vec::new(),
@@ -102,8 +107,7 @@ pub fn run(repo: &gix::Repository, opts: Options) -> Result<Option<String>> {
         opts,
     };
     app.load()?;
-
-    app::run(&mut app)
+    Ok(app)
 }
 
 impl Screen for App<'_> {
@@ -589,4 +593,21 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         (Mode::Pick, false) => vec![("/", "search"), ("enter", "rebase from here"), ("esc", "cancel")],
     };
     footer::draw(f, area, left, pairs);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tui::app::press;
+
+    #[test]
+    fn copies_the_commit_under_the_cursor() {
+        let s = crate::git::run::Scratch::new("log-copy");
+        s.commit("a.txt", "one\n");
+        let repo = s.repo();
+        let mut app = start(&repo, Options { mode: Mode::Browse, all: false, count: 10 }).unwrap();
+        let head = repo.head_id().unwrap().to_string();
+        let Flow::Run(Effect::Copy(id)) = app.key(press(KeyCode::Char('y'))) else { panic!("y should copy") };
+        assert!(!id.is_empty() && head.starts_with(&id));
+    }
 }

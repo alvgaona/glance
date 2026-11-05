@@ -7,6 +7,8 @@ mod conflict;
 mod draw;
 mod hunks;
 mod keys;
+#[cfg(test)]
+mod tests;
 
 use commit::CommitBox;
 use draw::draw;
@@ -219,6 +221,11 @@ struct App {
 }
 
 pub fn run(repo: gix::Repository) -> Result<()> {
+    app::run(&mut start(repo)?)
+}
+
+/// The screen as it opens, before the first draw.
+fn start(repo: gix::Repository) -> Result<App> {
     let mut app = App {
         repo_name: crate::git::repo_name(&repo),
         repo,
@@ -243,7 +250,7 @@ pub fn run(repo: gix::Repository) -> Result<()> {
     app.reload()?;
     // Start on the first file not staged yet: that's usually the next thing to look at.
     app.selected = app.entries.iter().position(|e| e.group != Group::Staged).unwrap_or(0);
-    app::run(&mut app)
+    Ok(app)
 }
 
 impl Screen for App {

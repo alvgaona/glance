@@ -4,6 +4,8 @@
 mod changes;
 mod draw;
 mod keys;
+#[cfg(test)]
+mod tests;
 
 use std::collections::{BTreeSet, HashMap};
 use std::rc::Rc;
@@ -117,6 +119,11 @@ struct App<'r> {
 }
 
 pub fn run(repo: &gix::Repository) -> Result<()> {
+    app::run(&mut start(repo)?)
+}
+
+/// The screen as it opens, before the first draw.
+fn start(repo: &gix::Repository) -> Result<App<'_>> {
     let mut app = App {
         repo,
         list: Vec::new(),
@@ -149,8 +156,7 @@ pub fn run(repo: &gix::Repository) -> Result<()> {
     if app.list.is_empty() && !app.changes.is_empty() {
         app.focus = Pane::Changes;
     }
-
-    app::run(&mut app)
+    Ok(app)
 }
 
 impl Screen for App<'_> {

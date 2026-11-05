@@ -261,32 +261,14 @@ pub fn remove(repo: &gix::Repository, paths: &[String]) -> Ran {
 mod tests {
     use super::*;
 
-    /// A scratch repo, removed when dropped.
-    struct Scratch(std::path::PathBuf);
+    use crate::git::run::Scratch;
 
     impl Scratch {
-        fn new(name: &str) -> Self {
-            let dir = std::env::temp_dir().join(format!("gg-stage-{name}-{}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&dir);
-            std::fs::create_dir_all(&dir).unwrap();
-            let s = Scratch(dir);
-            s.git(&["init", "-q", "-b", "main"]);
-            s
-        }
-        fn git(&self, a: &[&str]) {
-            crate::git::run::test_git(&self.0, a);
-        }
         /// Runs one of our writes on the repo, opened afresh.
         fn run(&self, f: impl FnOnce(&gix::Repository) -> Ran) {
             if let Err(e) = f(&self.repo()) {
                 panic!("{e}");
             }
-        }
-        fn write(&self, path: &str, text: &str) {
-            std::fs::write(self.0.join(path), text).unwrap();
-        }
-        fn repo(&self) -> gix::Repository {
-            gix::open(&self.0).unwrap()
         }
         fn halves(&self, path: &str) -> (String, String, String) {
             let repo = self.repo();
@@ -295,12 +277,6 @@ mod tests {
             let (index2, disk) = contents(&repo, path, None, Side::Unstaged).unwrap();
             assert_eq!(index, index2);
             (s(head), s(index), s(disk))
-        }
-    }
-
-    impl Drop for Scratch {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
         }
     }
 

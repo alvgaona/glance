@@ -5,6 +5,8 @@ mod delete;
 mod draw;
 mod keys;
 mod prs;
+#[cfg(test)]
+mod tests;
 
 use draw::{build_detail, draw};
 
@@ -204,6 +206,11 @@ struct App<'r> {
 }
 
 pub fn run(repo: &gix::Repository) -> Result<()> {
+    app::run(&mut start(repo)?)
+}
+
+/// The screen as it opens, before the first draw.
+fn start(repo: &gix::Repository) -> Result<App<'_>> {
     let mut app = App {
         repo,
         data: branches::read(repo, false)?,
@@ -239,8 +246,7 @@ pub fn run(repo: &gix::Repository) -> Result<()> {
     if let Some(i) = app.visible.iter().position(|&i| app.data.list[i].current) {
         app.selected = i;
     }
-
-    app::run(&mut app)
+    Ok(app)
 }
 
 impl Screen for App<'_> {

@@ -91,3 +91,22 @@ pub(crate) fn run<S: Screen>(screen: &mut S) -> Result<S::Out> {
     leave();
     result
 }
+
+/// A plain key press.
+#[cfg(test)]
+pub(crate) fn press(code: crossterm::event::KeyCode) -> KeyEvent {
+    KeyEvent::new(code, crossterm::event::KeyModifiers::NONE)
+}
+
+#[cfg(test)]
+pub(crate) fn ctrl(c: char) -> KeyEvent {
+    KeyEvent::new(crossterm::event::KeyCode::Char(c), crossterm::event::KeyModifiers::CONTROL)
+}
+
+/// Types `text` into whatever has the keys; every key must leave the screen open.
+#[cfg(test)]
+pub(crate) fn type_in<S: Screen>(s: &mut S, text: &str) {
+    for c in text.chars() {
+        assert!(matches!(s.key(press(crossterm::event::KeyCode::Char(c))), Flow::Stay));
+    }
+}

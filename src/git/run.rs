@@ -60,6 +60,44 @@ pub fn test_git(dir: &std::path::Path, args: &[&str]) {
     assert!(out.ok(), "git {args:?}: {}", out.text());
 }
 
+/// A scratch repo on `main`, removed when dropped. `name` must be unique among tests.
+#[cfg(test)]
+pub struct Scratch(pub std::path::PathBuf);
+
+#[cfg(test)]
+impl Scratch {
+    pub fn new(name: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!("gg-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let s = Scratch(dir);
+        s.git(&["init", "-q", "-b", "main"]);
+        s
+    }
+    pub fn git(&self, a: &[&str]) {
+        test_git(&self.0, a);
+    }
+    pub fn write(&self, path: &str, text: &str) {
+        std::fs::write(self.0.join(path), text).unwrap();
+    }
+    pub fn repo(&self) -> gix::Repository {
+        gix::open(&self.0).unwrap()
+    }
+    /// Writes `path` and commits it.
+    pub fn commit(&self, path: &str, text: &str) {
+        self.write(path, text);
+        self.git(&["add", path]);
+        self.git(&["commit", "-q", "-m", path]);
+    }
+}
+
+#[cfg(test)]
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 /// A path from the repository root, as a pathspec that means exactly that file even
 /// when gg runs in a subfolder or the name has `*` in it.
 pub fn top(path: &str) -> String {

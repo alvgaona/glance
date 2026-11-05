@@ -19,6 +19,11 @@ pub struct Toast {
 }
 
 impl Toast {
+    #[cfg(test)]
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
     pub fn new(text: impl Into<String>, color: Color) -> Self {
         Self { text: text.into(), color, until: Instant::now() + Duration::from_millis(2800) }
     }

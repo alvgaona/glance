@@ -4,6 +4,8 @@
 
 mod draw;
 mod keys;
+#[cfg(test)]
+mod tests;
 
 use draw::draw;
 
@@ -30,7 +32,7 @@ use crate::git::worktree::{self, Source, Worktree};
 use crate::tui::app::{self, Flow, Screen};
 use crate::tui::kit::{self, Command, Confirm, Input, InputEvent, Palette, PaletteEvent, Scroll, Toast, footer, list};
 use crate::tui::panels::changes;
-use crate::tui::{first_lines, theme};
+use crate::tui::theme;
 
 #[derive(Clone)]
 enum Cmd {
@@ -44,10 +46,23 @@ enum Cmd {
     Quit,
 }
 
-/// What an open dialog will do on yes.
-enum Ask {
-    Remove { path: PathBuf, force: bool },
+/// What the screen does outside its own state; [`Screen::apply`] does it.
+enum Effect {
+    Reload,
+    /// A worktree for this branch, next to the main one.
+    Create(String),
+    Remove {
+        path: PathBuf,
+        force: bool,
+    },
     Prune,
+    Lock {
+        path: PathBuf,
+        on: bool,
+    },
+    Copy(PathBuf),
+    /// Leave with this folder (copied too, unless our output is captured).
+    Go(PathBuf),
 }
 
 /// Uncommitted work in a worktree; read in the background, it can take a moment.
@@ -98,15 +113,22 @@ struct App<'r> {
     states: Option<Receiver<(PathBuf, Load)>>,
     toast: Option<Toast>,
     palette: Option<Palette<Cmd>>,
-    confirm: Option<(Confirm, Ask)>,
+    confirm: Option<(Confirm, Effect)>,
     input: Option<Input>,
     repo_name: String,
+    /// HEAD's short id, for the new-worktree note.
+    head: String,
     /// Our stdout is captured (`cd "$(gg wt)"`): enter hands the folder over.
     captured: bool,
 }
 
 /// Returns the folder picked with enter.
 pub fn run(repo: &gix::Repository) -> Result<Option<PathBuf>> {
+    app::run(&mut start(repo)?)
+}
+
+/// The screen as it opens, before the first draw.
+fn start(repo: &gix::Repository) -> Result<App<'_>> {
     let mut app = App {
         repo,
         rows: Vec::new(),
@@ -121,25 +143,58 @@ pub fn run(repo: &gix::Repository) -> Result<Option<PathBuf>> {
         confirm: None,
         input: None,
         repo_name: crate::git::repo_name(repo),
+        head: String::new(),
         captured: !std::io::stdout().is_terminal(),
     };
     app.reload(None)?;
     // Start on the worktree we're in.
     app.selected = app.rows.iter().position(|r| r.here).unwrap_or(0);
-
-    app::run(&mut app)
+    Ok(app)
 }
 
 impl Screen for App<'_> {
     type Out = Option<PathBuf>;
+    type Effect = Effect;
     // Folder states arrive one by one; show them soon.
     const WAKE: Duration = Duration::from_millis(150);
 
     fn draw(&mut self, f: &mut Frame) {
         draw(f, self)
     }
-    fn key(&mut self, k: KeyEvent) -> Result<Flow<Self::Out>> {
-        Ok(self.on_key(k)?.into())
+    fn apply(&mut self, e: Effect) -> Result<Flow<Self::Out, Effect>> {
+        match e {
+            Effect::Reload => self.reload(None)?,
+            Effect::Create(branch) => self.create(&branch)?,
+            Effect::Remove { path, force } => {
+                self.toast = Some(Toast::ran(&worktree::remove(&path, force), format!("Removed {}", self.name(&path))));
+                self.reload(None)?;
+            }
+            Effect::Prune => {
+                let before = self.rows.iter().filter(|r| r.wt.prunable.is_some()).count();
+                self.toast = Some(Toast::ran(&worktree::prune(), format!("Pruned {before}")));
+                self.reload(None)?;
+            }
+            Effect::Lock { path, on } => {
+                let done = if on { "Locked" } else { "Unlocked" };
+                self.toast = Some(Toast::ran(&worktree::lock(&path, on), format!("{done} {}", self.name(&path))));
+                self.reload(None)?;
+            }
+            Effect::Copy(path) => {
+                crate::clipboard::copy(&path.display().to_string());
+                self.toast = Some(Toast::new(format!("Copied {}", tilde(&path)), theme::ACCENT));
+            }
+            Effect::Go(path) => {
+                // Printed on the way out; in a plain terminal it's copied too.
+                if !self.captured {
+                    crate::clipboard::copy(&path.display().to_string());
+                }
+                return Ok(Flow::Done(Some(path)));
+            }
+        }
+        Ok(Flow::Stay)
+    }
+    fn key(&mut self, k: KeyEvent) -> Flow<Self::Out, Effect> {
+        self.on_key(k)
     }
     fn mouse(&mut self, m: MouseEvent) {
         self.on_mouse(m)
@@ -150,6 +205,9 @@ impl Screen for App<'_> {
     }
     fn toast(&mut self) -> &mut Option<Toast> {
         &mut self.toast
+    }
+    fn typing(&self) -> bool {
+        self.input.is_some()
     }
 }
 
@@ -197,30 +255,32 @@ impl App<'_> {
     fn reload(&mut self, select: Option<&Path>) -> Result<()> {
         let keep = select.map(Path::to_path_buf).or_else(|| self.current().map(|r| r.wt.path.clone()));
         let here = self.repo.workdir().map(Path::to_path_buf);
-        let mut rows = Vec::new();
-        for wt in worktree::list(self.repo)? {
-            let commit = wt.head.and_then(|h| self.repo.find_commit(h).ok());
-            let (short, subject, time) = match &commit {
-                Some(c) => (
-                    c.id().shorten_or_id().to_string(),
-                    c.message().map(|m| m.summary().to_str_lossy().into_owned()).unwrap_or_default(),
-                    c.time().map(|t| t.seconds).unwrap_or(0),
-                ),
-                None => (String::new(), String::new(), 0),
-            };
-            let gone = wt.bare || wt.prunable.is_some() || !wt.path.exists();
-            rows.push(Row {
-                here: here.as_deref().is_some_and(|h| same_dir(h, &wt.path)),
-                load: if gone { Load::None } else { Load::Loading },
-                wt,
-                short,
-                subject,
-                time,
-            });
-        }
+        let rows: Vec<Row> = (worktree::list(self.repo)?.into_iter())
+            .map(|wt| {
+                let commit = wt.head.and_then(|h| self.repo.find_commit(h).ok());
+                let (short, subject, time) = match &commit {
+                    Some(c) => (
+                        c.id().shorten_or_id().to_string(),
+                        c.message().map(|m| m.summary().to_str_lossy().into_owned()).unwrap_or_default(),
+                        c.time().map(|t| t.seconds).unwrap_or(0),
+                    ),
+                    None => (String::new(), String::new(), 0),
+                };
+                let gone = wt.bare || wt.prunable.is_some() || !wt.path.exists();
+                Row {
+                    here: here.as_deref().is_some_and(|h| same_dir(h, &wt.path)),
+                    load: if gone { Load::None } else { Load::Loading },
+                    wt,
+                    short,
+                    subject,
+                    time,
+                }
+            })
+            .collect();
         let paths = rows.iter().filter(|r| matches!(r.load, Load::Loading)).map(|r| r.wt.path.clone()).collect();
         self.states = Some(load_states(paths));
         self.rows = rows;
+        self.head = self.repo.head_id().map(|h| h.shorten_or_id().to_string()).unwrap_or_default();
         if let Some(p) = keep.and_then(|k| self.rows.iter().position(|r| same_dir(&r.wt.path, &k))) {
             self.selected = p;
         }
@@ -268,18 +328,14 @@ impl App<'_> {
             return Ok(());
         }
         let from = worktree::source(self.repo, branch);
-        let (ok, out) = worktree::add(&path, branch, from);
-        self.toast = Some(if ok {
-            let how = match from {
-                Source::Local => "on",
-                Source::Remote => "tracking the remote",
-                Source::New => "on new branch",
-            };
-            Toast::new(format!("Created {} {how} {branch}", self.name(&path)), theme::GREEN)
-        } else {
-            Toast::new(first_lines(&out), theme::RED)
-        });
-        self.reload(ok.then_some(path.as_path()))
+        let ran = worktree::add(&path, branch, from);
+        let how = match from {
+            Source::Local => "on",
+            Source::Remote => "tracking the remote",
+            Source::New => "on new branch",
+        };
+        self.toast = Some(Toast::ran(&ran, format!("Created {} {how} {branch}", self.name(&path))));
+        self.reload(ran.is_ok().then_some(path.as_path()))
     }
 
     fn ask_remove(&mut self) {
@@ -325,7 +381,7 @@ impl App<'_> {
             no: "Cancel".into(),
             danger: force,
         };
-        self.confirm = Some((confirm, Ask::Remove { path: r.wt.path.clone(), force }));
+        self.confirm = Some((confirm, Effect::Remove { path: r.wt.path.clone(), force }));
     }
 
     fn ask_prune(&mut self) {
@@ -344,30 +400,7 @@ impl App<'_> {
             no: "Cancel".into(),
             danger: false,
         };
-        self.confirm = Some((confirm, Ask::Prune));
-    }
-
-    fn answer(&mut self, ask: Ask) -> Result<()> {
-        match ask {
-            Ask::Remove { path, force } => {
-                let (ok, out) = worktree::remove(&path, force);
-                self.toast = Some(if ok {
-                    Toast::new(format!("Removed {}", self.name(&path)), theme::GREEN)
-                } else {
-                    Toast::new(first_lines(&out), theme::RED)
-                });
-            }
-            Ask::Prune => {
-                let before = self.rows.iter().filter(|r| r.wt.prunable.is_some()).count();
-                let (ok, out) = worktree::prune();
-                self.toast = Some(if ok {
-                    Toast::new(format!("Pruned {before}"), theme::GREEN)
-                } else {
-                    Toast::new(first_lines(&out), theme::RED)
-                });
-            }
-        }
-        self.reload(None)
+        self.confirm = Some((confirm, Effect::Prune));
     }
 
     fn on_mouse(&mut self, m: MouseEvent) {

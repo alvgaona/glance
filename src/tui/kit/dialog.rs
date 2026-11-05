@@ -22,16 +22,36 @@ pub struct Confirm {
 }
 
 impl Confirm {
+    /// Enter or `y` is yes, Esc, `n` or `q` is no, any other key is neither.
+    pub fn answer(k: &crossterm::event::KeyEvent) -> Option<bool> {
+        use crossterm::event::KeyCode;
+        match k.code {
+            KeyCode::Enter | KeyCode::Char('y') => Some(true),
+            KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('q') => Some(false),
+            _ => None,
+        }
+    }
+
+    /// A key for the dialog in `slot`, which holds what it asks about: yes takes that
+    /// out, no closes the dialog.
+    pub fn key<T>(slot: &mut Option<(Confirm, T)>, k: &crossterm::event::KeyEvent) -> Option<T> {
+        match Self::answer(k)? {
+            true => slot.take().map(|(_, t)| t),
+            false => {
+                *slot = None;
+                None
+            }
+        }
+    }
+
     /// `body` may have several lines; lines starting with `$ ` are shown as commands.
     pub fn draw(&self, f: &mut Frame, area: Rect) {
         let yes_color = if self.danger { theme::RED } else { theme::ACCENT };
         let mut text = vec![Line::styled(self.title.clone(), theme::bold()), Line::raw("")];
-        for l in self.body.lines() {
-            text.push(match l.strip_prefix("$ ") {
-                Some(cmd) => Line::styled(format!("  {cmd}"), Style::new().fg(theme::ACCENT)),
-                None => Line::styled(l.to_string(), theme::muted()),
-            });
-        }
+        text.extend(self.body.lines().map(|l| match l.strip_prefix("$ ") {
+            Some(cmd) => Line::styled(format!("  {cmd}"), Style::new().fg(theme::ACCENT)),
+            None => Line::styled(l.to_string(), theme::muted()),
+        }));
         text.push(Line::raw(""));
         text.push(Line::from(vec![
             pill(&format!("enter  {}", self.yes), yes_color, theme::BG),

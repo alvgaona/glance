@@ -74,19 +74,13 @@ pub fn parse(text: &str) -> Vec<Line> {
 }
 
 pub fn render(lines: &[Line]) -> String {
-    let mut out = String::new();
-    for l in lines {
-        match l {
-            Line::Commit { action, hash, subject } => {
-                out += &format!("{} {hash} # {subject}\n", action.word());
-            }
-            Line::Other(raw) => {
-                out += raw;
-                out.push('\n');
-            }
-        }
-    }
-    out
+    lines
+        .iter()
+        .map(|l| match l {
+            Line::Commit { action, hash, subject } => format!("{} {hash} # {subject}\n", action.word()),
+            Line::Other(raw) => format!("{raw}\n"),
+        })
+        .collect()
 }
 
 /// Why git would reject this todo list, if it would.

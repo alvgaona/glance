@@ -131,21 +131,16 @@ impl TextArea {
     pub fn draw(&mut self, f: &mut Frame, area: Rect, focused: bool, placeholder: &str) {
         let field = Style::new().bg(theme::BORDER).fg(theme::TEXT);
         let height = area.height as usize;
-        if self.row < self.top {
-            self.top = self.row;
-        } else if self.row >= self.top + height {
-            self.top = self.row + 1 - height;
-        }
+        self.top = super::list::follow(self.top, self.row, self.row, height);
         let w = area.width as usize;
         let mut out = Vec::new();
         for (r, line) in self.lines.iter().enumerate().skip(self.top).take(height) {
             let here = focused && r == self.row;
             let start = if here { (self.col + 1).saturating_sub(w.saturating_sub(1)) } else { 0 };
-            let mut spans = Vec::new();
-            for (i, c) in line.iter().enumerate().skip(start).take(w) {
-                let style = if here && i == self.col { Style::new().bg(theme::ACCENT).fg(theme::BG) } else { field };
-                spans.push(Span::styled(c.to_string(), style));
-            }
+            let cursor = Style::new().bg(theme::ACCENT).fg(theme::BG);
+            let mut spans: Vec<Span> = (line.iter().enumerate().skip(start).take(w))
+                .map(|(i, c)| Span::styled(c.to_string(), if here && i == self.col { cursor } else { field }))
+                .collect();
             if here && self.col == line.len() {
                 spans.push(Span::styled(" ", Style::new().bg(theme::ACCENT)));
             }
@@ -155,9 +150,7 @@ impl TextArea {
             out.push(Line::from(spans).style(field));
         }
         // Rows past the text still show the field.
-        while out.len() < height {
-            out.push(Line::raw("").style(field));
-        }
+        out.resize(height, Line::raw("").style(field));
         f.render_widget(Paragraph::new(out), area);
     }
 }

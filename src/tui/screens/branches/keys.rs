@@ -3,7 +3,7 @@
 use super::*;
 
 impl App<'_> {
-    pub(super) fn on_key(&mut self, k: KeyEvent) -> Result<Option<Effect>> {
+    pub(super) fn on_key(&mut self, k: KeyEvent) -> Flow<(), Effect> {
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         let shift = k.modifiers.contains(KeyModifiers::SHIFT);
         if let Some((input, from)) = &mut self.rename {
@@ -13,24 +13,15 @@ impl App<'_> {
                     let from = from.clone();
                     self.rename = None;
                     if !to.is_empty() && to != from {
-                        let (ok, out) = branches::rename(&from, &to);
-                        if ok {
-                            self.toast = Some(Toast::new(format!("Renamed {from} → {to}"), theme::GREEN));
-                            if self.marked.remove(&from) {
-                                self.marked.insert(to.clone());
-                            }
-                            self.reload_selecting(Some(to))?;
-                        } else {
-                            self.toast = Some(Toast::new(first_lines(&out), theme::RED));
-                        }
+                        return Flow::Run(Effect::Rename { from, to });
                     }
                 }
                 None => {}
             }
-            return Ok(None);
+            return Flow::Stay;
         }
         if ctrl && k.code == KeyCode::Char('c') {
-            return Ok(Some(Effect::Quit));
+            return Flow::Done(());
         }
         if let Some(p) = &mut self.pick {
             let last = p.items.len().saturating_sub(1);
@@ -48,23 +39,22 @@ impl App<'_> {
                     let chosen = p.chosen();
                     if chosen.is_empty() {
                         self.toast = Some(Toast::new("Nothing selected", theme::YELLOW));
-                        return Ok(None);
+                        return Flow::Stay;
                     }
                     self.pick = None;
                     self.marked.clear();
-                    return Ok(Some(Effect::InTerminal(self.remote_deletes(chosen))));
+                    return Flow::Run(Effect::InTerminal(self.remote_deletes(chosen)));
                 }
                 KeyCode::Esc | KeyCode::Char('q') => self.pick = None,
                 _ => {}
             }
-            return Ok(None);
+            return Flow::Stay;
         }
         if self.confirm.is_some() {
-            return Ok(match k.code {
-                KeyCode::Enter | KeyCode::Char('y') => {
-                    let (_, pending) = self.confirm.take().unwrap();
+            return match Confirm::key(&mut self.confirm, &k) {
+                Some(pending) => {
                     self.marked.clear();
-                    Some(Effect::InTerminal(match pending {
+                    Flow::Run(Effect::InTerminal(match pending {
                         Pending::Local(list) => {
                             self.last_deleted = list.first().map(|b| b.name.clone()).unwrap_or_default();
                             list.iter().map(|b| branches::delete_args(&b.name)).collect()
@@ -72,12 +62,8 @@ impl App<'_> {
                         Pending::Remote(list) => self.remote_deletes(list),
                     }))
                 }
-                KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('q') => {
-                    self.confirm = None;
-                    None
-                }
-                _ => None,
-            });
+                None => Flow::Stay,
+            };
         }
         if let Some(p) = &mut self.palette {
             match p.key(k) {
@@ -88,7 +74,7 @@ impl App<'_> {
                 }
                 None => {}
             }
-            return Ok(None);
+            return Flow::Stay;
         }
         if self.searching {
             match k.code {
@@ -111,44 +97,44 @@ impl App<'_> {
                 }
                 _ => {}
             }
-            return Ok(None);
+            return Flow::Stay;
         }
 
         if self.detail_scroll.key(k, self.detail_area.height) {
-            return Ok(None);
+            return Flow::Stay;
         }
         let cmd = match k.code {
             KeyCode::Char('p') if ctrl => {
                 self.palette = Some(Palette::new(commands()));
-                return Ok(None);
+                return Flow::Stay;
             }
             KeyCode::Char(':') => {
                 self.palette = Some(Palette::new(commands()));
-                return Ok(None);
+                return Flow::Stay;
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 self.step(1);
-                return Ok(None);
+                return Flow::Stay;
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 self.step(-1);
-                return Ok(None);
+                return Flow::Stay;
             }
             KeyCode::PageDown => {
                 self.step(15);
-                return Ok(None);
+                return Flow::Stay;
             }
             KeyCode::PageUp => {
                 self.step(-15);
-                return Ok(None);
+                return Flow::Stay;
             }
             KeyCode::Home | KeyCode::Char('g') => {
                 self.selected = 0;
-                return Ok(None);
+                return Flow::Stay;
             }
             KeyCode::End | KeyCode::Char('G') => {
                 self.selected = self.visible.len().saturating_sub(1);
-                return Ok(None);
+                return Flow::Stay;
             }
             KeyCode::Enter => Cmd::Checkout,
             KeyCode::Char('d') if k.modifiers.contains(KeyModifiers::SHIFT) => Cmd::DeleteRemote,
@@ -169,30 +155,23 @@ impl App<'_> {
             KeyCode::Esc if !self.query.is_empty() => {
                 self.query.clear();
                 self.filter();
-                return Ok(None);
+                return Flow::Stay;
             }
             KeyCode::Esc | KeyCode::Char('q') => Cmd::Quit,
-            _ => return Ok(None),
+            _ => return Flow::Stay,
         };
         self.run(cmd)
     }
 
-    fn run(&mut self, cmd: Cmd) -> Result<Option<Effect>> {
+    fn run(&mut self, cmd: Cmd) -> Flow<(), Effect> {
         match cmd {
-            Cmd::Quit => return Ok(Some(Effect::Quit)),
+            Cmd::Quit => return Flow::Done(()),
             Cmd::Search => self.searching = true,
             Cmd::Details => self.details = !self.details,
-            Cmd::ToggleRemotes => {
-                self.remotes = !self.remotes;
-                self.reload()?;
-                let msg = if self.remotes { "Showing remote branches" } else { "Local branches only" };
-                self.toast = Some(Toast::new(msg, theme::ACCENT));
-            }
+            Cmd::ToggleRemotes => return Flow::Run(Effect::ToggleRemotes),
             Cmd::Copy => {
                 if let Some(b) = self.current() {
-                    let name = b.name.clone();
-                    crate::clipboard::copy(&name);
-                    self.toast = Some(Toast::new(format!("Copied {name}"), theme::ACCENT));
+                    return Flow::Run(Effect::Copy(b.name.clone()));
                 }
             }
             Cmd::Rename => match self.current() {
@@ -208,34 +187,18 @@ impl App<'_> {
                 }
                 None => {}
             },
-            Cmd::Fetch => self.fetch(),
+            Cmd::Fetch => return Flow::Run(Effect::Fetch),
             Cmd::OpenPr => {
                 let msg = match (&self.prs, self.current().and_then(|b| self.pr(b))) {
-                    (_, Some(pr)) => {
-                        let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
-                        let ok = Process::new(opener)
-                            .arg(&pr.url)
-                            .stdout(Stdio::null())
-                            .stderr(Stdio::null())
-                            .status()
-                            .is_ok_and(|s| s.success());
-                        if ok { format!("Opened #{}", pr.number) } else { pr.url.clone() }
-                    }
-                    (Prs::Loading(_), None) => "Still loading pull requests".into(),
-                    (Prs::Off, None) => "Pull requests need a GitHub remote and gh".into(),
-                    _ => "No pull request for this branch".into(),
+                    (_, Some(pr)) => return Flow::Run(Effect::OpenPr { url: pr.url.clone(), number: pr.number }),
+                    (Prs::Loading(_), None) => "Still loading pull requests",
+                    (Prs::Off, None) => "Pull requests need a GitHub remote and gh",
+                    _ => "No pull request for this branch",
                 };
                 self.toast = Some(Toast::new(msg, theme::ACCENT));
             }
-            Cmd::ReloadPrs => {
-                if matches!(self.prs, Prs::Loading(_)) {
-                    return Ok(None);
-                }
-                self.load_prs();
-                if matches!(self.prs, Prs::Loading(_)) {
-                    self.toast = Some(Toast::new("Reloading pull requests…", theme::ACCENT));
-                }
-            }
+            Cmd::ReloadPrs if matches!(self.prs, Prs::Loading(_)) => {}
+            Cmd::ReloadPrs => return Flow::Run(Effect::ReloadPrs),
             Cmd::Mark => {
                 if let Some(b) = self.current() {
                     let name = b.name.clone();
@@ -270,17 +233,17 @@ impl App<'_> {
             Cmd::ClearMarks => self.marked.clear(),
             Cmd::Checkout => {
                 let Some(b) = self.current().cloned() else {
-                    return Ok(None);
+                    return Flow::Stay;
                 };
                 // For origin/feat, `git switch feat` creates a local branch that tracks it.
                 let target = if b.remote {
-                    b.name.split_once('/').map_or(b.name.clone(), |(_, n)| n.to_string())
+                    branches::split_remote(&self.data.remotes, &b.name).map_or(b.name.clone(), |(_, n)| n.to_string())
                 } else {
                     b.name.clone()
                 };
                 if self.data.list.iter().any(|x| x.current && x.name == target) {
                     self.toast = Some(Toast::new(format!("Already on {target}"), theme::ACCENT));
-                    return Ok(None);
+                    return Flow::Stay;
                 }
                 if let Some(path) =
                     self.data.list.iter().find(|x| !x.remote && x.name == target).and_then(|x| x.worktree.as_ref())
@@ -289,19 +252,13 @@ impl App<'_> {
                         format!("{target} is checked out in the worktree at {}", short_path(path)),
                         theme::YELLOW,
                     ));
-                    return Ok(None);
+                    return Flow::Stay;
                 }
-                let (ok, out) = branches::switch(&target);
-                self.toast = Some(if ok {
-                    Toast::new(format!("Switched to {target}"), theme::GREEN)
-                } else {
-                    Toast::new(first_lines(&out), theme::RED)
-                });
-                self.reload()?;
+                return Flow::Run(Effect::Checkout(target));
             }
-            Cmd::DeleteLocal => self.ask_delete_local(),
-            Cmd::DeleteRemote => self.ask_delete_remote(),
+            Cmd::DeleteLocal => return Flow::Run(Effect::AskDeleteLocal),
+            Cmd::DeleteRemote => return Flow::Run(Effect::AskDeleteRemote),
         }
-        Ok(None)
+        Flow::Stay
     }
 }

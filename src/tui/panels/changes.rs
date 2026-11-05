@@ -47,6 +47,23 @@ impl<'a> Item<'a> {
     pub fn conflict(path: &'a str) -> Self {
         Item { mark: ("U", theme::RED), path, from: None, size: None }
     }
+
+    /// `M  src/app.rs  +5 −1`; a rename reads `old → new`.
+    pub fn row(&self) -> Line<'static> {
+        let (mark, color) = self.mark;
+        let name = match self.from {
+            Some(from) if from != self.path => format!("{from} → {}", self.path),
+            _ => self.path.to_string(),
+        };
+        let mut spans =
+            vec![Span::styled(format!("{mark}  "), Style::new().fg(color)), Span::styled(name, theme::text())];
+        let c = counts(self.size);
+        if !c.is_empty() {
+            spans.push(Span::raw("  "));
+            spans.extend(c);
+        }
+        Line::from(spans)
+    }
 }
 
 /// `+5 −1`, `+5`, `−1`, or `binary`; nothing when unknown or no lines changed.
@@ -72,13 +89,12 @@ pub fn counts(size: Option<Size>) -> Vec<Span<'static>> {
 
 /// `label   +12 −4`, the totals of the files that have line counts.
 pub fn header(label: String, items: &[Item]) -> Line<'static> {
-    let mut total = None;
-    for i in items {
-        if let Some(Size::Lines { added, removed }) = i.size {
-            let (a, r) = total.unwrap_or((0, 0));
-            total = Some((a + added, r + removed));
-        }
-    }
+    let total = (items.iter())
+        .filter_map(|i| match i.size {
+            Some(Size::Lines { added, removed }) => Some((added, removed)),
+            _ => None,
+        })
+        .reduce(|(a, r), (x, y)| (a + x, r + y));
     let mut spans = vec![Span::styled(label, theme::faint())];
     let c = counts(total.map(|(added, removed)| Size::Lines { added, removed }));
     if !c.is_empty() {
@@ -88,31 +104,15 @@ pub fn header(label: String, items: &[Item]) -> Line<'static> {
     Line::from(spans)
 }
 
-/// `M  src/app.rs  +5 −1`; a rename reads `old → new`.
-pub fn row(i: &Item) -> Line<'static> {
-    let (mark, color) = i.mark;
-    let name = match i.from {
-        Some(from) if from != i.path => format!("{from} → {}", i.path),
-        _ => i.path.to_string(),
-    };
-    let mut spans = vec![Span::styled(format!("{mark}  "), Style::new().fg(color)), Span::styled(name, theme::text())];
-    let c = counts(i.size);
-    if !c.is_empty() {
-        spans.push(Span::raw("  "));
-        spans.extend(c);
-    }
-    Line::from(spans)
-}
-
 /// A header and its rows.
 pub fn group(label: String, items: &[Item]) -> Vec<Line<'static>> {
-    std::iter::once(header(label, items)).chain(items.iter().map(row)).collect()
+    std::iter::once(header(label, items)).chain(items.iter().map(Item::row)).collect()
 }
 
 /// A commit's files: `3 files   +24 −5`. `noun` replaces "files" (e.g. "untracked").
 pub fn files(list: &[FileStat], noun: Option<&str>) -> Vec<Line<'static>> {
     let n = list.len();
-    let noun = noun.map(str::to_string).unwrap_or_else(|| if n == 1 { "file".into() } else { "files".into() });
+    let noun = noun.unwrap_or(if n == 1 { "file" } else { "files" });
     let items: Vec<Item> = list.iter().map(Item::stat).collect();
     group(format!("{n} {noun}"), &items)
 }
@@ -126,13 +126,8 @@ pub fn status(st: &Status) -> Vec<Line<'static>> {
         ("changes", st.unstaged.iter().map(Item::change).collect()),
         ("untracked", st.untracked.iter().map(|p| Item::untracked(p)).collect()),
     ];
-    let mut out = Vec::new();
-    for (title, items) in groups {
-        if items.is_empty() {
-            continue;
-        }
-        out.extend(group(format!("{title} {}", items.len()), &items));
-        out.push(Line::raw(""));
-    }
-    out
+    (groups.into_iter())
+        .filter(|(_, items)| !items.is_empty())
+        .flat_map(|(title, items)| group(format!("{title} {}", items.len()), &items).into_iter().chain([Line::raw("")]))
+        .collect()
 }

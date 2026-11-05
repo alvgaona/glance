@@ -121,11 +121,10 @@ impl Input {
         let w = inner.width as usize;
         let start = (self.at + 1).saturating_sub(w.saturating_sub(1));
         let field = Style::new().bg(theme::BORDER).fg(theme::TEXT);
-        let mut spans = Vec::new();
-        for (i, c) in self.input.iter().enumerate().skip(start) {
-            let style = if i == self.at { Style::new().bg(theme::ACCENT).fg(theme::BG) } else { field };
-            spans.push(Span::styled(c.to_string(), style));
-        }
+        let cursor = Style::new().bg(theme::ACCENT).fg(theme::BG);
+        let mut spans: Vec<Span> = (self.input.iter().enumerate().skip(start))
+            .map(|(i, c)| Span::styled(c.to_string(), if i == self.at { cursor } else { field }))
+            .collect();
         if self.at == self.input.len() {
             spans.push(Span::styled(" ", Style::new().bg(theme::ACCENT)));
         }
@@ -134,7 +133,7 @@ impl Input {
         {
             spans.push(Span::styled(p.clone(), Style::new().bg(theme::BORDER).fg(theme::MUTED)));
         }
-        let used = Line::from(spans.clone()).width();
+        let used: usize = spans.iter().map(Span::width).sum();
         spans.push(Span::styled(" ".repeat(w.saturating_sub(used)), field));
 
         let mut lines = vec![

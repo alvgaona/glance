@@ -3,40 +3,47 @@
 use owo_colors::OwoColorize;
 
 use super::Paint;
-use crate::fmt::relative_time;
+use crate::fmt::{pad, relative_time, width};
 use crate::git::repos::Repo;
 
 pub fn print(repos: &[Repo], p: &Paint) {
+    super::out(lines(repos, p));
+}
+
+pub fn lines(repos: &[Repo], p: &Paint) -> Vec<String> {
     if repos.is_empty() {
-        println!("{}", "no git repos in this folder".style(p.dim()));
-        return;
+        return vec!["no git repos in this folder".style(p.dim()).to_string()];
     }
     let now = crate::fmt::now();
-    let name_w = repos.iter().map(|r| r.name.chars().count()).max().unwrap_or(0);
+    let name_w = repos.iter().map(|r| width(&r.name)).max().unwrap_or(0);
     let branch = |r: &Repo| match &r.state {
         Ok(s) => s.status.branch.clone().unwrap_or_else(|| "detached".into()),
         Err(_) => String::new(),
     };
-    let branch_w = repos.iter().map(|r| branch(r).chars().count()).max().unwrap_or(0);
+    let branch_w = repos.iter().map(|r| width(&branch(r))).max().unwrap_or(0);
+    let age =
+        |r: &Repo| r.state.as_ref().ok().and_then(|s| s.last_commit).map(|t| relative_time(t, now)).unwrap_or_default();
+    let age_w = repos.iter().map(|r| age(r).len()).max().unwrap_or(0);
 
     let (mut dirty, mut unpushed) = (0, 0);
+    let mut out = Vec::new();
     for r in repos {
-        let name_pad = " ".repeat(name_w - r.name.chars().count());
+        let name_pad = pad(&r.name, name_w);
         let s = match &r.state {
             Ok(s) => s,
             Err(e) => {
-                println!("{}{name_pad}  {}", r.name.style(p.red()), e.style(p.red()));
+                out.push(format!("{}{name_pad}  {}", r.name.style(p.red()), e.style(p.red())));
                 continue;
             }
         };
         let st = &s.status;
         let b = branch(r);
-        let b_pad = " ".repeat(branch_w - b.chars().count());
+        let b_pad = pad(&b, branch_w);
         let b_shown = match &st.branch {
             Some(_) => b.style(p.pick(owo_colors::Style::new().cyan())).to_string(),
             None => b.style(p.yellow()).to_string(),
         };
-        let age = s.last_commit.map(|t| relative_time(t, now)).unwrap_or_default();
+        let age = age(r);
 
         // What needs attention, most important first.
         let mut notes: Vec<String> = Vec::new();
@@ -62,11 +69,8 @@ pub fn print(repos: &[Repo], p: &Paint) {
             Some(up) => {
                 if up.ahead > 0 {
                     unpushed += 1;
-                    notes.push(format!("↑{}", up.ahead).style(p.green()).to_string());
                 }
-                if up.behind > 0 {
-                    notes.push(format!("↓{}", up.behind).style(p.red()).to_string());
-                }
+                notes.extend(p.arrows(up.ahead, up.behind));
             }
             None if st.branch.is_some() && st.head.is_some() => {
                 notes.push("no upstream".style(p.dim()).to_string());
@@ -74,18 +78,20 @@ pub fn print(repos: &[Repo], p: &Paint) {
             None => {}
         }
         if st.stashes > 0 {
-            notes.push(format!("{} stash", st.stashes).style(p.magenta()).to_string());
+            let s = if st.stashes == 1 { "stash" } else { "stashes" };
+            notes.push(format!("{} {s}", st.stashes).style(p.magenta()).to_string());
         }
         let notes = if notes.is_empty() { "clean".style(p.dim()).to_string() } else { notes.join("  ") };
 
-        println!(
-            "{}{name_pad}  {b_shown}{b_pad}  {:>7}  {notes}",
+        out.push(format!(
+            "{}{name_pad}  {b_shown}{b_pad}  {:>age_w$}  {notes}",
             r.name.style(p.pick(owo_colors::Style::new().bold())),
             age.style(p.dim())
-        );
+        ));
     }
-    println!(
+    out.push(format!(
         "\n{}",
         format!("{} repos · {dirty} with changes · {unpushed} with unpushed commits", repos.len()).style(p.dim())
-    );
+    ));
+    out
 }

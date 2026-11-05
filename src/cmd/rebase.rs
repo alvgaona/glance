@@ -1,17 +1,17 @@
 //! `gg rebase`: git does the rebase; gg only replaces the todo-list editor.
 
 use std::path::Path;
-use std::process::Command;
 
 use anyhow::{Context, Result};
 
 use crate::git::{self, rebase, todo};
 
+/// Without the full screen there's no todo editor, and git would only fail once it asks.
+#[cfg(not(feature = "tui"))]
+const NEEDS_TUI: &str = "glance rebase needs the `tui` build: its todo editor is a full screen";
+
 /// Flags that control a rebase already in progress; these never get `-i` added.
 const CONTROL: [&str; 6] = ["--continue", "--abort", "--skip", "--quit", "--edit-todo", "--show-current-patch"];
-
-/// Tells the editor how the commits were chosen, for its header.
-const DESC_ENV: &str = "GG_REBASE_DESC";
 
 /// Runs `git rebase -i <args>` (or `git rebase --continue` etc.) with gg as the todo editor.
 /// Returns git's exit code.
@@ -22,6 +22,11 @@ const DESC_ENV: &str = "GG_REBASE_DESC";
 /// - `-p` / `--pick`: choose the oldest commit to edit.
 pub fn run(args: &[String]) -> Result<i32> {
     let control = args.iter().any(|a| CONTROL.contains(&a.as_str()));
+    // --continue, --abort and the like don't open the editor, so they still work.
+    #[cfg(not(feature = "tui"))]
+    if !control || args.iter().any(|a| a == "--edit-todo") {
+        anyhow::bail!(NEEDS_TUI);
+    }
     let (args, desc) = if control {
         (args.to_vec(), None)
     } else {
@@ -42,26 +47,15 @@ pub fn run(args: &[String]) -> Result<i32> {
         format!("{quoted} __rebase-editor")
     };
 
-    let mut cmd = Command::new("git");
-    cmd.arg("rebase");
-    if !control && !interactive {
-        cmd.arg("-i");
-    }
-    cmd.args(&args).env("GIT_SEQUENCE_EDITOR", editor);
-    match &desc {
-        Some(d) => cmd.env(DESC_ENV, d),
-        None => cmd.env_remove(DESC_ENV),
-    };
-
     let marker = cancel_marker()?;
     let _ = std::fs::remove_file(&marker);
-    let status = cmd.status().context("could not run git")?;
+    let code = rebase::start(&args, !control && !interactive, &editor, desc.as_deref()).context("could not run git")?;
     if std::fs::remove_file(&marker).is_ok() {
         // The user quit the editor; git's "nothing to do" error is expected.
         eprintln!("Rebase cancelled. Nothing changed.");
         return Ok(0);
     }
-    Ok(status.code().unwrap_or(1))
+    Ok(code.unwrap_or(1))
 }
 
 /// Turns gg's shortcuts into `git rebase` arguments plus a description for the header.
@@ -82,53 +76,27 @@ fn resolve(args: &[String]) -> Result<Option<(Vec<String>, Option<String>)>> {
                  Try `glance rebase 5` (last 5 commits) or `glance rebase -p` (choose where to start)."
             ),
         },
+        #[cfg(feature = "tui")]
         Some("-p" | "--pick") => pick(&repo, rest),
         Some(n) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => {
             let n: usize = n.parse().context("count is too large")?;
-            if n == 0 {
-                anyhow::bail!("nothing to rebase: 0 commits");
-            }
-            let head = repo.head_id().context("this branch has no commits yet")?.detach();
-            let available = repo.rev_walk([head]).first_parent_only().all()?.take(n + 1).count();
-            let desc = Some(format!("last {n} commit{}", if n == 1 { "" } else { "s" }));
-            match available.cmp(&n) {
-                std::cmp::Ordering::Greater => Ok(Some((with_rest(format!("HEAD~{n}")), desc))),
-                // Exactly the whole history: git needs --root for that.
-                std::cmp::Ordering::Equal => Ok(Some((with_rest("--root".into()), desc))),
-                std::cmp::Ordering::Less => {
-                    anyhow::bail!("this branch only has {available} commits")
-                }
-            }
+            let (base, desc) = rebase::last(&repo, n)?;
+            Ok(Some((with_rest(base), Some(desc))))
         }
         Some(_) => Ok(Some((args.to_vec(), None))),
     }
 }
 
-/// Choose the oldest commit to edit from this branch's history (full-screen log, or fzf).
+/// Choose the oldest commit to edit from this branch's history, on the full-screen log.
+#[cfg(feature = "tui")]
 fn pick(repo: &gix::Repository, rest: &[String]) -> Result<Option<(Vec<String>, Option<String>)>> {
-    #[cfg(feature = "tui")]
-    let picked = {
-        use crate::tui::screens::log::{Mode, Options, run};
-        run(repo, Options { mode: Mode::Pick, all: false, count: 5000 })?
-    };
-    #[cfg(not(feature = "tui"))]
-    let picked = {
-        let commits = git::log::read(repo, 5000, false)?;
-        let lines = crate::print::log::lines(&commits, &crate::print::Paint { on: true, rgb: false });
-        let label = format!("{} · rebase: choose the oldest commit to edit", git::repo_name(repo));
-        crate::fzf::pick_commit(&lines, &label, "rebase from here")?
-    };
+    use crate::tui::screens::log::{Mode, Options, run};
+    let picked = run(repo, Options { mode: Mode::Pick, all: false, count: 5000 })?;
     let Some(picked) = picked else {
         return Ok(None);
     };
-    let commit = repo.rev_parse_single(picked.as_str())?.object()?.peel_to_commit()?;
-    let subject = commit.message()?.summary().to_string();
-    let desc = Some(format!("from {picked} {subject}"));
-    let base = match commit.parent_ids().next() {
-        Some(parent) => parent.to_string(),
-        None => "--root".into(),
-    };
-    Ok(Some(([vec![base], rest.to_vec()].concat(), desc)))
+    let (base, desc) = rebase::from_commit(repo, &picked)?;
+    Ok(Some(([vec![base], rest.to_vec()].concat(), Some(desc))))
 }
 
 /// Left by the editor when the user quits, so `run` can tell a cancel from a failure.
@@ -159,7 +127,7 @@ pub fn edit(file: &Path, keep_on_quit: bool) -> Result<()> {
     #[cfg(not(feature = "tui"))]
     {
         let _ = (lines, branch, detail, keep_on_quit);
-        anyhow::bail!("the rebase editor needs glance built with the `tui` feature")
+        anyhow::bail!(NEEDS_TUI)
     }
 }
 
@@ -168,7 +136,7 @@ pub fn edit(file: &Path, keep_on_quit: bool) -> Result<()> {
 fn header(repo: &gix::Repository, lines: &[todo::Line]) -> (String, String) {
     let p = rebase::progress(repo);
     let n = lines.iter().filter(|l| matches!(l, todo::Line::Commit { .. })).count();
-    let detail = match std::env::var(DESC_ENV) {
+    let detail = match std::env::var(rebase::DESC_ENV) {
         Ok(desc) if !desc.is_empty() => desc,
         _ => {
             let s = if n == 1 { "" } else { "s" };

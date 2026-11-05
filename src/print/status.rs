@@ -3,7 +3,7 @@
 use owo_colors::OwoColorize;
 
 use super::{Paint, Tone};
-use crate::fmt::change_letter;
+use crate::fmt::{change_letter, pad, width};
 use crate::git::diff::Size;
 use crate::git::status::{ChangeKind, FileChange, Status};
 
@@ -11,25 +11,29 @@ use crate::git::status::{ChangeKind, FileChange, Status};
 const BAR: usize = 10;
 
 pub fn print(st: &Status, p: &Paint) {
-    print_header(st, p);
+    super::out(lines(st, p));
+}
+
+pub fn lines(st: &Status, p: &Paint) -> Vec<String> {
+    let mut out = header(st, p);
 
     let clean = st.staged.is_empty() && st.unstaged.is_empty() && st.untracked.is_empty() && st.conflicted.is_empty();
     if clean {
-        println!();
-        println!(
+        out.push(String::new());
+        out.push(format!(
             "  {} {}",
             "✓".style(p.tone(Tone::Green)),
             "Nothing to commit, working tree clean".style(p.tone(Tone::Muted))
-        );
-        return;
+        ));
+        return out;
     }
 
     // One column layout for every section, so sizes and bars line up down the page.
     let rows: Vec<&FileChange> = st.staged.iter().chain(&st.unstaged).collect();
     let name_w = rows
         .iter()
-        .map(|f| display_name(f).chars().count())
-        .chain(st.conflicted.iter().chain(&st.untracked).map(|s| s.chars().count()))
+        .map(|f| width(&display_name(f)))
+        .chain(st.conflicted.iter().chain(&st.untracked).map(|s| width(s)))
         .max()
         .unwrap_or(0);
     let (add_w, del_w, biggest) = rows.iter().filter_map(|f| f.size).fold((0, 0, 0u32), |(a, d, m), s| match s {
@@ -43,29 +47,30 @@ pub fn print(st: &Status, p: &Paint) {
     let cols = Columns { name_w, add_w, del_w, biggest };
 
     if !st.conflicted.is_empty() {
-        section("CONFLICTS", Tone::Red, st.conflicted.len(), None, p);
-        for path in &st.conflicted {
-            println!("  {}  {}", "!".style(p.tone_bold(Tone::Red)), path_text(path, Tone::Red, p));
-        }
+        out.push(section("CONFLICTS", Tone::Red, st.conflicted.len(), None, p));
+        out.extend(
+            st.conflicted
+                .iter()
+                .map(|path| format!("  {}  {}", "!".style(p.tone_bold(Tone::Red)), path_text(path, Tone::Red, p))),
+        );
     }
     if !st.staged.is_empty() {
-        section("STAGED", Tone::Green, st.staged.len(), Some(&st.staged), p);
-        for f in &st.staged {
-            file_row(f, &cols, p);
-        }
+        out.push(section("STAGED", Tone::Green, st.staged.len(), Some(&st.staged), p));
+        out.extend(st.staged.iter().map(|f| file_row(f, &cols, p)));
     }
     if !st.unstaged.is_empty() {
-        section("CHANGES", Tone::Yellow, st.unstaged.len(), Some(&st.unstaged), p);
-        for f in &st.unstaged {
-            file_row(f, &cols, p);
-        }
+        out.push(section("CHANGES", Tone::Yellow, st.unstaged.len(), Some(&st.unstaged), p));
+        out.extend(st.unstaged.iter().map(|f| file_row(f, &cols, p)));
     }
     if !st.untracked.is_empty() {
-        section("UNTRACKED", Tone::Muted, st.untracked.len(), None, p);
-        for path in &st.untracked {
-            println!("  {}  {}", "?".style(p.tone(Tone::Faint)), path_text(path, Tone::Text, p));
-        }
+        out.push(section("UNTRACKED", Tone::Muted, st.untracked.len(), None, p));
+        out.extend(
+            st.untracked
+                .iter()
+                .map(|path| format!("  {}  {}", "?".style(p.tone(Tone::Faint)), path_text(path, Tone::Text, p))),
+        );
     }
+    out
 }
 
 struct Columns {
@@ -76,7 +81,7 @@ struct Columns {
 }
 
 /// `┃ main  e6f5685 · origin/main ↑1 · 1 stash` and, during a rebase, how to go on.
-fn print_header(st: &Status, p: &Paint) {
+fn header(st: &Status, p: &Paint) -> Vec<String> {
     let sep = format!(" {} ", "·".style(p.tone(Tone::Faint)));
     let mut parts: Vec<String> = Vec::new();
 
@@ -96,11 +101,8 @@ fn print_header(st: &Status, p: &Paint) {
         if up.ahead == 0 && up.behind == 0 {
             s += &format!(" {}", "up to date".style(p.tone(Tone::Faint)));
         }
-        if up.ahead > 0 {
-            s += &format!(" {}", format!("↑{}", up.ahead).style(p.tone(Tone::Green)));
-        }
-        if up.behind > 0 {
-            s += &format!(" {}", format!("↓{}", up.behind).style(p.tone(Tone::Red)));
+        for a in p.arrows(up.ahead, up.behind) {
+            s += &format!(" {a}");
         }
         parts.push(s);
     } else if st.branch.is_some() && st.head.is_some() {
@@ -116,17 +118,18 @@ fn print_header(st: &Status, p: &Paint) {
     if let Some(op) = &st.in_progress {
         line += &format!("  {}", format!(" {op} ").style(p.tag(Tone::Red)));
     }
-    println!("{line}");
+    let mut out = vec![line];
     if st.in_progress.as_deref().is_some_and(|op| op.starts_with("rebasing")) {
         let cmds = ["--continue", "--skip", "--abort", "--edit-todo"]
             .map(|c| c.style(p.tone(Tone::Text)).to_string())
             .join(&sep);
-        println!("{bar} {} {cmds}", "glance rebase".style(p.tone(Tone::Muted)));
+        out.push(format!("{bar} {} {cmds}", "glance rebase".style(p.tone(Tone::Muted))));
     }
+    out
 }
 
 /// ` STAGED  3 files  +24 −5`
-fn section(title: &str, tone: Tone, n: usize, files: Option<&[FileChange]>, p: &Paint) {
+fn section(title: &str, tone: Tone, n: usize, files: Option<&[FileChange]>, p: &Paint) -> String {
     let noun = if n == 1 { "file" } else { "files" };
     let mut line = format!(
         "\n  {}  {}",
@@ -145,11 +148,11 @@ fn section(title: &str, tone: Tone, n: usize, files: Option<&[FileChange]>, p: &
             line += &format!(" {}", format!("−{d}").style(p.tone(Tone::Red)));
         }
     }
-    println!("{line}");
+    line
 }
 
 /// `M  src/core/status.rs      +20 −3  ■■■■■■`
-fn file_row(f: &FileChange, c: &Columns, p: &Paint) {
+fn file_row(f: &FileChange, c: &Columns, p: &Paint) -> String {
     let (letter, tone) = kind(f.kind);
     let name = match &f.from {
         Some(from) => format!(
@@ -160,7 +163,7 @@ fn file_row(f: &FileChange, c: &Columns, p: &Paint) {
         ),
         None => path_text(&f.path, if f.kind == ChangeKind::Deleted { Tone::Muted } else { Tone::Text }, p),
     };
-    let pad = " ".repeat(c.name_w.saturating_sub(display_name(f).chars().count()));
+    let pad = pad(&display_name(f), c.name_w);
 
     let mut tail = String::new();
     match f.size {
@@ -178,11 +181,7 @@ fn file_row(f: &FileChange, c: &Columns, p: &Paint) {
         None => {}
     }
     let letter = letter.style(p.tone_bold(tone));
-    if tail.is_empty() {
-        println!("  {letter}  {name}");
-    } else {
-        println!("  {letter}  {name}{pad}  {tail}");
-    }
+    if tail.is_empty() { format!("  {letter}  {name}") } else { format!("  {letter}  {name}{pad}  {tail}") }
 }
 
 /// `■■■■□` sized against the biggest change: green for added lines, red for removed.

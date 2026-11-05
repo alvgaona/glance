@@ -103,12 +103,16 @@ pub fn run(repo: &gix::Repository, mut lines: Vec<Todo>, header: Header, newest_
 
 impl Screen for App {
     type Out = Outcome;
+    type Effect = std::convert::Infallible;
 
     fn draw(&mut self, f: &mut Frame) {
         draw(f, self)
     }
-    fn key(&mut self, k: KeyEvent) -> Result<Flow<Outcome>> {
-        Ok(self.on_key(k).into())
+    fn apply(&mut self, e: Self::Effect) -> Result<Flow<Self::Out, Self::Effect>> {
+        match e {}
+    }
+    fn key(&mut self, k: KeyEvent) -> Flow<Outcome, Self::Effect> {
+        self.on_key(k).into()
     }
     fn mouse(&mut self, m: MouseEvent) {
         self.on_mouse(m)
@@ -158,13 +162,13 @@ impl App {
             return Some(Outcome::Quit);
         }
         if self.confirm_abort.is_some() {
-            return match k.code {
-                KeyCode::Enter | KeyCode::Char('y') => Some(Outcome::Quit),
-                KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('q') => {
+            return match Confirm::answer(&k) {
+                Some(true) => Some(Outcome::Quit),
+                Some(false) => {
                     self.confirm_abort = None;
                     None
                 }
-                _ => None,
+                None => None,
             };
         }
         if let Some(p) = &mut self.palette {

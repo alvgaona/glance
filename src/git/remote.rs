@@ -2,13 +2,12 @@
 //! fetched) and change them through `git remote`.
 
 use std::path::Path;
-use std::process::Command;
 use std::time::SystemTime;
 
 use anyhow::Result;
 use gix::bstr::{BStr, ByteSlice};
 
-use super::run::{args, git};
+use super::run::{self, Ran, args, git};
 
 pub struct Remote {
     pub name: String,
@@ -44,13 +43,15 @@ pub fn list(repo: &gix::Repository) -> Result<Vec<Remote>> {
     };
 
     // Which remote each local branch tracks.
-    let mut upstreams: Vec<(String, String)> = Vec::new();
-    for r in repo.references()?.local_branches()?.flatten() {
-        let b = r.name().shorten().to_string();
-        if let Some(remote) = get("branch", &b, "remote") {
-            upstreams.push((remote, b));
-        }
-    }
+    let upstreams: Vec<(String, String)> = repo
+        .references()?
+        .local_branches()?
+        .flatten()
+        .filter_map(|r| {
+            let b = r.name().shorten().to_string();
+            get("branch", &b, "remote").map(|remote| (remote, b))
+        })
+        .collect();
 
     // Remote branches, each given to the longest remote name that prefixes it.
     let mut by_remote: Vec<Vec<RemoteBranch>> = names.iter().map(|_| Vec::new()).collect();
@@ -84,28 +85,26 @@ pub fn list(repo: &gix::Repository) -> Result<Vec<Remote>> {
     }
 
     let fetch_head = fetch_head(repo);
-    let mut out = Vec::new();
-    for (i, name) in names.iter().enumerate() {
-        let url = get("remote", name, "url");
-        let push_url = get("remote", name, "pushurl").filter(|p| Some(p) != url.as_ref());
-        let mut branches = std::mem::take(&mut by_remote[i]);
+    let remotes = names.into_iter().zip(by_remote).zip(heads).map(|((name, mut branches), head)| {
+        let url = get("remote", &name, "url");
+        let push_url = get("remote", &name, "pushurl").filter(|p| Some(p) != url.as_ref());
         branches.sort_by_key(|b| std::cmp::Reverse(b.time));
         let from_fetch_head = match (&fetch_head, &url) {
             (Some((time, text)), Some(u)) if mentions(text, u) => Some(*time),
             _ => None,
         };
-        let from_logs = newest_file(&repo.common_dir().join("logs/refs/remotes").join(name));
-        out.push(Remote {
+        let from_logs = newest_file(&repo.common_dir().join("logs/refs/remotes").join(&name));
+        Remote {
             fetched: from_fetch_head.max(from_logs),
-            tracking: upstreams.iter().filter(|(r, _)| r == name).map(|(_, b)| b.clone()).collect(),
-            head: heads[i].take(),
-            name: name.clone(),
+            tracking: upstreams.iter().filter(|(r, _)| *r == name).map(|(_, b)| b.clone()).collect(),
+            head,
+            name,
             url,
             push_url,
             branches,
-        });
-    }
-    Ok(out)
+        }
+    });
+    Ok(remotes.collect())
 }
 
 /// FETCH_HEAD's time and text. It names the URL of every remote the last fetch read.
@@ -147,34 +146,33 @@ fn mtime(p: &Path) -> Option<i64> {
 
 /// The newest file under `dir`: when any of the remote's branches last moved.
 fn newest_file(dir: &Path) -> Option<i64> {
-    let mut newest = None;
-    for e in std::fs::read_dir(dir).ok()?.flatten() {
-        let p = e.path();
-        let t = if p.is_dir() { newest_file(&p) } else { mtime(&p) };
-        newest = newest.max(t);
-    }
-    newest
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter_map(|p| if p.is_dir() { newest_file(&p) } else { mtime(&p) })
+        .max()
 }
 
-pub fn add(name: &str, url: &str) -> (bool, String) {
+pub fn add(name: &str, url: &str) -> Ran {
     git(&args(&["remote", "add", name, url]))
 }
 
-pub fn remove(name: &str) -> (bool, String) {
+pub fn remove(name: &str) -> Ran {
     git(&args(&["remote", "remove", name]))
 }
 
 /// Also moves its remote branches and the upstream of every branch tracking it.
-pub fn rename(old: &str, new: &str) -> (bool, String) {
+pub fn rename(old: &str, new: &str) -> Ran {
     git(&args(&["remote", "rename", old, new]))
 }
 
-pub fn set_url(name: &str, url: &str) -> (bool, String) {
+pub fn set_url(name: &str, url: &str) -> Ran {
     git(&args(&["remote", "set-url", name, url]))
 }
 
 /// A push URL apart from the fetch one; `None` pushes to the fetch URL again.
-pub fn set_push_url(name: &str, url: Option<&str>) -> (bool, String) {
+pub fn set_push_url(name: &str, url: Option<&str>) -> Ran {
     match url {
         Some(u) => git(&args(&["remote", "set-url", "--push", name, u])),
         None => git(&args(&["config", "--unset-all", &format!("remote.{name}.pushurl")])),
@@ -195,17 +193,19 @@ pub fn set_head_args(name: &str) -> Vec<String> {
 }
 
 /// A git command that talks to remotes but never prompts: it runs behind a full screen,
-/// so a remote that needs a password fails and says so instead.
-pub fn no_prompt(repo: &gix::Repository, args: &[String]) -> Command {
-    let mut cmd = Command::new("git");
-    cmd.args(args).env("GIT_TERMINAL_PROMPT", "0");
+/// so a remote that needs a password fails and says so instead. Returns the job to run
+/// on another thread; the repository is only read here, on this one.
+pub fn no_prompt(repo: &gix::Repository, args: Vec<String>) -> impl FnOnce() -> Ran + Send + 'static {
     // Keep ssh from asking for a passphrase too, unless the user set their own ssh command.
     let own_ssh =
         std::env::var_os("GIT_SSH_COMMAND").is_some() || repo.config_snapshot().string("core.sshCommand").is_some();
-    if !own_ssh {
-        cmd.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
+    move || {
+        let mut env = vec![("GIT_TERMINAL_PROMPT", "0")];
+        if !own_ssh {
+            env.push(("GIT_SSH_COMMAND", "ssh -o BatchMode=yes"));
+        }
+        run::git_no_stdin(&args, &env)
     }
-    cmd
 }
 
 /// What a fetch did, from what it printed.
@@ -269,20 +269,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("gg-remote-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let sh = |cwd: &Path, a: &[&str]| {
-            let ok = Command::new("git")
-                .args(a)
-                .current_dir(cwd)
-                .env("GIT_AUTHOR_NAME", "t")
-                .env("GIT_AUTHOR_EMAIL", "t@t")
-                .env("GIT_COMMITTER_NAME", "t")
-                .env("GIT_COMMITTER_EMAIL", "t@t")
-                .output()
-                .unwrap()
-                .status
-                .success();
-            assert!(ok, "git {a:?}");
-        };
+        let sh = |cwd: &Path, a: &[&str]| run::test_git(cwd, a);
         sh(&dir, &["init", "-q", "-b", "main", "up"]);
         let up = dir.join("up");
         sh(&up, &["commit", "-q", "--allow-empty", "-m", "one"]);

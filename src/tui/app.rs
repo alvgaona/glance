@@ -10,39 +10,48 @@ use ratatui::Frame;
 use super::kit::Toast;
 use super::term::{enter, leave};
 
-/// What a screen wants after a key.
-pub(crate) enum Flow<T> {
+/// What a screen wants after a key or an effect.
+pub(crate) enum Flow<T, E> {
     Stay,
     /// Close the screen with this answer.
     Done(T),
-    /// Give the terminal back for a moment (for commands that may prompt), then
-    /// call [`Screen::outside`] and come back.
-    Outside,
+    /// Do this side effect (in [`Screen::apply`]) before drawing again.
+    Run(E),
 }
 
-impl<T> From<Option<T>> for Flow<T> {
+impl<T, E> From<Option<T>> for Flow<T, E> {
     fn from(o: Option<T>) -> Self {
         o.map_or(Flow::Stay, Flow::Done)
     }
 }
 
+/// A full screen. Keys change its state only; everything that touches the world (git,
+/// other programs, the clipboard) comes back as an effect, which [`Screen::apply`] does.
 pub(crate) trait Screen {
     type Out;
+    /// What this screen does outside its own state.
+    type Effect;
 
     /// How long to wait for input before drawing again (background work shows up then).
     const WAKE: Duration = Duration::from_millis(200);
 
     fn draw(&mut self, f: &mut Frame);
-    fn key(&mut self, k: KeyEvent) -> Result<Flow<Self::Out>>;
+    fn key(&mut self, k: KeyEvent) -> Flow<Self::Out, Self::Effect>;
     fn mouse(&mut self, _m: MouseEvent) {}
-    /// Background results to pick up before each draw.
+    /// The one place a screen touches the world. May ask for another effect.
+    fn apply(&mut self, e: Self::Effect) -> Result<Flow<Self::Out, Self::Effect>>;
+    /// True when `e` needs the normal terminal: git may prompt, or an editor opens.
+    fn in_terminal(_e: &Self::Effect) -> bool {
+        false
+    }
+    /// Background results and lazy loads, before each draw.
     fn tick(&mut self) -> Result<()> {
         Ok(())
     }
     fn toast(&mut self) -> &mut Option<Toast>;
-    /// Runs on the normal screen after [`Flow::Outside`].
-    fn outside(&mut self) -> Result<()> {
-        Ok(())
+    /// True while a text field or search has the keys: only then is a paste typed in.
+    fn typing(&self) -> bool {
+        false
     }
 }
 
@@ -58,26 +67,65 @@ pub(crate) fn run<S: Screen>(screen: &mut S) -> Result<S::Out> {
             if !event::poll(S::WAKE)? {
                 continue;
             }
-            let flow = match event::read()? {
-                Event::Key(k) if k.kind == KeyEventKind::Press => screen.key(k)?,
+            let mut flow = match event::read()? {
+                Event::Key(k) if k.kind == KeyEventKind::Press => screen.key(k),
                 Event::Mouse(m) => {
                     screen.mouse(m);
                     Flow::Stay
                 }
+                Event::Paste(text) if screen.typing() => {
+                    paste(screen, &text);
+                    Flow::Stay
+                }
                 _ => Flow::Stay,
             };
-            match flow {
-                Flow::Stay => {}
-                Flow::Done(out) => return Ok(out),
-                Flow::Outside => {
-                    leave();
-                    let done = screen.outside();
-                    terminal = enter();
-                    done?;
-                }
+            // Effects may ask for more effects (a write, then a reload).
+            loop {
+                flow = match flow {
+                    Flow::Stay => break,
+                    Flow::Done(out) => return Ok(out),
+                    Flow::Run(e) if S::in_terminal(&e) => {
+                        leave();
+                        let next = screen.apply(e);
+                        // Back to the full screen before any error goes up.
+                        terminal = enter();
+                        next?
+                    }
+                    Flow::Run(e) => screen.apply(e)?,
+                };
             }
         }
     })();
     leave();
     result
+}
+
+/// Types `text` in as plain characters. A line break becomes a space, so a paste can
+/// never press Enter (which would submit, and the rest would run as commands).
+pub(crate) fn paste<S: Screen>(screen: &mut S, text: &str) {
+    let chars = text.chars().map(|c| if c.is_whitespace() { ' ' } else { c }).filter(|c| !c.is_control());
+    for c in chars {
+        let k = KeyEvent::new(crossterm::event::KeyCode::Char(c), crossterm::event::KeyModifiers::NONE);
+        // Typing never leaves the field, so the flow is always Stay.
+        let _ = screen.key(k);
+    }
+}
+
+/// A plain key press.
+#[cfg(test)]
+pub(crate) fn press(code: crossterm::event::KeyCode) -> KeyEvent {
+    KeyEvent::new(code, crossterm::event::KeyModifiers::NONE)
+}
+
+#[cfg(test)]
+pub(crate) fn ctrl(c: char) -> KeyEvent {
+    KeyEvent::new(crossterm::event::KeyCode::Char(c), crossterm::event::KeyModifiers::CONTROL)
+}
+
+/// Types `text` into whatever has the keys; every key must leave the screen open.
+#[cfg(test)]
+pub(crate) fn type_in<S: Screen>(s: &mut S, text: &str) {
+    for c in text.chars() {
+        assert!(matches!(s.key(press(crossterm::event::KeyCode::Char(c))), Flow::Stay));
+    }
 }

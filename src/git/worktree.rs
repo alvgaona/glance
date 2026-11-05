@@ -1,12 +1,11 @@
 //! Worktrees: the folders a repo is checked out in (`git worktree list`).
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use gix::ObjectId;
 
-use super::run;
+use super::run::{self, Ran};
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Worktree {
@@ -27,16 +26,13 @@ pub struct Worktree {
 /// Every worktree, the main one first.
 pub fn list(repo: &gix::Repository) -> Result<Vec<Worktree>> {
     let dir = repo.workdir().unwrap_or(repo.git_dir());
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(["worktree", "list", "--porcelain"])
-        .output()
+    let out = crate::process::run("git", &run::args(&["worktree", "list", "--porcelain"]), Some(dir))
         .context("could not run git")?;
-    if !out.status.success() {
-        bail!("git worktree list: {}", String::from_utf8_lossy(&out.stderr).trim());
+    if !out.ok() {
+        bail!("git worktree list: {}", out.stderr.trim());
     }
-    Ok(parse(&String::from_utf8_lossy(&out.stdout)))
+    // stdout only: `parse` mustn't see git's warnings.
+    Ok(parse(&out.stdout))
 }
 
 /// Reads `git worktree list --porcelain`: one block per worktree, blank line between.
@@ -100,12 +96,12 @@ pub fn add_args(path: &Path, branch: &str, from: Source) -> Vec<String> {
     }
 }
 
-pub fn add(path: &Path, branch: &str, from: Source) -> (bool, String) {
+pub fn add(path: &Path, branch: &str, from: Source) -> Ran {
     run::git(&add_args(path, branch, from))
 }
 
 /// `force` also throws away uncommitted and untracked files in it.
-pub fn remove(path: &Path, force: bool) -> (bool, String) {
+pub fn remove(path: &Path, force: bool) -> Ran {
     let dir = path.display().to_string();
     let mut a = run::args(&["worktree", "remove"]);
     if force {
@@ -116,12 +112,12 @@ pub fn remove(path: &Path, force: bool) -> (bool, String) {
 }
 
 /// Forgets worktrees whose folders are gone.
-pub fn prune() -> (bool, String) {
+pub fn prune() -> Ran {
     run::git(&run::args(&["worktree", "prune"]))
 }
 
 /// `git worktree lock` (or `unlock`): a locked one isn't pruned or removed.
-pub fn lock(path: &Path, on: bool) -> (bool, String) {
+pub fn lock(path: &Path, on: bool) -> Ran {
     run::git(&run::args(&["worktree", if on { "lock" } else { "unlock" }, &path.display().to_string()]))
 }
 
@@ -163,18 +159,8 @@ mod tests {
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
         let dir = std::env::temp_dir().join(format!("gg-test-wt-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let git = |args: &[&str]| {
-            let ok = Command::new("git")
-                .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main"])
-                .args(args)
-                .current_dir(&dir)
-                .output()
-                .unwrap()
-                .status
-                .success();
-            assert!(ok, "git {args:?}");
-        };
-        git(&["init", "-q"]);
+        let git = |args: &[&str]| run::test_git(&dir, args);
+        git(&["init", "-q", "-b", "main"]);
         git(&["commit", "-q", "--allow-empty", "-m", "first"]);
         git(&["branch", "here"]);
         git(&["remote", "add", "origin", "https://example.invalid/r.git"]);

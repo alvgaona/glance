@@ -3,7 +3,7 @@
 use std::io::{IsTerminal, Write};
 
 use crossterm::{
-    event::{DisableMouseCapture, EnableMouseCapture},
+    event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture},
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{Terminal, backend::CrosstermBackend};
@@ -21,7 +21,8 @@ fn screen() -> Box<dyn Write> {
     Box::new(std::io::stdout())
 }
 
-/// Full screen with mouse reporting on.
+/// Full screen with mouse reporting on. A paste comes as one event (which screens
+/// ignore), not as keys: a newline in it would press Enter.
 pub(crate) fn enter() -> Term {
     // Put the terminal back if we panic, so the message is readable.
     static HOOK: std::sync::Once = std::sync::Once::new();
@@ -34,12 +35,18 @@ pub(crate) fn enter() -> Term {
     });
     let _ = enable_raw_mode();
     let mut out = screen();
-    let _ = crossterm::execute!(out, EnterAlternateScreen, EnableMouseCapture);
+    let _ = crossterm::execute!(out, EnterAlternateScreen, EnableMouseCapture, EnableBracketedPaste);
     Terminal::new(CrosstermBackend::new(out)).expect("terminal size")
 }
 
 /// Back to the normal screen.
 pub(crate) fn leave() {
-    let _ = crossterm::execute!(screen(), DisableMouseCapture, LeaveAlternateScreen, crossterm::cursor::Show);
+    let _ = crossterm::execute!(
+        screen(),
+        DisableBracketedPaste,
+        DisableMouseCapture,
+        LeaveAlternateScreen,
+        crossterm::cursor::Show
+    );
     let _ = disable_raw_mode();
 }

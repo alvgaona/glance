@@ -5,14 +5,12 @@ mod graph;
 use owo_colors::{OwoColorize, Style};
 
 use super::Paint;
-use crate::fmt::relative_time;
+use crate::fmt::{relative_time, width};
 use crate::git::log::{Commit, RefLabel};
 use graph::{Cell, Row};
 
 pub fn print(commits: &[Commit], p: &Paint) {
-    for line in lines(commits, p) {
-        println!("{line}");
-    }
+    crate::print::out(lines(commits, p));
 }
 
 /// Graph plus one formatted line per commit. Commit lines contain the short id
@@ -21,7 +19,7 @@ pub fn lines(commits: &[Commit], p: &Paint) -> Vec<String> {
     let now = crate::fmt::now();
     let ages: Vec<String> = commits.iter().map(|c| relative_time(c.time, now)).collect();
     let age_w = ages.iter().map(|a| a.len()).max().unwrap_or(0);
-    let author_w = commits.iter().map(|c| short_author(&c.author).len()).max().unwrap_or(0);
+    let author_w = commits.iter().map(|c| width(short_author(&c.author))).max().unwrap_or(0);
 
     let rows = graph::layout(commits);
     let graph_w = rows
@@ -40,11 +38,12 @@ pub fn lines(commits: &[Commit], p: &Paint) -> Vec<String> {
                 let summary_style = if c.is_merge { p.dim() } else { Style::new() };
                 let pad = " ".repeat(graph_w - cells.len());
                 format!(
-                    "{}{pad} {}  {:>age_w$}  {:<author_w$}  {}{}",
+                    "{}{pad} {}  {:>age_w$}  {}{}  {}{}",
                     draw(cells, p),
                     c.id.style(p.yellow()),
                     ages[*index].style(p.dim()),
                     short_author(&c.author).style(p.blue()),
+                    crate::fmt::pad(short_author(&c.author), author_w),
                     labels(&c.refs, p),
                     c.summary.style(summary_style),
                 )

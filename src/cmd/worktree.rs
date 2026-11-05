@@ -11,7 +11,7 @@ pub fn run(list: bool, paint: &Paint) -> Result<()> {
     #[cfg(feature = "tui")]
     if !list && super::screen_for_keyboard() {
         if let Some(path) = crate::tui::screens::worktree::run(&repo)? {
-            println!("{}", path.display());
+            crate::print::out([path.display()]);
         }
         return Ok(());
     }

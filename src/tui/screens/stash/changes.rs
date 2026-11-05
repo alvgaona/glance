@@ -351,18 +351,18 @@ impl Picker {
         let (note, red) = self.note(inner.width);
 
         // Mode tabs and the untracked switch.
-        let mut tabs = Vec::new();
-        for (m, key, label) in
-            [(Mode::Everything, "e", "everything"), (Mode::Staged, "s", "staged"), (Mode::Unstaged, "u", "unstaged")]
-        {
-            let style = if m == self.mode {
-                Style::new().bg(theme::ACCENT).fg(theme::BG)
-            } else {
-                Style::new().bg(theme::BORDER).fg(theme::TEXT)
-            };
-            tabs.push(Span::styled(format!(" {key} {label} "), style));
-            tabs.push(Span::raw(" "));
-        }
+        let modes =
+            [(Mode::Everything, "e", "everything"), (Mode::Staged, "s", "staged"), (Mode::Unstaged, "u", "unstaged")];
+        let mut tabs: Vec<Span> = (modes.into_iter())
+            .flat_map(|(m, key, label)| {
+                let style = if m == self.mode {
+                    Style::new().bg(theme::ACCENT).fg(theme::BG)
+                } else {
+                    Style::new().bg(theme::BORDER).fg(theme::TEXT)
+                };
+                [Span::styled(format!(" {key} {label} "), style), Span::raw(" ")]
+            })
+            .collect();
         let untracked_on = self.untracked && self.mode != Mode::Staged;
         tabs.push(Span::raw(" "));
         tabs.push(Span::styled(
@@ -380,11 +380,10 @@ impl Picker {
         self.scroll = kit::list::follow(self.scroll, self.cursor, self.cursor, room);
         self.rows = Rect { y: inner.y + 4, height: room as u16, ..inner };
         let name_w = self.files.iter().map(|f| f.path.chars().count()).max().unwrap_or(0).min(inner.width as usize / 2);
-        for (n, &i) in covered.iter().enumerate().skip(self.scroll).take(room) {
+        lines.extend(covered.iter().enumerate().skip(self.scroll).take(room).map(|(n, &i)| {
             let file = &self.files[i];
-            let selected = focused && n == self.cursor;
-            lines.push(self.row(file, Some(self.is_on(file)), selected, name_w, inner.width));
-        }
+            self.row(file, Some(self.is_on(file)), focused && n == self.cursor, name_w, inner.width)
+        }));
         if covered.is_empty() {
             lines.push(Line::styled("  Nothing for this mode", theme::muted()));
         }
@@ -392,9 +391,7 @@ impl Picker {
         if !others.is_empty() {
             lines.push(Line::raw(""));
             lines.push(Line::styled("Stays in the working tree", theme::faint()));
-            for &i in others.iter().take(3) {
-                lines.push(self.row(&self.files[i], None, false, name_w, inner.width));
-            }
+            lines.extend(others.iter().take(3).map(|&i| self.row(&self.files[i], None, false, name_w, inner.width)));
             if others.len() > 3 {
                 lines.push(Line::styled(format!("  …and {} more", others.len() - 3), theme::faint()));
             }

@@ -4,6 +4,8 @@
 mod changes;
 mod draw;
 mod keys;
+#[cfg(test)]
+mod tests;
 
 use std::collections::{BTreeSet, HashMap};
 use std::rc::Rc;
@@ -56,6 +58,25 @@ enum Pane {
     Stashes,
 }
 
+/// What the screen does outside its own state; [`Screen::apply`] does it.
+enum Effect {
+    /// `git stash apply`, or `pop`.
+    Apply {
+        stash: Stash,
+        pop: bool,
+    },
+    Drop(Vec<Stash>),
+    Branch {
+        stash: Stash,
+        name: String,
+    },
+    Push {
+        picked: Picked,
+        message: String,
+    },
+    Copy(String),
+}
+
 /// What an open text field is for.
 enum Ask {
     /// `git stash branch <name> <stash>`.
@@ -76,15 +97,17 @@ struct App<'r> {
     query: String,
     searching: bool,
     focus: Pane,
-    /// Details by (stash, panel width).
+    /// Details by (stash, panel width), filled in `tick`.
     cache: HashMap<(ObjectId, u16), Rc<Vec<Line<'static>>>>,
+    /// The details panel's width at the last draw.
+    detail_width: u16,
     detail_scroll: Scroll,
     detail_for: Option<ObjectId>,
     detail_area: Rect,
     list_area: Rect,
     toast: Option<Toast>,
     palette: Option<Palette<Cmd>>,
-    confirm: Option<(Confirm, Vec<Stash>)>,
+    confirm: Option<(Confirm, Effect)>,
     input: Option<(Input, Ask)>,
     /// The working tree, and what to stash from it.
     changes: Picker,
@@ -96,6 +119,11 @@ struct App<'r> {
 }
 
 pub fn run(repo: &gix::Repository) -> Result<()> {
+    app::run(&mut start(repo)?)
+}
+
+/// The screen as it opens, before the first draw.
+fn start(repo: &gix::Repository) -> Result<App<'_>> {
     let mut app = App {
         repo,
         list: Vec::new(),
@@ -107,6 +135,7 @@ pub fn run(repo: &gix::Repository) -> Result<()> {
         searching: false,
         focus: Pane::Stashes,
         cache: HashMap::new(),
+        detail_width: 0,
         detail_scroll: Scroll::default(),
         detail_for: None,
         detail_area: Rect::default(),
@@ -115,7 +144,8 @@ pub fn run(repo: &gix::Repository) -> Result<()> {
         palette: None,
         confirm: None,
         input: None,
-        changes: Picker::new(&crate::git::status::read(repo, true)?),
+        // Filled by `reload`.
+        changes: Picker::new(&Default::default()),
         changes_area: Rect::default(),
         repo_name: crate::git::repo_name(repo),
         branch: None,
@@ -126,24 +156,61 @@ pub fn run(repo: &gix::Repository) -> Result<()> {
     if app.list.is_empty() && !app.changes.is_empty() {
         app.focus = Pane::Changes;
     }
-
-    app::run(&mut app)
+    Ok(app)
 }
 
 impl Screen for App<'_> {
     type Out = ();
+    type Effect = Effect;
 
     fn draw(&mut self, f: &mut Frame) {
         draw(f, self)
     }
-    fn key(&mut self, k: KeyEvent) -> Result<Flow<()>> {
-        Ok(if self.on_key(k)? { Flow::Done(()) } else { Flow::Stay })
+    fn apply(&mut self, e: Effect) -> Result<Flow<(), Effect>> {
+        match e {
+            Effect::Apply { stash, pop } => self.apply_stash(&stash, pop)?,
+            Effect::Drop(list) => self.drop_stashes(list)?,
+            Effect::Branch { stash, name } => {
+                let done = format!("On new branch {name}, with {} applied", stash.name());
+                self.toast = Some(Toast::ran(&stash::branch(self.repo, &stash, &name), done));
+                self.reload(None)?;
+            }
+            Effect::Push { picked, message } => {
+                let ran = picked.push.run(&message);
+                if ran.is_ok() {
+                    self.changes.reset_ticks();
+                }
+                self.toast = Some(Toast::ran(&ran, format!("Stashed {} as stash@{{0}}", picked.describe())));
+                self.reload(Some(0))?;
+                if self.changes.is_empty() {
+                    self.focus = Pane::Stashes;
+                }
+            }
+            Effect::Copy(id) => {
+                crate::clipboard::copy(&id);
+                self.toast = Some(Toast::new(format!("Copied {}", &id[..7.min(id.len())]), theme::ACCENT));
+            }
+        }
+        Ok(Flow::Stay)
+    }
+    fn tick(&mut self) -> Result<()> {
+        // Zero until the first draw has measured the panel.
+        if self.detail_width > 0 {
+            self.load_detail(self.detail_width);
+        }
+        Ok(())
+    }
+    fn key(&mut self, k: KeyEvent) -> Flow<(), Effect> {
+        self.on_key(k)
     }
     fn mouse(&mut self, m: MouseEvent) {
         self.on_mouse(m)
     }
     fn toast(&mut self) -> &mut Option<Toast> {
         &mut self.toast
+    }
+    fn typing(&self) -> bool {
+        self.input.is_some() || self.searching
     }
 }
 
@@ -229,25 +296,25 @@ impl App<'_> {
         self.selected = (self.selected as isize + n).clamp(0, last) as usize;
     }
 
-    /// `git stash apply` or `git stash pop` on the current stash.
-    fn apply(&mut self, pop: bool) -> Result<()> {
-        let Some(s) = self.current().cloned() else { return Ok(()) };
-        let (ok, out) = stash::apply(&s, pop);
-        self.toast = Some(if ok {
-            let done = if pop { "Popped" } else { "Applied" };
-            Toast::new(format!("{done} {}: {}", s.name(), s.title()), theme::GREEN)
-        } else if out.contains("CONFLICT") {
-            // git keeps the stash when a pop conflicts.
-            let n = out.lines().filter(|l| l.contains("CONFLICT")).count();
-            Toast::new(
-                format!(
-                    "Applied with conflicts in {n} file{}. The stash is kept; fix them, then drop it",
-                    if n == 1 { "" } else { "s" }
-                ),
-                theme::RED,
-            )
-        } else {
-            Toast::new(first_lines(&out), theme::RED)
+    /// `git stash apply` or `git stash pop`.
+    fn apply_stash(&mut self, s: &Stash, pop: bool) -> Result<()> {
+        self.toast = Some(match stash::apply(self.repo, s, pop) {
+            Ok(_) => {
+                let done = if pop { "Popped" } else { "Applied" };
+                Toast::new(format!("{done} {}: {}", s.name(), s.title()), theme::GREEN)
+            }
+            Err(out) if out.contains("CONFLICT") => {
+                // git keeps the stash when a pop conflicts.
+                let n = out.lines().filter(|l| l.contains("CONFLICT")).count();
+                Toast::new(
+                    format!(
+                        "Applied with conflicts in {n} file{}. The stash is kept; fix them, then drop it",
+                        if n == 1 { "" } else { "s" }
+                    ),
+                    theme::RED,
+                )
+            }
+            Err(out) => Toast::new(first_lines(&out), theme::RED),
         });
         self.reload(None)
     }
@@ -276,19 +343,14 @@ impl App<'_> {
             body += "`git stash store <id>` brings one back (until git cleans up).";
             (format!("Drop {} stashes?", list.len()), body)
         };
-        self.confirm = Some((Confirm { title, body, yes: "Drop".into(), no: "Cancel".into(), danger: true }, list));
+        let confirm = Confirm { title, body, yes: "Drop".into(), no: "Cancel".into(), danger: true };
+        self.confirm = Some((confirm, Effect::Drop(list)));
     }
 
     /// Drops newest index last, so the indexes of the others don't shift under us.
     fn drop_stashes(&mut self, mut list: Vec<Stash>) -> Result<()> {
         list.sort_by_key(|s| std::cmp::Reverse(s.index));
-        let mut failed = Vec::new();
-        for s in &list {
-            let (ok, out) = stash::drop(s);
-            if !ok {
-                failed.push(out);
-            }
-        }
+        let failed: Vec<String> = list.iter().filter_map(|s| stash::drop(self.repo, s).err()).collect();
         self.marked.clear();
         self.toast = Some(match (failed.first(), list.as_slice()) {
             (Some(err), _) => Toast::new(format!("{} failed: {}", failed.len(), first_lines(err)), theme::RED),
@@ -298,36 +360,12 @@ impl App<'_> {
         self.reload(None)
     }
 
-    fn answer(&mut self, ask: Ask, text: String) -> Result<()> {
+    /// What the text field gave, for what it was opened for.
+    fn answer(&mut self, ask: Ask, text: String) -> Flow<(), Effect> {
         match ask {
-            Ask::Branch(s) => {
-                if text.is_empty() {
-                    return Ok(());
-                }
-                let (ok, out) = stash::branch(&s, &text);
-                self.toast = Some(if ok {
-                    Toast::new(format!("On new branch {text}, with {} applied", s.name()), theme::GREEN)
-                } else {
-                    Toast::new(first_lines(&out), theme::RED)
-                });
-                self.reload(None)
-            }
-            Ask::New(picked) => {
-                let (ok, out) = picked.push.run(&text);
-                if ok {
-                    self.changes.reset_ticks();
-                }
-                self.toast = Some(if ok {
-                    Toast::new(format!("Stashed {} as stash@{{0}}", picked.describe()), theme::GREEN)
-                } else {
-                    Toast::new(first_lines(&out), theme::RED)
-                });
-                self.reload(Some(0))?;
-                if self.changes.is_empty() {
-                    self.focus = Pane::Stashes;
-                }
-                Ok(())
-            }
+            Ask::Branch(_) if text.is_empty() => Flow::Stay,
+            Ask::Branch(stash) => Flow::Run(Effect::Branch { stash, name: text }),
+            Ask::New(picked) => Flow::Run(Effect::Push { picked, message: text }),
         }
     }
 
@@ -359,15 +397,17 @@ impl App<'_> {
         }
     }
 
-    fn detail_lines(&mut self, width: u16) -> Option<Rc<Vec<Line<'static>>>> {
-        let s = self.current()?.clone();
-        let key = (s.oid, width);
-        if let Some(d) = self.cache.get(&key) {
-            return Some(d.clone());
+    /// Reads the current stash's details into the cache, unless they're there.
+    fn load_detail(&mut self, width: u16) {
+        let Some(s) = self.current().cloned() else { return };
+        if !self.cache.contains_key(&(s.oid, width)) {
+            let lines = build_detail(self.repo, &s, self.branch.as_deref(), width as usize);
+            self.cache.insert((s.oid, width), Rc::new(lines));
         }
-        let lines = Rc::new(build_detail(self.repo, &s, self.branch.as_deref(), width as usize));
-        self.cache.insert(key, lines.clone());
-        Some(lines)
+    }
+
+    fn detail(&self, width: u16) -> Option<Rc<Vec<Line<'static>>>> {
+        self.cache.get(&(self.current()?.oid, width)).cloned()
     }
 }
 

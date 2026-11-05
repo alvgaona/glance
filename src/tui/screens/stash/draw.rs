@@ -166,8 +166,12 @@ fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
     app.detail_area = area;
-    let Some(lines) = app.detail_lines(inner.width) else {
-        f.render_widget(Paragraph::new(Span::styled("A stash's files and diff show here.", theme::faint())), inner);
+    app.detail_width = inner.width;
+    let Some(lines) = app.detail(inner.width) else {
+        // Not read yet (it is before the next draw), or no stash at all.
+        if app.current().is_none() {
+            f.render_widget(Paragraph::new(Span::styled("A stash's files and diff show here.", theme::faint())), inner);
+        }
         return;
     };
 

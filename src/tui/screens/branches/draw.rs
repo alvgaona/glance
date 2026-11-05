@@ -7,7 +7,9 @@ fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
     app.detail_area = area;
-    let Some(lines) = app.detail_lines(inner.width) else { return };
+    app.detail_width = inner.width;
+    // Not read yet: it is before the next draw.
+    let Some(lines) = app.detail(inner.width) else { return };
 
     // A new branch starts at the top.
     let name = app.current().map(|b| b.name.clone()).unwrap_or_default();

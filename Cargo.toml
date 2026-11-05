@@ -34,6 +34,7 @@ owo-colors = "4.4.0"
 ratatui = { version = "0.30.2", optional = true, features = ["unstable-rendered-line-info"] }
 serde = { version = "1.0.229", features = ["derive"], optional = true }
 serde_json = { version = "1.0.154", optional = true }
+unicode-width = "0.2.3"
 
 [features]
 default = ["tui"]

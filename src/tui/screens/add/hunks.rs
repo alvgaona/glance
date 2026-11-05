@@ -28,6 +28,8 @@ impl View {
     }
 }
 
+static EMPTY: View = View { entry: usize::MAX, lines: Vec::new(), ranges: Vec::new(), hunks: Vec::new() };
+
 /// Lines picked inside one hunk (`v`): indices into its `lines`, `anchor..=cursor`.
 /// It belongs to one entry and hunk, and lapses when either changes.
 pub(super) struct Pick {
@@ -100,8 +102,8 @@ fn whole_file(e: &Entry) -> bool {
 }
 
 impl App {
-    /// The diff of the entry under the cursor.
-    pub(super) fn view(&mut self) -> &View {
+    /// Builds the diff of the entry under the cursor, unless it's built already.
+    pub(super) fn load_view(&mut self) {
         if self.diff.as_ref().map(|v| v.entry) != Some(self.selected) {
             let view = match self.current() {
                 Some(e) => build(&self.repo, self.selected, e),
@@ -109,7 +111,12 @@ impl App {
             };
             self.diff = Some(view);
         }
-        self.diff.as_ref().unwrap()
+    }
+
+    /// The diff of the entry under the cursor ([`App::load_view`] builds it before each
+    /// draw), or nothing yet.
+    pub(super) fn view(&self) -> &View {
+        self.diff.as_ref().filter(|v| v.entry == self.selected).unwrap_or(&EMPTY)
     }
 
     /// Moves the keys to the diff, on its first hunk.
@@ -149,7 +156,7 @@ impl App {
     }
 
     /// The current hunk and what space would do with it.
-    fn current_hunk(&mut self) -> Option<(String, Hunk)> {
+    fn current_hunk(&self) -> Option<(String, Hunk)> {
         let path = self.current()?.path.clone();
         let i = self.hunk;
         let hunk = self.view().hunks.get(i)?.clone();
@@ -157,18 +164,17 @@ impl App {
     }
 
     /// Space in the diff: the hunk into the index, or out of it.
-    pub(super) fn toggle_hunk(&mut self) -> Result<()> {
-        let Some(e) = self.current() else { return Ok(()) };
+    pub(super) fn toggle_hunk(&mut self) -> Option<Effect> {
+        let e = self.current()?;
         if whole_file(e) {
             // The file moves to another group, so the keys go back to the list.
             self.focus = Focus::Files;
             return self.toggle();
         }
         let action = if e.group == Group::Staged { HunkAction::Unstage } else { HunkAction::Stage };
-        let Some((path, hunk)) = self.current_hunk() else { return Ok(()) };
-        let r = stage::apply_hunk(&self.repo, &path, &hunk, action);
-        let done = if action == HunkAction::Stage { "Staged the hunk" } else { "Unstaged the hunk" };
-        self.after_hunk(r, done.into())
+        let (path, hunk) = self.current_hunk()?;
+        let msg = if action == HunkAction::Stage { "Staged the hunk" } else { "Unstaged the hunk" };
+        Some(Effect::Hunk { path, hunk, action, msg: msg.into() })
     }
 
     /// d in the diff: asks before throwing the hunk away.
@@ -199,7 +205,8 @@ impl App {
             no: "Cancel".into(),
             danger: true,
         };
-        self.confirm = Some((confirm, Ask::DiscardHunk { path, hunk, done: "Discarded the hunk".into() }));
+        let msg = "Discarded the hunk".into();
+        self.confirm = Some((confirm, Effect::Hunk { path, hunk, action: HunkAction::Discard, msg }));
     }
 
     /// The line pick, if it still belongs to the hunk in the diff.
@@ -208,7 +215,7 @@ impl App {
     }
 
     /// The picked lines as view rows (the hunk's `@@` row comes first).
-    pub(super) fn picked_rows(&mut self) -> Option<(usize, std::ops::RangeInclusive<usize>)> {
+    pub(super) fn picked_rows(&self) -> Option<(usize, std::ops::RangeInclusive<usize>)> {
         let (cursor, range) = self.pick().map(|p| (p.cursor, p.range()))?;
         let i = self.hunk;
         let start = self.view().ranges.get(i)?.start + 1;
@@ -216,7 +223,7 @@ impl App {
     }
 
     /// How many changed lines are picked.
-    pub(super) fn picked_changes(&mut self) -> usize {
+    pub(super) fn picked_changes(&self) -> usize {
         let Some(range) = self.pick().map(Pick::range) else { return 0 };
         let i = self.hunk;
         let Some(h) = self.view().hunks.get(i) else { return 0 };
@@ -277,14 +284,12 @@ impl App {
     }
 
     /// Space while picking: the picked lines into the index, or out of it.
-    pub(super) fn toggle_lines(&mut self) -> Result<()> {
+    pub(super) fn toggle_lines(&mut self) -> Option<Effect> {
         let staged = self.current().is_some_and(|e| e.group == Group::Staged);
         let action = if staged { HunkAction::Unstage } else { HunkAction::Stage };
-        let Some((path, part, n)) = self.picked_hunk(action) else { return Ok(()) };
-        let r = stage::apply_hunk(&self.repo, &path, &part, action);
-        self.pick = None;
+        let (path, hunk, n) = self.picked_hunk(action)?;
         let done = if staged { "Unstaged" } else { "Staged" };
-        self.after_hunk(r, format!("{done} {}", lines(n)))
+        Some(Effect::Hunk { path, hunk, action, msg: format!("{done} {}", lines(n)) })
     }
 
     /// d while picking: asks before throwing the picked lines away.
@@ -301,14 +306,14 @@ impl App {
             no: "Cancel".into(),
             danger: true,
         };
-        let done = format!("Discarded {}", lines(n));
-        self.confirm = Some((confirm, Ask::DiscardHunk { path, hunk, done }));
+        let msg = format!("Discarded {}", lines(n));
+        self.confirm = Some((confirm, Effect::Hunk { path, hunk, action: HunkAction::Discard, msg }));
     }
 
     /// After a hunk write: report, reload, and stay on the same file's next hunk if it's
     /// still in the same group; otherwise back to the file list where it was.
-    pub(super) fn after_hunk(&mut self, (ok, out): (bool, String), msg: String) -> Result<()> {
-        self.toast = Some(if ok { Toast::new(msg, theme::GREEN) } else { Toast::new(first_lines(&out), theme::RED) });
+    pub(super) fn after_hunk(&mut self, ran: Ran, msg: String) -> Result<()> {
+        self.toast = Some(Toast::ran(&ran, msg));
         self.pick = None;
         let Some((group, pos)) = self.place() else { return self.reload() };
         let path = self.current().map(|e| e.path.clone()).unwrap_or_default();
@@ -317,6 +322,7 @@ impl App {
         match self.entries.iter().position(|e| e.group == group && e.path == path) {
             Some(i) => {
                 self.selected = i;
+                self.load_view();
                 let n = self.view().ranges.len();
                 if n == 0 {
                     self.focus = Focus::Files;

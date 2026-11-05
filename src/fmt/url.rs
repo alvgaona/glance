@@ -16,7 +16,16 @@ pub fn short(url: &str) -> String {
 /// `None` for local paths and other transports.
 pub fn web(url: &str) -> Option<String> {
     let (host, path) = host_path(url)?;
-    Some(format!("https://{host}/{path}"))
+    // An http(s) URL is the page's own address, port and all; an ssh port isn't.
+    let (scheme, port) = match url.trim().split_once("://") {
+        Some((s @ ("http" | "https"), rest)) => {
+            let authority = rest.split('/').next().unwrap_or_default();
+            let port = authority.rsplit('@').next().and_then(|h| h.split_once(':')).map(|(_, p)| format!(":{p}"));
+            (s, port)
+        }
+        _ => ("https", None),
+    };
+    Some(format!("{scheme}://{host}{}/{path}", port.unwrap_or_default()))
 }
 
 /// Host (no user, no port) and path (no `.git`) of an ssh, scp-like or http(s) URL.
@@ -58,6 +67,11 @@ mod tests {
         assert_eq!(short("file:///srv/git/x.git"), "/srv/git/x.git");
         assert_eq!(web("git@github.com:a/b.git").as_deref(), Some("https://github.com/a/b"));
         assert_eq!(web("../up"), None);
+        assert_eq!(
+            web("https://git.example.com:8443/team/repo.git").as_deref(),
+            Some("https://git.example.com:8443/team/repo")
+        );
+        assert_eq!(web("ssh://git@host:2222/a/b").as_deref(), Some("https://host/a/b"));
         // A Windows drive letter is a path, not a host.
         assert_eq!(web("C:/repos/x"), None);
     }

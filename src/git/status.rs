@@ -51,6 +51,7 @@ pub enum ChangeKind {
 pub fn read(repo: &gix::Repository, sizes: bool) -> Result<Status> {
     let mut st = Status::default();
     let workdir = repo.workdir().map(|d| d.to_path_buf());
+    let mut disk = if sizes { super::stage::Disk::new(repo) } else { None };
 
     let head_ref = repo.head_name()?;
     st.branch = head_ref.as_ref().map(|n| n.shorten().to_string());
@@ -92,8 +93,8 @@ pub fn read(repo: &gix::Repository, sizes: bool) -> Result<Status> {
                 let path = item.rela_path().to_str_lossy().into_owned();
                 // Index blob vs the file on disk.
                 let size = match (&item, &workdir) {
-                    (gix::status::index_worktree::Item::Modification { entry, .. }, Some(dir)) if sizes => {
-                        let on_disk = std::fs::read(dir.join(&path)).unwrap_or_default();
+                    (gix::status::index_worktree::Item::Modification { entry, .. }, Some(_)) if sizes => {
+                        let on_disk = disk.as_mut().map(|d| d.read(&path)).unwrap_or_default();
                         diff::count(&diff::blob(repo, entry.id), &on_disk)
                     }
                     _ => None,
@@ -155,10 +156,8 @@ pub fn upstream(
     };
     let up = reference.peel_to_id()?.detach();
 
-    let count = |from: gix::ObjectId, hide: gix::ObjectId| -> Result<usize> {
-        Ok(repo.rev_walk([from]).with_hidden([hide]).all()?.count())
-    };
-    Ok(Some(Upstream { name: name.shorten().to_string(), ahead: count(head, up)?, behind: count(up, head)? }))
+    let (ahead, behind) = super::branches::ahead_behind(repo, head, up);
+    Ok(Some(Upstream { name: name.shorten().to_string(), ahead, behind }))
 }
 
 /// "rebase 3/5", "merge", "cherry-pick"... for an operation that was started but not finished.

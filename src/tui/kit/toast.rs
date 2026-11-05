@@ -19,8 +19,21 @@ pub struct Toast {
 }
 
 impl Toast {
+    #[cfg(test)]
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
     pub fn new(text: impl Into<String>, color: Color) -> Self {
         Self { text: text.into(), color, until: Instant::now() + Duration::from_millis(2800) }
+    }
+
+    /// Green `ok` when the write worked, else red with the first lines of what went wrong.
+    pub fn ran(ran: &Result<String, String>, ok: impl Into<String>) -> Self {
+        match ran {
+            Ok(_) => Self::new(ok, theme::GREEN),
+            Err(e) => Self::new(crate::tui::first_lines(e), theme::RED),
+        }
     }
 
     pub fn expired(&self) -> bool {

@@ -1,0 +1,10 @@
+# Side effects live at the edges: see "How the code is laid out" in CONTRIBUTING.md.
+disallowed-methods = [
+    { path = "std::process::Command::new", reason = "run programs through src/process.rs" },
+]
+disallowed-types = [
+    { path = "std::cell::RefCell", reason = "no hidden shared mutable state" },
+    { path = "std::cell::Cell", reason = "no hidden shared mutable state" },
+    { path = "std::sync::Mutex", reason = "send values over channels instead" },
+    { path = "std::sync::RwLock", reason = "send values over channels instead" },
+]

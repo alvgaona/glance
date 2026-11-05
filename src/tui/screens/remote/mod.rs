@@ -7,7 +7,6 @@ mod keys;
 
 use draw::draw;
 
-use std::process::Stdio;
 use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
@@ -24,6 +23,8 @@ use ratatui::{
 use crate::fmt::url;
 use crate::fmt::{now, relative_time};
 use crate::git::remote::{self, Fetched, Remote};
+use crate::git::run::Ran;
+use crate::process;
 use crate::tui::app::{self, Flow, Screen};
 use crate::tui::kit::{self, Command, Confirm, Input, InputEvent, Palette, PaletteEvent, Scroll, Toast, footer, list};
 use crate::tui::{first_lines, theme};
@@ -63,9 +64,35 @@ enum Typing {
     },
 }
 
-/// What an open dialog will do on yes.
-enum Ask {
+/// What the screen does outside its own state; [`Screen::apply`] does it.
+enum Effect {
+    Reload,
+    /// One remote, or all of them, in the background.
+    Fetch(Option<String>),
+    /// Ask the remote for its default branch, in the background.
+    SetHead(String),
+    /// Add, then fetch it.
+    Add {
+        name: String,
+        url: String,
+    },
+    Rename {
+        old: String,
+        new: String,
+    },
+    SetUrl {
+        name: String,
+        url: String,
+    },
+    /// `None` pushes where it fetches from again.
+    SetPushUrl {
+        name: String,
+        url: Option<String>,
+    },
     Remove(String),
+    Copy(String),
+    /// A remote's web page, in the browser.
+    Open(String),
 }
 
 /// A git command talking to a remote, on a background thread.
@@ -73,7 +100,7 @@ struct Job {
     /// "Fetching origin", for the header.
     what: String,
     kind: JobKind,
-    rx: Receiver<(bool, String)>,
+    rx: Receiver<Ran>,
 }
 
 enum JobKind {
@@ -97,12 +124,17 @@ struct App {
     job: Option<Job>,
     toast: Option<Toast>,
     palette: Option<Palette<Cmd>>,
-    confirm: Option<(Confirm, Ask)>,
+    confirm: Option<(Confirm, Effect)>,
     input: Option<(Input, Typing)>,
     repo_name: String,
 }
 
 pub fn run(repo: gix::Repository) -> Result<()> {
+    app::run(&mut start(repo)?)
+}
+
+/// The screen as it opens, before the first draw.
+fn start(repo: gix::Repository) -> Result<App> {
     let mut app = App {
         repo_name: crate::git::repo_name(&repo),
         repo,
@@ -122,20 +154,72 @@ pub fn run(repo: gix::Repository) -> Result<()> {
     app.load(None)?;
     // Start on the remote this branch tracks.
     app.selected = app.remotes.iter().position(|r| app.tracked_here(r)).unwrap_or(0);
-
-    app::run(&mut app)
+    Ok(app)
 }
 
 impl Screen for App {
     type Out = ();
+    type Effect = Effect;
     // Keep the "fetching…" note moving and pick up the result soon.
     const WAKE: Duration = Duration::from_millis(150);
 
     fn draw(&mut self, f: &mut Frame) {
         draw(f, self)
     }
-    fn key(&mut self, k: KeyEvent) -> Result<Flow<()>> {
-        Ok(if self.on_key(k)? { Flow::Done(()) } else { Flow::Stay })
+    fn apply(&mut self, e: Effect) -> Result<Flow<(), Effect>> {
+        match e {
+            Effect::Reload => self.load(None)?,
+            Effect::Fetch(name) => self.fetch(name),
+            Effect::SetHead(name) => {
+                let args = remote::set_head_args(&name);
+                self.start(format!("Asking {name} for its default branch"), JobKind::SetHead(name), args);
+            }
+            Effect::Add { name, url } => {
+                if let Err(out) = remote::add(&name, &url) {
+                    self.toast = Some(Toast::new(first_lines(&out), theme::RED));
+                    return Ok(Flow::Stay);
+                }
+                self.load(Some(&name))?;
+                self.toast = Some(Toast::new(format!("Added {name}"), theme::GREEN));
+                return Ok(Flow::Run(Effect::Fetch(Some(name))));
+            }
+            Effect::Rename { old, new } => {
+                let ran = remote::rename(&old, &new);
+                self.toast = Some(Toast::ran(&ran, format!("Renamed {old} to {new}")));
+                if ran.is_ok() {
+                    self.load(Some(&new))?;
+                }
+            }
+            Effect::SetUrl { name, url } => {
+                let ran = remote::set_url(&name, &url);
+                self.toast = Some(Toast::ran(&ran, format!("{name} now fetches from {}", url::short(&url))));
+                self.load(None)?;
+            }
+            Effect::SetPushUrl { name, url } => {
+                let done = match &url {
+                    Some(u) => format!("{name} now pushes to {}", url::short(u)),
+                    None => format!("{name} pushes to its fetch URL again"),
+                };
+                self.toast = Some(Toast::ran(&remote::set_push_url(&name, url.as_deref()), done));
+                self.load(None)?;
+            }
+            Effect::Remove(name) => {
+                self.toast = Some(Toast::ran(&remote::remove(&name), format!("Removed {name}")));
+                self.load(None)?;
+            }
+            Effect::Copy(u) => {
+                crate::clipboard::copy(&u);
+                self.toast = Some(Toast::new(format!("Copied {u}"), theme::ACCENT));
+            }
+            Effect::Open(page) => {
+                let text = if process::open(&page) { format!("Opened {page}") } else { page };
+                self.toast = Some(Toast::new(text, theme::ACCENT));
+            }
+        }
+        Ok(Flow::Stay)
+    }
+    fn key(&mut self, k: KeyEvent) -> Flow<(), Effect> {
+        self.on_key(k)
     }
     fn mouse(&mut self, m: MouseEvent) {
         self.on_mouse(m)
@@ -145,6 +229,9 @@ impl Screen for App {
     }
     fn toast(&mut self) -> &mut Option<Toast> {
         &mut self.toast
+    }
+    fn typing(&self) -> bool {
+        self.input.is_some()
     }
 }
 
@@ -217,24 +304,21 @@ impl App {
         self.detail_scroll.reset();
     }
 
+    /// Tells what's still running in the background.
+    pub(super) fn busy(&mut self) {
+        let what = self.job.as_ref().map(|j| j.what.to_lowercase()).unwrap_or_default();
+        self.toast = Some(Toast::new(format!("Still busy: {what}…"), theme::YELLOW));
+    }
+
     /// Runs a git command that talks to a remote on its own thread; `poll_job` reports it.
     fn start(&mut self, what: String, kind: JobKind, args: Vec<String>) {
-        if let Some(j) = &self.job {
-            self.toast = Some(Toast::new(format!("Still busy: {}…", j.what.to_lowercase()), theme::YELLOW));
-            return;
+        if self.job.is_some() {
+            return self.busy();
         }
-        let mut cmd = remote::no_prompt(&self.repo, &args);
-        cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        let job = remote::no_prompt(&self.repo, args);
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let result = match cmd.output() {
-                Ok(out) => (
-                    out.status.success(),
-                    format!("{}{}", String::from_utf8_lossy(&out.stderr), String::from_utf8_lossy(&out.stdout)),
-                ),
-                Err(e) => (false, format!("could not run git: {e}")),
-            };
-            let _ = tx.send(result);
+            let _ = tx.send(job());
         });
         self.job = Some(Job { what, kind, rx });
     }
@@ -250,34 +334,29 @@ impl App {
 
     fn poll_job(&mut self) -> Result<()> {
         let Some(job) = &self.job else { return Ok(()) };
-        let (ok, out) = match job.rx.try_recv() {
+        let ran = match job.rx.try_recv() {
             Ok(r) => r,
             Err(mpsc::TryRecvError::Empty) => return Ok(()),
-            Err(mpsc::TryRecvError::Disconnected) => (false, "git stopped".into()),
+            Err(mpsc::TryRecvError::Disconnected) => Err("git stopped".into()),
         };
         let job = self.job.take().unwrap();
         self.load(None)?;
-        self.toast = Some(match (ok, job.kind) {
-            (false, JobKind::Fetch(_)) => Toast::new(format!("Fetch failed: {}", remote::errors(&out)), theme::RED),
-            (false, JobKind::SetHead(_)) => Toast::new(remote::errors(&out), theme::RED),
-            (true, JobKind::Fetch(name)) => {
+        self.toast = Some(match (ran, job.kind) {
+            (Err(out), JobKind::Fetch(_)) => Toast::new(format!("Fetch failed: {}", remote::errors(&out)), theme::RED),
+            (Err(out), JobKind::SetHead(_)) => Toast::new(remote::errors(&out), theme::RED),
+            (Ok(out), JobKind::Fetch(name)) => {
                 let f = Fetched::read(&out);
                 let who = name.unwrap_or_else(|| "all remotes".into());
-                let mut parts = Vec::new();
-                if f.new > 0 {
-                    parts.push(format!("{} new", f.new));
-                }
-                if f.updated > 0 {
-                    parts.push(format!("{} updated", f.updated));
-                }
-                if f.pruned > 0 {
-                    parts.push(format!("{} pruned", f.pruned));
-                }
+                let parts: Vec<String> = [(f.new, "new"), (f.updated, "updated"), (f.pruned, "pruned")]
+                    .into_iter()
+                    .filter(|(n, _)| *n > 0)
+                    .map(|(n, what)| format!("{n} {what}"))
+                    .collect();
                 let what =
                     if parts.is_empty() { ": nothing new".to_string() } else { format!(" · {}", parts.join(" · ")) };
                 Toast::new(format!("Fetched {who}{what}"), theme::GREEN)
             }
-            (true, JobKind::SetHead(name)) => {
+            (Ok(_), JobKind::SetHead(name)) => {
                 let head = self.remotes.iter().find(|r| r.name == name).and_then(|r| r.head.clone());
                 Toast::new(
                     format!("{name}'s default branch is {}", head.unwrap_or_else(|| "unknown".into())),
@@ -289,86 +368,44 @@ impl App {
     }
 
     /// What the text field gave, for what it was opened for.
-    fn typed(&mut self, typing: Typing, text: String) -> Result<()> {
-        let fail = |out: &str| Some(Toast::new(first_lines(out), theme::RED));
+    fn typed(&mut self, typing: Typing, text: String) -> Flow<(), Effect> {
         match typing {
+            Typing::AddUrl if text.is_empty() => {}
             Typing::AddUrl => {
-                if text.is_empty() {
-                    return Ok(());
-                }
                 let name = suggest_name(&self.remotes, &text);
                 let input = Input::new("Name the remote at", &url::short(&text), &name, "Add")
                     .placeholder("name, e.g. upstream")
                     .note("It's fetched right after.");
                 self.input = Some((input, Typing::AddName { url: text }));
             }
-            Typing::AddName { url } => {
-                if text.is_empty() {
-                    return Ok(());
-                }
-                if self.remotes.iter().any(|r| r.name == text) {
-                    self.toast = Some(Toast::new(format!("There's a remote called {text} already"), theme::YELLOW));
-                    return Ok(());
-                }
-                let (ok, out) = remote::add(&text, &url);
-                if !ok {
-                    self.toast = fail(&out);
-                    return Ok(());
-                }
-                self.load(Some(&text))?;
-                self.toast = Some(Toast::new(format!("Added {text}"), theme::GREEN));
-                self.fetch(Some(text));
+            Typing::AddName { .. } if text.is_empty() => {}
+            Typing::AddName { .. } if self.remotes.iter().any(|r| r.name == text) => {
+                self.toast = Some(Toast::new(format!("There's a remote called {text} already"), theme::YELLOW));
             }
-            Typing::Rename { old } => {
-                if text.is_empty() || text == old {
-                    return Ok(());
-                }
-                let (ok, out) = remote::rename(&old, &text);
-                if ok {
-                    self.toast = Some(Toast::new(format!("Renamed {old} to {text}"), theme::GREEN));
-                    self.load(Some(&text))?;
-                } else {
-                    self.toast = fail(&out);
-                }
+            Typing::AddName { url } => return Flow::Run(Effect::Add { name: text, url }),
+            Typing::Rename { old } if text.is_empty() || text == old => {}
+            Typing::Rename { old } => return Flow::Run(Effect::Rename { old, new: text }),
+            Typing::Url { .. } if text.is_empty() => {
+                self.toast = Some(Toast::new("A remote needs a URL; d removes it", theme::YELLOW));
             }
             Typing::Url { name } => {
-                let was = self.remotes.iter().find(|r| r.name == name).and_then(|r| r.url.clone());
-                if text.is_empty() {
-                    self.toast = Some(Toast::new("A remote needs a URL; d removes it", theme::YELLOW));
-                    return Ok(());
+                let was = self.remotes.iter().find(|r| r.name == name).and_then(|r| r.url.as_ref());
+                if Some(&text) != was {
+                    return Flow::Run(Effect::SetUrl { name, url: text });
                 }
-                if Some(&text) == was.as_ref() {
-                    return Ok(());
-                }
-                let (ok, out) = remote::set_url(&name, &text);
-                self.toast = if ok {
-                    Some(Toast::new(format!("{name} now fetches from {}", url::short(&text)), theme::GREEN))
-                } else {
-                    fail(&out)
-                };
-                self.load(None)?;
             }
             Typing::PushUrl { name } => {
                 let r = self.remotes.iter().find(|r| r.name == name);
                 let was = r.and_then(|r| r.push_url.clone());
                 let fetch = r.and_then(|r| r.url.clone());
                 // Empty, or the fetch URL again: push where it fetches from.
-                let new = Some(text).filter(|t| !t.is_empty() && Some(t) != fetch.as_ref());
-                if new == was {
-                    return Ok(());
+                let url = Some(text).filter(|t| !t.is_empty() && Some(t) != fetch.as_ref());
+                if url != was {
+                    return Flow::Run(Effect::SetPushUrl { name, url });
                 }
-                let (ok, out) = remote::set_push_url(&name, new.as_deref());
-                self.toast = match (ok, &new) {
-                    (true, Some(u)) => {
-                        Some(Toast::new(format!("{name} now pushes to {}", url::short(u)), theme::GREEN))
-                    }
-                    (true, None) => Some(Toast::new(format!("{name} pushes to its fetch URL again"), theme::GREEN)),
-                    (false, _) => fail(&out),
-                };
-                self.load(None)?;
             }
         }
-        Ok(())
+        Flow::Stay
     }
 
     fn ask_remove(&mut self) {
@@ -384,9 +421,7 @@ impl App {
                 let who =
                     if n == 1 { "This local branch stops".into() } else { format!("These {n} local branches stop") };
                 body += &format!("{who} tracking it:\n");
-                for b in r.tracking.iter().take(6) {
-                    body += &format!("$ {b}\n");
-                }
+                body.extend(r.tracking.iter().take(6).map(|b| format!("$ {b}\n")));
                 if n > 6 {
                     body += &format!("and {} more\n", n - 6);
                 }
@@ -400,21 +435,7 @@ impl App {
             no: "Cancel".into(),
             danger: true,
         };
-        self.confirm = Some((confirm, Ask::Remove(r.name.clone())));
-    }
-
-    fn answer(&mut self, ask: Ask) -> Result<()> {
-        match ask {
-            Ask::Remove(name) => {
-                let (ok, out) = remote::remove(&name);
-                self.toast = Some(if ok {
-                    Toast::new(format!("Removed {name}"), theme::GREEN)
-                } else {
-                    Toast::new(first_lines(&out), theme::RED)
-                });
-            }
-        }
-        self.load(None)
+        self.confirm = Some((confirm, Effect::Remove(r.name.clone())));
     }
 
     fn on_mouse(&mut self, m: MouseEvent) {
@@ -454,6 +475,38 @@ mod tests {
             tracking: Vec::new(),
             fetched: None,
         }
+    }
+
+    #[test]
+    fn no_remove_while_a_fetch_runs() {
+        use crate::tui::app::press;
+        let s = crate::git::run::Scratch::new("remote-busy");
+        s.git(&["remote", "add", "origin", "/nowhere"]);
+        let mut app = start(s.repo()).unwrap();
+        let (_tx, rx) = mpsc::channel();
+        app.job = Some(Job { what: "Fetching origin".into(), kind: JobKind::Fetch(None), rx });
+        app.key(press(KeyCode::Char('d')));
+        assert!(app.confirm.is_none());
+        assert_eq!(app.toast.as_ref().unwrap().text(), "Still busy: fetching origin…");
+        // Once it's done, d asks as usual.
+        app.job = None;
+        app.key(press(KeyCode::Char('d')));
+        assert!(app.confirm.is_some());
+    }
+
+    #[test]
+    fn add_asks_for_the_url_then_the_name() {
+        use crate::tui::app::{press, type_in};
+        let s = crate::git::run::Scratch::new("remote-add");
+        let mut app = start(s.repo()).unwrap();
+        // No remotes: nothing to copy.
+        assert!(matches!(app.key(press(KeyCode::Char('y'))), Flow::Stay));
+
+        app.key(press(KeyCode::Char('a')));
+        type_in(&mut app, "git@github.com:me/x.git");
+        assert!(matches!(app.key(press(KeyCode::Enter)), Flow::Stay));
+        let Flow::Run(Effect::Add { name, url }) = app.key(press(KeyCode::Enter)) else { panic!("enter should add") };
+        assert_eq!((name.as_str(), url.as_str()), ("origin", "git@github.com:me/x.git"));
     }
 
     #[test]

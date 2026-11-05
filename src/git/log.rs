@@ -33,7 +33,8 @@ pub fn read(repo: &gix::Repository, count: usize, all: bool) -> Result<Vec<Commi
     let labels = ref_labels(repo)?;
     let mut tips: Vec<ObjectId> = repo.head_id().ok().map(|id| id.detach()).into_iter().collect();
     if all {
-        tips.extend(labels.keys().copied());
+        // A tag can point at a tree or blob (linux.git has one): the walk takes commits only.
+        tips.extend(labels.keys().copied().filter(|id| repo.find_commit(*id).is_ok()));
     }
     if tips.is_empty() {
         return Ok(Vec::new()); // unborn branch: no commits yet
@@ -45,24 +46,24 @@ pub fn read(repo: &gix::Repository, count: usize, all: bool) -> Result<Vec<Commi
         .sorting(topo::Sorting::TopoOrder)
         .build()?;
 
-    let mut out = Vec::with_capacity(count.min(1024));
-    for info in walk.take(count) {
-        let info = info?;
-        let commit = repo.find_commit(info.id)?;
-        let author = commit.author()?;
-        let parents: Vec<ObjectId> = commit.parent_ids().map(|id| id.detach()).collect();
-        out.push(Commit {
-            oid: info.id,
-            id: commit.id().shorten_or_id().to_string(),
-            is_merge: parents.len() > 1,
-            parents,
-            summary: commit.message()?.summary().to_str_lossy().into_owned(),
-            author: author.name.to_str_lossy().into_owned(),
-            time: commit.time()?.seconds,
-            refs: labels.get(&info.id).cloned().unwrap_or_default(),
-        });
-    }
-    Ok(out)
+    walk.take(count)
+        .map(|info| {
+            let info = info?;
+            let commit = repo.find_commit(info.id)?;
+            let author = commit.author()?;
+            let parents: Vec<ObjectId> = commit.parent_ids().map(|id| id.detach()).collect();
+            Ok(Commit {
+                oid: info.id,
+                id: commit.id().shorten_or_id().to_string(),
+                is_merge: parents.len() > 1,
+                parents,
+                summary: commit.message()?.summary().to_str_lossy().into_owned(),
+                author: author.name.to_str_lossy().into_owned(),
+                time: commit.time()?.seconds,
+                refs: labels.get(&info.id).cloned().unwrap_or_default(),
+            })
+        })
+        .collect()
 }
 
 /// Branch, remote and tag names for every commit that has one.
@@ -93,4 +94,15 @@ pub fn ref_labels(repo: &gix::Repository) -> Result<HashMap<ObjectId, Vec<RefLab
         map.entry(id).or_default().push(label);
     }
     Ok(map)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn all_skips_tags_that_are_not_commits() {
+        let s = crate::git::run::Scratch::new("log-treetag");
+        s.commit("a.txt", "one\n");
+        s.git(&["update-ref", "refs/tags/treetag", "HEAD^{tree}"]);
+        assert_eq!(super::read(&s.repo(), 10, true).unwrap().len(), 1);
+    }
 }

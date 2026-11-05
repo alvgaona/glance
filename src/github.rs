@@ -2,7 +2,6 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
 use gix::ObjectId;
@@ -89,12 +88,12 @@ pub fn available(repo: &gix::Repository) -> bool {
 
 /// The last 100 PRs (any state), with CI checks for the open ones. Runs both `gh` calls at once.
 pub fn fetch(dir: &Path) -> Result<Vec<Pr>> {
-    let run = |args: &[&str]| -> Result<Vec<u8>> {
-        let out =
-            Command::new("gh").args(args).current_dir(dir).stdin(Stdio::null()).output().context("could not run gh")?;
-        if !out.status.success() {
-            let err = String::from_utf8_lossy(&out.stderr);
-            bail!("{}", err.lines().find(|l| !l.trim().is_empty()).unwrap_or("gh failed").trim());
+    let run = |args: &[&str]| -> Result<String> {
+        let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+        // Nothing on stdin: gh must never wait for the terminal behind the full screen.
+        let out = crate::process::run_with_input("gh", &args, Some(dir), b"", &[]).context("could not run gh")?;
+        if !out.ok() {
+            bail!("{}", out.stderr.lines().find(|l| !l.trim().is_empty()).unwrap_or("gh failed").trim());
         }
         Ok(out.stdout)
     };
@@ -106,11 +105,11 @@ pub fn fetch(dir: &Path) -> Result<Vec<Pr>> {
         (list, checks.join().unwrap_or_else(|_| bail!("gh crashed")))
     });
 
-    let raw: Vec<RawPr> = serde_json::from_slice(&list?).context("unexpected output from gh")?;
+    let raw: Vec<RawPr> = serde_json::from_str(&list?).context("unexpected output from gh")?;
     // Checks are a bonus: without them the list is still useful.
     let checks: HashMap<u64, Checks> = checks
         .ok()
-        .and_then(|bytes| serde_json::from_slice::<Vec<RawChecks>>(&bytes).ok())
+        .and_then(|bytes| serde_json::from_str::<Vec<RawChecks>>(&bytes).ok())
         .unwrap_or_default()
         .into_iter()
         .map(|c| (c.number, summarize(c.status_check_rollup.unwrap_or_default())))
@@ -152,9 +151,11 @@ fn summarize(list: Vec<RawCheck>) -> Checks {
     c
 }
 
-/// `alvgaona` from `https://github.com/alvgaona/x.git` or `git@github.com:alvgaona/x`.
+/// `alvgaona` from `https://github.com/alvgaona/x.git` or `git@github.com:alvgaona/x`,
+/// also through an ssh host alias like `github.com-work`.
 fn owner_of(url: &str) -> Option<String> {
     let rest = url.split("github.com").nth(1)?;
+    let rest = &rest[rest.find([':', '/'])?..];
     let owner = rest.trim_start_matches([':', '/']).split('/').next()?;
     (!owner.is_empty()).then(|| owner.to_lowercase())
 }
@@ -212,6 +213,7 @@ mod tests {
         assert_eq!(owner_of("git@github.com:Aerostack2/x").as_deref(), Some("aerostack2"));
         assert_eq!(owner_of("ssh://git@github.com/a/b").as_deref(), Some("a"));
         assert_eq!(owner_of("https://gitlab.com/a/b"), None);
+        assert_eq!(owner_of("git@github.com-work:alvgaona/x").as_deref(), Some("alvgaona"));
     }
 
     fn oid(n: u8) -> ObjectId {

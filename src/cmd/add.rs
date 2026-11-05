@@ -1,7 +1,7 @@
 //! `gg add`: the staging screen in a terminal. `gg add <paths>` is plain `git add`
 //! followed by the short status, so typing it the old way keeps working.
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 
 use crate::git;
 use crate::print::{self, Paint};
@@ -9,10 +9,7 @@ use crate::print::{self, Paint};
 pub fn run(paths: &[String], paint: &Paint) -> Result<()> {
     let repo = git::open()?;
     if !paths.is_empty() {
-        let (ok, out) = git::stage::add_typed(paths);
-        if !ok {
-            bail!("{out}");
-        }
+        let out = git::stage::add_typed(paths).map_err(anyhow::Error::msg)?;
         if !out.is_empty() {
             eprintln!("{out}");
         }

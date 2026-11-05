@@ -8,7 +8,7 @@ use gix::bstr::BStr;
 
 pub use super::diff::Hunk;
 use super::diff::{self, Op};
-use super::run::{args, git_in, git_with_input, top};
+use super::run::{Ran, args, git_in, git_with_input, top};
 
 /// Which half of a change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,20 +38,48 @@ pub fn contents(repo: &gix::Repository, path: &str, from: Option<&str>, side: Si
             (old, in_index(path))
         }
         Side::Unstaged => {
-            let disk = repo.workdir().map(|d| on_disk(&d.join(path))).unwrap_or_default();
+            let disk = Disk::new(repo).map(|mut d| d.read(path)).unwrap_or_default();
             (in_index(path), disk)
         }
     })
 }
 
-/// A file's bytes as git sees them: a symlink is its target, a missing file is empty.
-fn on_disk(p: &Path) -> Vec<u8> {
-    match std::fs::symlink_metadata(p) {
-        Ok(m) if m.file_type().is_symlink() => {
-            std::fs::read_link(p).map(|t| t.to_string_lossy().into_owned().into_bytes()).unwrap_or_default()
-        }
-        Ok(m) if m.is_file() => std::fs::read(p).unwrap_or_default(),
-        _ => Vec::new(),
+/// Reads working tree files as git would store them.
+pub struct Disk<'r> {
+    dir: std::path::PathBuf,
+    filters: gix::filter::Pipeline<'r>,
+    index: gix::worktree::IndexPersistedOrInMemory,
+}
+
+impl<'r> Disk<'r> {
+    /// `None` for a bare repository.
+    pub fn new(repo: &'r gix::Repository) -> Option<Self> {
+        let dir = repo.workdir()?.to_path_buf();
+        let (filters, index) = repo.filter_pipeline(None).ok()?;
+        Some(Disk { dir, filters, index })
+    }
+
+    /// `path`'s bytes as git sees them: a symlink is its target, a missing file is
+    /// empty, and a file goes through its filters (`eol=crlf`, LFS…), as `git add`
+    /// would put it in the index.
+    pub fn read(&mut self, path: &str) -> Vec<u8> {
+        use std::io::Read;
+        let p = self.dir.join(path);
+        let raw = match std::fs::symlink_metadata(&p) {
+            Ok(m) if m.file_type().is_symlink() => {
+                return std::fs::read_link(&p)
+                    .map(|t| t.to_string_lossy().into_owned().into_bytes())
+                    .unwrap_or_default();
+            }
+            Ok(m) if m.is_file() => std::fs::read(&p).unwrap_or_default(),
+            _ => return Vec::new(),
+        };
+        let mut out = Vec::new();
+        let converted = self
+            .filters
+            .convert_to_git(raw.as_slice(), Path::new(path), &self.index)
+            .is_ok_and(|mut c| c.read_to_end(&mut out).is_ok());
+        if converted { out } else { raw }
     }
 }
 
@@ -79,10 +107,10 @@ pub fn hunk_patch(path: &str, h: &Hunk) -> Vec<u8> {
     // An empty side starts at the line before it: `-0,0` for a new file.
     let old_start = if old_len == 0 { h.old_start - 1 } else { h.old_start };
     let new_start = if new_len == 0 { h.new_start - 1 } else { h.new_start };
-    let mut out = format!(
-        "diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -{old_start},{old_len} +{new_start},{new_len} @@\n"
-    )
-    .into_bytes();
+    let (a, b) = (quoted(&format!("a/{path}")), quoted(&format!("b/{path}")));
+    let mut out =
+        format!("diff --git {a} {b}\n--- {a}\n+++ {b}\n@@ -{old_start},{old_len} +{new_start},{new_len} @@\n")
+            .into_bytes();
     for l in &h.lines {
         out.push(match l.op {
             Op::Context => b' ',
@@ -144,8 +172,40 @@ pub fn changes_anything(h: &Hunk) -> bool {
     h.lines.iter().any(|l| l.op != Op::Context)
 }
 
+/// A path for a patch header, quoted the way git quotes it when it has a tab, a
+/// newline, `"` or `\`: unquoted, `git apply` would cut the name at the tab.
+fn quoted(path: &str) -> String {
+    if !path.chars().any(|c| c == '"' || c == '\\' || c.is_control()) {
+        return path.to_string();
+    }
+    let inner: String = path
+        .chars()
+        .map(|c| match c {
+            '"' => "\\\"".to_string(),
+            '\\' => "\\\\".to_string(),
+            '\t' => "\\t".to_string(),
+            '\n' => "\\n".to_string(),
+            c if c.is_control() => format!("\\{:03o}", c as u32),
+            c => c.to_string(),
+        })
+        .collect();
+    format!("\"{inner}\"")
+}
+
+/// Can `git apply` take this hunk as it is? A line without a newline must be the last
+/// line on its side, or git glues the next line onto it.
+fn ends_cleanly(h: &Hunk) -> bool {
+    [Op::Removed, Op::Added].into_iter().all(|side| {
+        let lines: Vec<_> = h.lines.iter().filter(|l| l.op == Op::Context || l.op == side).collect();
+        lines.iter().rev().skip(1).all(|l| l.bytes.ends_with(b"\n"))
+    })
+}
+
 /// Applies one hunk of `path` (taken from the side the action works on).
-pub fn apply_hunk(repo: &gix::Repository, path: &str, h: &Hunk, action: HunkAction) -> (bool, String) {
+pub fn apply_hunk(repo: &gix::Repository, path: &str, h: &Hunk, action: HunkAction) -> Ran {
+    if !ends_cleanly(h) {
+        return Err("Those lines touch the end of a line with no newline: take the whole hunk".into());
+    }
     let how: &[&str] = match action {
         HunkAction::Stage => &["--cached"],
         HunkAction::Unstage => &["--cached", "--reverse"],
@@ -160,7 +220,7 @@ pub fn apply_hunk(repo: &gix::Repository, path: &str, h: &Hunk, action: HunkActi
 // The writes run in the repository's root folder: paths come from status, so they're
 // relative to it, wherever gg was started.
 
-fn run(repo: &gix::Repository, cmd: &[&str], paths: Option<&[String]>) -> (bool, String) {
+fn run(repo: &gix::Repository, cmd: &[&str], paths: Option<&[String]>) -> Ran {
     let mut a = args(cmd);
     if let Some(paths) = paths {
         a.push("--".into());
@@ -175,19 +235,19 @@ fn unborn(repo: &gix::Repository) -> bool {
 }
 
 /// `gg add <paths>`: plain `git add`, paths as typed (from the current folder).
-pub fn add_typed(paths: &[String]) -> (bool, String) {
+pub fn add_typed(paths: &[String]) -> Ran {
     let mut a = args(&["add", "--"]);
     a.extend(paths.iter().cloned());
     git_in(None, &a)
 }
 
 /// Stages whole files: changes, new files and deletions.
-pub fn add(repo: &gix::Repository, paths: &[String]) -> (bool, String) {
+pub fn add(repo: &gix::Repository, paths: &[String]) -> Ran {
     run(repo, &["add", "--all"], Some(paths))
 }
 
 /// Takes whole files out of the index again; the working tree keeps them.
-pub fn unstage(repo: &gix::Repository, paths: &[String]) -> (bool, String) {
+pub fn unstage(repo: &gix::Repository, paths: &[String]) -> Ran {
     if unborn(repo) {
         run(repo, &["rm", "--cached", "-r", "-q"], Some(paths))
     } else {
@@ -195,21 +255,21 @@ pub fn unstage(repo: &gix::Repository, paths: &[String]) -> (bool, String) {
     }
 }
 
-pub fn add_all(repo: &gix::Repository) -> (bool, String) {
+pub fn add_all(repo: &gix::Repository) -> Ran {
     run(repo, &["add", "--all"], None)
 }
 
-pub fn unstage_all(repo: &gix::Repository) -> (bool, String) {
+pub fn unstage_all(repo: &gix::Repository) -> Ran {
     if unborn(repo) { run(repo, &["rm", "--cached", "-r", "-q", "."], None) } else { run(repo, &["reset", "-q"], None) }
 }
 
 /// Throws away unstaged changes to tracked files: back to what's staged.
-pub fn discard(repo: &gix::Repository, paths: &[String]) -> (bool, String) {
+pub fn discard(repo: &gix::Repository, paths: &[String]) -> Ran {
     run(repo, &["restore", "--worktree"], Some(paths))
 }
 
 /// Deletes untracked files or folders (never ignored ones).
-pub fn delete_untracked(repo: &gix::Repository, paths: &[String]) -> (bool, String) {
+pub fn delete_untracked(repo: &gix::Repository, paths: &[String]) -> Ran {
     run(repo, &["clean", "-f", "-d", "-q"], Some(paths))
 }
 
@@ -253,51 +313,22 @@ pub fn conflicts(repo: &gix::Repository) -> Result<std::collections::HashMap<Str
 
 /// Deletes files from the index and the working tree; for a conflict, that's taking
 /// the side that deleted it.
-pub fn remove(repo: &gix::Repository, paths: &[String]) -> (bool, String) {
+pub fn remove(repo: &gix::Repository, paths: &[String]) -> Ran {
     run(repo, &["rm", "-q", "--ignore-unmatch"], Some(paths))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command;
 
-    /// A scratch repo, removed when dropped.
-    struct Scratch(std::path::PathBuf);
+    use crate::git::run::Scratch;
 
     impl Scratch {
-        fn new(name: &str) -> Self {
-            let dir = std::env::temp_dir().join(format!("gg-stage-{name}-{}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&dir);
-            std::fs::create_dir_all(&dir).unwrap();
-            let s = Scratch(dir);
-            s.git(&["init", "-q", "-b", "main"]);
-            s
-        }
-        fn git(&self, a: &[&str]) {
-            let ok = Command::new("git")
-                .args(a)
-                .current_dir(&self.0)
-                .env("GIT_AUTHOR_NAME", "t")
-                .env("GIT_AUTHOR_EMAIL", "t@t")
-                .env("GIT_COMMITTER_NAME", "t")
-                .env("GIT_COMMITTER_EMAIL", "t@t")
-                .output()
-                .unwrap()
-                .status
-                .success();
-            assert!(ok, "git {a:?}");
-        }
         /// Runs one of our writes on the repo, opened afresh.
-        fn run(&self, f: impl FnOnce(&gix::Repository) -> (bool, String)) {
-            let (ok, out) = f(&self.repo());
-            assert!(ok, "{out}");
-        }
-        fn write(&self, path: &str, text: &str) {
-            std::fs::write(self.0.join(path), text).unwrap();
-        }
-        fn repo(&self) -> gix::Repository {
-            gix::open(&self.0).unwrap()
+        fn run(&self, f: impl FnOnce(&gix::Repository) -> Ran) {
+            if let Err(e) = f(&self.repo()) {
+                panic!("{e}");
+            }
         }
         fn halves(&self, path: &str) -> (String, String, String) {
             let repo = self.repo();
@@ -306,12 +337,6 @@ mod tests {
             let (index2, disk) = contents(&repo, path, None, Side::Unstaged).unwrap();
             assert_eq!(index, index2);
             (s(head), s(index), s(disk))
-        }
-    }
-
-    impl Drop for Scratch {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
         }
     }
 
@@ -462,6 +487,45 @@ mod tests {
     }
 
     #[test]
+    fn a_last_line_without_newline_is_never_glued_to_the_next() {
+        let s = Scratch::new("nonewline");
+        s.commit("f.txt", "a\nb");
+        s.write("f.txt", "a\nb\nc\n");
+        // Only "c": "b" would stay without its newline, with "c" after it.
+        let h = hunk(&s, "f.txt", Side::Unstaged, 0);
+        let part = pick_lines(&h, &lines_of(&h, &["c"]), HunkAction::Stage);
+        assert!(apply_hunk(&s.repo(), "f.txt", &part, HunkAction::Stage).is_err());
+        assert_eq!(s.halves("f.txt").1, "a\nb");
+        // The whole hunk is fine.
+        s.run(|r| apply_hunk(r, "f.txt", &h, HunkAction::Stage));
+        assert_eq!(s.halves("f.txt").1, "a\nb\nc\n");
+    }
+
+    #[test]
+    fn a_tab_in_the_name_is_quoted_in_the_patch() {
+        let s = Scratch::new("tabname");
+        s.commit("tab\tx.txt", "1\n");
+        s.write("tab\tx.txt", "2\n");
+        let h = hunk(&s, "tab\tx.txt", Side::Unstaged, 0);
+        s.run(|r| apply_hunk(r, "tab\tx.txt", &h, HunkAction::Stage));
+        assert_eq!(s.halves("tab\tx.txt").1, "2\n");
+        assert_eq!(quoted("a/x\"y"), "\"a/x\\\"y\"");
+    }
+
+    #[test]
+    fn crlf_files_diff_and_stage_as_git_stores_them() {
+        let s = Scratch::new("crlf");
+        s.write(".gitattributes", "*.bat text eol=crlf\n");
+        s.commit("x.bat", "a\r\nb\r\nc\r\n");
+        s.write("x.bat", "a\r\nB\r\nc\r\n");
+        // One line changed, not every line.
+        let h = hunk(&s, "x.bat", Side::Unstaged, 0);
+        assert_eq!(h.lines.iter().filter(|l| l.op != Op::Context).count(), 2);
+        s.run(|r| apply_hunk(r, "x.bat", &h, HunkAction::Stage));
+        assert_eq!(s.halves("x.bat").1, "a\nB\nc\n");
+    }
+
+    #[test]
     fn hunks_keep_the_bytes_exactly() {
         let cases = [
             ("crlf.txt", "a\r\nb\r\nc\r\n", "a\r\nB\r\nc\r\n"),
@@ -515,7 +579,7 @@ mod tests {
         s.git(&["rm", "-q", "we-del.txt"]);
         s.git(&["commit", "-q", "-a", "-m", "main"]);
         // Fails: that's the conflict.
-        let _ = Command::new("git").args(["merge", "-q", "side"]).current_dir(&s.0).output();
+        let _ = crate::process::run("git", &args(&["merge", "-q", "side"]), Some(&s.0));
 
         let c = conflicts(&s.repo()).unwrap();
         assert_eq!(c.len(), 3);

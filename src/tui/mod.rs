@@ -54,15 +54,6 @@ pub(crate) fn leave() {
     let _ = disable_raw_mode();
 }
 
-/// Runs git, returning whether it worked and its output (stderr first; that's where git talks).
-/// Prompts for credentials still reach the terminal: ssh and git ask on /dev/tty.
-pub(crate) fn git(args: &[String]) -> (bool, String) {
-    match crate::process::run("git", args, None) {
-        Ok(out) => (out.ok, out.text()),
-        Err(e) => (false, format!("could not run git: {e}")),
-    }
-}
-
 /// First two non-empty lines of git's output, for a toast.
 pub(crate) fn first_lines(s: &str) -> String {
     s.lines().filter(|l| !l.trim().is_empty()).take(2).collect::<Vec<_>>().join(" · ")

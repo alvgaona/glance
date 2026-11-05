@@ -7,6 +7,7 @@ use anyhow::Result;
 use gix::ObjectId;
 use gix::bstr::ByteSlice;
 
+use super::run;
 use super::tree::{self, FileStat};
 
 #[derive(Debug, Clone)]
@@ -111,9 +112,88 @@ pub fn files(repo: &gix::Repository, s: &Stash) -> Result<(Vec<FileStat>, Vec<Fi
     Ok((tracked, untracked))
 }
 
+// ---------------------------------------------------------------- writes
+
+/// Which changes `git stash push` takes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Mode {
+    /// Staged and unstaged changes (and untracked files, if asked).
+    Everything,
+    /// Only what's staged: `--staged`. git ignores file lists here and refuses files
+    /// that also have unstaged changes.
+    Staged,
+    /// Everything but the staged part, which stays in place: `--keep-index`. git ignores
+    /// file lists here too, and still records the whole index.
+    Unstaged,
+}
+
+/// What to stash. `paths: None` means everything the mode covers.
+#[derive(Clone, Debug)]
+pub struct Push {
+    pub mode: Mode,
+    pub untracked: bool,
+    pub paths: Option<Vec<String>>,
+}
+
+impl Push {
+    pub fn args(&self, message: &str) -> Vec<String> {
+        let mut a = run::args(&["stash", "push"]);
+        match self.mode {
+            Mode::Everything => {}
+            Mode::Staged => a.push("--staged".into()),
+            Mode::Unstaged => a.push("--keep-index".into()),
+        }
+        // A staged-only stash can't hold untracked files.
+        if self.untracked && self.mode != Mode::Staged {
+            a.push("--include-untracked".into());
+        }
+        if !message.is_empty() {
+            a.extend(["-m".into(), message.into()]);
+        }
+        if let Some(paths) = &self.paths {
+            a.push("--".into());
+            a.extend(paths.iter().cloned());
+        }
+        a
+    }
+
+    pub fn run(&self, message: &str) -> (bool, String) {
+        run::git(&self.args(message))
+    }
+}
+
+/// `git stash apply` (or `pop`, which also drops it when it applies cleanly).
+pub fn apply(s: &Stash, pop: bool) -> (bool, String) {
+    run::git(&run::args(&["stash", if pop { "pop" } else { "apply" }, &s.name()]))
+}
+
+pub fn drop(s: &Stash) -> (bool, String) {
+    run::git(&run::args(&["stash", "drop", &s.name()]))
+}
+
+/// `git stash branch`: a new branch at the stash's base, with the stash applied and dropped.
+pub fn branch(s: &Stash, name: &str) -> (bool, String) {
+    run::git(&run::args(&["stash", "branch", name, &s.name()]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn push(mode: Mode, untracked: bool, paths: Option<Vec<&str>>) -> Push {
+        Push { mode, untracked, paths: paths.map(|p| p.into_iter().map(String::from).collect()) }
+    }
+
+    #[test]
+    fn push_args() {
+        assert_eq!(push(Mode::Everything, true, None).args(""), ["stash", "push", "--include-untracked"]);
+        assert_eq!(
+            push(Mode::Everything, false, Some(vec!["a.rs"])).args("wip"),
+            ["stash", "push", "-m", "wip", "--", "a.rs"]
+        );
+        assert_eq!(push(Mode::Staged, true, None).args(""), ["stash", "push", "--staged"]);
+        assert_eq!(push(Mode::Unstaged, true, None).args(""), ["stash", "push", "--keep-index", "--include-untracked"]);
+    }
 
     fn stash(message: &str) -> Stash {
         Stash {

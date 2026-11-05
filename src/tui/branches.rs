@@ -18,7 +18,7 @@ use ratatui::{
 };
 
 use super::widgets::{self, Command, Confirm, Input, InputEvent, Palette, PaletteEvent, Toast};
-use super::{enter, first_lines, git, leave, theme};
+use super::{enter, first_lines, leave, theme};
 use crate::fmt::paths::short as short_path;
 use crate::fmt::{now, relative_time};
 use crate::git::branches::{self, Branch, Branches};
@@ -236,7 +236,7 @@ pub fn run(repo: &gix::Repository) -> Result<()> {
                 Some(Effect::Quit) => return Ok(()),
                 Some(Effect::InTerminal(cmds)) => {
                     leave();
-                    let results: Vec<_> = cmds.iter().map(|args| git(args)).collect();
+                    let results: Vec<_> = cmds.iter().map(|args| crate::git::run::git(args)).collect();
                     terminal = enter();
                     app.report(&results);
                     app.reload()?;
@@ -314,18 +314,8 @@ impl App<'_> {
         if self.fetching.is_some() {
             return;
         }
-        let mut cmd = Process::new("git");
-        cmd.args(["fetch", "--all", "--prune", "--quiet"])
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        // Keep ssh from asking for a passphrase too, unless the user set their own ssh command.
-        let own_ssh = std::env::var_os("GIT_SSH_COMMAND").is_some()
-            || self.repo.config_snapshot().string("core.sshCommand").is_some();
-        if !own_ssh {
-            cmd.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
-        }
+        let mut cmd = branches::fetch_command(self.repo);
+        cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             let result = match cmd.output() {
@@ -440,7 +430,7 @@ impl App<'_> {
                     let from = from.clone();
                     self.rename = None;
                     if !to.is_empty() && to != from {
-                        let (ok, out) = git(&["branch".into(), "-m".into(), from.clone(), to.clone()]);
+                        let (ok, out) = branches::rename(&from, &to);
                         if ok {
                             self.toast = Some(Toast::new(format!("Renamed {from} → {to}"), theme::GREEN));
                             if self.marked.remove(&from) {
@@ -494,7 +484,7 @@ impl App<'_> {
                     Some(Effect::InTerminal(match pending {
                         Pending::Local(list) => {
                             self.last_deleted = list.first().map(|b| b.name.clone()).unwrap_or_default();
-                            list.iter().map(|b| vec!["branch".into(), "-D".into(), b.name.clone()]).collect()
+                            list.iter().map(|b| branches::delete_args(&b.name)).collect()
                         }
                         Pending::Remote(list) => self.remote_deletes(list),
                     }))
@@ -741,7 +731,7 @@ impl App<'_> {
                     ));
                     return Ok(None);
                 }
-                let (ok, out) = git(&["switch".into(), target.clone()]);
+                let (ok, out) = branches::switch(&target);
                 self.toast = Some(if ok {
                     Toast::new(format!("Switched to {target}"), theme::GREEN)
                 } else {
@@ -847,7 +837,7 @@ impl App<'_> {
     /// `git push <remote> --delete <branch>` for each pair.
     fn remote_deletes(&mut self, list: Vec<(String, String)>) -> Vec<Vec<String>> {
         self.last_deleted = list.first().map(|(r, b)| format!("{b} on {r}")).unwrap_or_default();
-        list.into_iter().map(|(remote, branch)| vec!["push".into(), remote, "--delete".into(), branch]).collect()
+        list.iter().map(|(remote, branch)| branches::delete_remote_args(remote, branch)).collect()
     }
 
     fn ask_delete_remote(&mut self) {

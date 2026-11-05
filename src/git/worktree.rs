@@ -6,6 +6,8 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use gix::ObjectId;
 
+use super::run;
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Worktree {
     pub path: PathBuf,
@@ -66,6 +68,63 @@ pub fn suggest_path(main: &Path, branch: &str) -> PathBuf {
     main.parent().unwrap_or(main).join(format!("{name}-{slug}"))
 }
 
+// ---------------------------------------------------------------- writes
+
+/// Where a new worktree's branch comes from.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Source {
+    /// A local branch of that name: checked out there.
+    Local,
+    /// Only on a remote: git makes a local branch tracking it.
+    Remote,
+    /// Nowhere yet: a new branch from HEAD.
+    New,
+}
+
+pub fn source(repo: &gix::Repository, branch: &str) -> Source {
+    let has = |name: String| repo.find_reference(name.as_str()).is_ok();
+    if has(format!("refs/heads/{branch}")) {
+        Source::Local
+    } else if repo.remote_names().iter().any(|r| has(format!("refs/remotes/{r}/{branch}"))) {
+        Source::Remote
+    } else {
+        Source::New
+    }
+}
+
+pub fn add_args(path: &Path, branch: &str, from: Source) -> Vec<String> {
+    let dir = path.display().to_string();
+    match from {
+        Source::Local | Source::Remote => run::args(&["worktree", "add", &dir, branch]),
+        Source::New => run::args(&["worktree", "add", "-b", branch, &dir]),
+    }
+}
+
+pub fn add(path: &Path, branch: &str, from: Source) -> (bool, String) {
+    run::git(&add_args(path, branch, from))
+}
+
+/// `force` also throws away uncommitted and untracked files in it.
+pub fn remove(path: &Path, force: bool) -> (bool, String) {
+    let dir = path.display().to_string();
+    let mut a = run::args(&["worktree", "remove"]);
+    if force {
+        a.push("--force".into());
+    }
+    a.push(dir);
+    run::git(&a)
+}
+
+/// Forgets worktrees whose folders are gone.
+pub fn prune() -> (bool, String) {
+    run::git(&run::args(&["worktree", "prune"]))
+}
+
+/// `git worktree lock` (or `unlock`): a locked one isn't pruned or removed.
+pub fn lock(path: &Path, on: bool) -> (bool, String) {
+    run::git(&run::args(&["worktree", if on { "lock" } else { "unlock" }, &path.display().to_string()]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -88,5 +147,42 @@ mod tests {
     #[test]
     fn suggests_paths() {
         assert_eq!(suggest_path(Path::new("/r/app"), "fix/parser"), PathBuf::from("/r/app-fix-parser"));
+    }
+
+    #[test]
+    fn add_checks_out_or_creates() {
+        let p = Path::new("/r/app-x");
+        assert_eq!(add_args(p, "x", Source::Local), ["worktree", "add", "/r/app-x", "x"]);
+        assert_eq!(add_args(p, "x", Source::Remote), ["worktree", "add", "/r/app-x", "x"]);
+        assert_eq!(add_args(p, "x", Source::New), ["worktree", "add", "-b", "x", "/r/app-x"]);
+    }
+
+    /// A throwaway repo with one commit, a local branch `here` and a remote-only `there`.
+    #[test]
+    fn picks_the_branch_source() {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("gg-test-wt-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let git = |args: &[&str]| {
+            let ok = Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main"])
+                .args(args)
+                .current_dir(&dir)
+                .output()
+                .unwrap()
+                .status
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        git(&["commit", "-q", "--allow-empty", "-m", "first"]);
+        git(&["branch", "here"]);
+        git(&["remote", "add", "origin", "https://example.invalid/r.git"]);
+        git(&["update-ref", "refs/remotes/origin/there", "HEAD"]);
+        let repo = gix::open(&dir).unwrap();
+        assert_eq!(source(&repo, "here"), Source::Local);
+        assert_eq!(source(&repo, "there"), Source::Remote);
+        assert_eq!(source(&repo, "nowhere"), Source::New);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

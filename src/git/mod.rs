@@ -13,6 +13,9 @@ pub mod log;
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub mod rebase;
 pub mod repos;
+// The writes are only made from the full-screen views.
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
+pub mod run;
 // Files and details are only shown by the interactive view.
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub mod stash;

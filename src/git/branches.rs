@@ -2,6 +2,7 @@ use anyhow::Result;
 use gix::ObjectId;
 use gix::bstr::ByteSlice;
 
+use super::run;
 use super::status::{Upstream, upstream};
 
 #[derive(Debug, Clone)]
@@ -273,4 +274,49 @@ pub fn default_branch(repo: &gix::Repository) -> Option<(String, ObjectId)> {
         }
     }
     None
+}
+
+// ---------------------------------------------------------------- writes
+
+pub fn switch(name: &str) -> (bool, String) {
+    run::git(&run::args(&["switch", name]))
+}
+
+pub fn rename(from: &str, to: &str) -> (bool, String) {
+    run::git(&run::args(&["branch", "-m", from, to]))
+}
+
+/// `git branch -D`: the screen has already warned about commits found nowhere else.
+pub fn delete_args(name: &str) -> Vec<String> {
+    run::args(&["branch", "-D", name])
+}
+
+/// Run in the terminal, not collected: a remote may ask for a password.
+pub fn delete_remote_args(remote: &str, branch: &str) -> Vec<String> {
+    run::args(&["push", remote, "--delete", branch])
+}
+
+/// `git fetch --all --prune` that never prompts (a prompt would draw over the screen):
+/// a remote that needs a password fails and says so.
+pub fn fetch_command(repo: &gix::Repository) -> std::process::Command {
+    let mut cmd = std::process::Command::new("git");
+    cmd.args(["fetch", "--all", "--prune", "--quiet"]).env("GIT_TERMINAL_PROMPT", "0");
+    // Keep ssh from asking for a passphrase too, unless the user set their own ssh command.
+    let own_ssh =
+        std::env::var_os("GIT_SSH_COMMAND").is_some() || repo.config_snapshot().string("core.sshCommand").is_some();
+    if !own_ssh {
+        cmd.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
+    }
+    cmd
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn delete_args_name_the_branch() {
+        assert_eq!(delete_args("feat/x"), ["branch", "-D", "feat/x"]);
+        assert_eq!(delete_remote_args("origin", "feat/x"), ["push", "origin", "--delete", "feat/x"]);
+    }
 }

@@ -18,7 +18,7 @@ use ratatui::{
 
 use super::stash_new::{Mode, Picked, Picker};
 use super::widgets::{self, Command, Confirm, Input, InputEvent, Palette, PaletteEvent, Toast};
-use super::{diffview, enter, first_lines, git, leave, theme};
+use super::{diffview, enter, first_lines, leave, theme};
 use crate::fmt::{now, relative_time};
 use crate::git::stash::{self, Stash};
 
@@ -448,8 +448,7 @@ impl App<'_> {
     /// `git stash apply` or `git stash pop` on the current stash.
     fn apply(&mut self, pop: bool) -> Result<()> {
         let Some(s) = self.current().cloned() else { return Ok(()) };
-        let verb = if pop { "pop" } else { "apply" };
-        let (ok, out) = git(&["stash".into(), verb.into(), s.name()]);
+        let (ok, out) = stash::apply(&s, pop);
         self.toast = Some(if ok {
             let done = if pop { "Popped" } else { "Applied" };
             Toast::new(format!("{done} {}: {}", s.name(), s.title()), theme::GREEN)
@@ -501,7 +500,7 @@ impl App<'_> {
         list.sort_by_key(|s| std::cmp::Reverse(s.index));
         let mut failed = Vec::new();
         for s in &list {
-            let (ok, out) = git(&["stash".into(), "drop".into(), s.name()]);
+            let (ok, out) = stash::drop(s);
             if !ok {
                 failed.push(out);
             }
@@ -521,7 +520,7 @@ impl App<'_> {
                 if text.is_empty() {
                     return Ok(());
                 }
-                let (ok, out) = git(&["stash".into(), "branch".into(), text.clone(), s.name()]);
+                let (ok, out) = stash::branch(&s, &text);
                 self.toast = Some(if ok {
                     Toast::new(format!("On new branch {text}, with {} applied", s.name()), theme::GREEN)
                 } else {
@@ -530,7 +529,7 @@ impl App<'_> {
                 self.reload(None)
             }
             Ask::New(picked) => {
-                let (ok, out) = git(&picked.args(&text));
+                let (ok, out) = picked.push.run(&text);
                 if ok {
                     self.changes.reset_ticks();
                 }

@@ -14,27 +14,17 @@ use ratatui::{
 use super::{theme, widgets};
 use crate::fmt::change_letter;
 use crate::git::diff::Size;
+pub use crate::git::stash::Mode;
+use crate::git::stash::Push;
 use crate::git::status::{ChangeKind, Status};
 
 const STAGED_ONLY_ALL: &str = "This mode takes every file: git can't pick single files here. Press e to pick.";
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Mode {
-    /// Staged and unstaged changes (and untracked files, if on).
-    Everything,
-    /// Only what's staged: `--staged`.
-    Staged,
-    /// Everything except the staged part, which stays in place: `--keep-index`.
-    Unstaged,
-}
-
-impl Mode {
-    fn label(self) -> &'static str {
-        match self {
-            Mode::Everything => "everything",
-            Mode::Staged => "staged only",
-            Mode::Unstaged => "unstaged only",
-        }
+fn mode_label(m: Mode) -> &'static str {
+    match m {
+        Mode::Everything => "everything",
+        Mode::Staged => "staged only",
+        Mode::Unstaged => "unstaged only",
     }
 }
 
@@ -49,39 +39,16 @@ pub struct File {
     binary: bool,
 }
 
-/// What the user picked; turned into `git stash push` arguments once the message is known.
+/// What the user picked: the push to run once the message is known, and how many files.
 pub struct Picked {
-    pub mode: Mode,
-    pub untracked: bool,
-    /// `None` means every file the mode covers (no pathspec).
-    pub paths: Option<Vec<String>>,
+    pub push: Push,
     pub count: usize,
 }
 
 impl Picked {
-    pub fn args(&self, message: &str) -> Vec<String> {
-        let mut a: Vec<String> = vec!["stash".into(), "push".into()];
-        match self.mode {
-            Mode::Everything => {}
-            Mode::Staged => a.push("--staged".into()),
-            Mode::Unstaged => a.push("--keep-index".into()),
-        }
-        if self.untracked && self.mode != Mode::Staged {
-            a.push("--include-untracked".into());
-        }
-        if !message.is_empty() {
-            a.extend(["-m".into(), message.into()]);
-        }
-        if let Some(paths) = &self.paths {
-            a.push("--".into());
-            a.extend(paths.iter().cloned());
-        }
-        a
-    }
-
     pub fn describe(&self) -> String {
         let files = if self.count == 1 { "1 file".to_string() } else { format!("{} files", self.count) };
-        format!("{files}, {}", self.mode.label())
+        format!("{files}, {}", mode_label(self.push.mode))
     }
 }
 
@@ -198,7 +165,7 @@ impl Picker {
             covered.iter().map(|&i| &self.files[i]).filter(|f| self.is_on(f)).map(|f| f.path.clone()).collect();
         let count = on.len();
         let paths = if count == covered.len() { None } else { Some(on) };
-        Picked { mode: self.mode, untracked: self.untracked, paths, count }
+        Picked { push: Push { mode: self.mode, untracked: self.untracked, paths }, count }
     }
 
     /// Why git would refuse, if it would.
@@ -230,7 +197,7 @@ impl Picker {
             Mode::Unstaged => "Saves every unstaged change. Staged changes stay in place.".to_string(),
         };
         // git always records the whole index, even with a file list or --keep-index.
-        let left_staged = match (&picked.paths, self.mode) {
+        let left_staged = match (&picked.push.paths, self.mode) {
             (_, Mode::Unstaged) => self.files.iter().any(|f| f.staged.is_some()),
             (Some(on), _) => self.files.iter().any(|f| f.staged.is_some() && !on.contains(&f.path)),
             _ => false,
@@ -482,31 +449,5 @@ impl Picker {
         let used = Line::from(spans.clone()).width();
         spans.push(Span::styled(" ".repeat((width as usize).saturating_sub(used)), st(Style::new())));
         Line::from(spans)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn picked(mode: Mode, untracked: bool, paths: Option<Vec<&str>>) -> Picked {
-        let paths = paths.map(|p| p.into_iter().map(String::from).collect::<Vec<_>>());
-        let count = paths.as_ref().map_or(3, |p| p.len());
-        Picked { mode, untracked, paths, count }
-    }
-
-    #[test]
-    fn args() {
-        assert_eq!(picked(Mode::Everything, true, None).args(""), ["stash", "push", "--include-untracked"]);
-        assert_eq!(
-            picked(Mode::Everything, false, Some(vec!["a.rs"])).args("wip"),
-            ["stash", "push", "-m", "wip", "--", "a.rs"]
-        );
-        // Untracked files can't be part of a staged-only stash.
-        assert_eq!(picked(Mode::Staged, true, None).args(""), ["stash", "push", "--staged"]);
-        assert_eq!(
-            picked(Mode::Unstaged, true, None).args(""),
-            ["stash", "push", "--keep-index", "--include-untracked"]
-        );
     }
 }

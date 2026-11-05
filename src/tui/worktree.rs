@@ -19,12 +19,12 @@ use ratatui::{
 };
 
 use super::widgets::{self, Command, Confirm, Input, InputEvent, Palette, PaletteEvent, Toast};
-use super::{diffview, enter, first_lines, git, leave, theme};
+use super::{diffview, enter, first_lines, leave, theme};
 use crate::fmt::paths::tilde;
 use crate::fmt::{now, relative_time};
 use crate::git::diff::Size;
 use crate::git::status::{FileChange, Status};
-use crate::git::worktree::{self, Worktree};
+use crate::git::worktree::{self, Source, Worktree};
 
 #[derive(Clone)]
 enum Cmd {
@@ -385,9 +385,9 @@ impl App<'_> {
             Cmd::Prune => self.ask_prune(),
             Cmd::Lock => {
                 if let Some(r) = self.current() {
-                    let path = r.wt.path.display().to_string();
-                    let (verb, done) = if r.wt.locked.is_some() { ("unlock", "Unlocked") } else { ("lock", "Locked") };
-                    let (ok, out) = git(&["worktree".into(), verb.into(), path]);
+                    let on = r.wt.locked.is_none();
+                    let done = if on { "Locked" } else { "Unlocked" };
+                    let (ok, out) = worktree::lock(&r.wt.path, on);
                     let name = self.name(&r.wt.path);
                     self.toast = Some(if ok {
                         Toast::new(format!("{done} {name}"), theme::GREEN)
@@ -412,27 +412,13 @@ impl App<'_> {
             self.toast = Some(Toast::new(format!("{} already exists", tilde(&path)), theme::RED));
             return Ok(());
         }
-        let local = self.repo.find_reference(format!("refs/heads/{branch}").as_str()).is_ok();
-        // git checks out a remote branch of the same name as a new tracking branch.
-        let remote = self
-            .repo
-            .remote_names()
-            .iter()
-            .any(|r| self.repo.find_reference(format!("refs/remotes/{r}/{branch}").as_str()).is_ok());
-        let dir = path.display().to_string();
-        let args: Vec<String> = if local || remote {
-            vec!["worktree".into(), "add".into(), dir, branch.into()]
-        } else {
-            vec!["worktree".into(), "add".into(), "-b".into(), branch.into(), dir]
-        };
-        let (ok, out) = git(&args);
+        let from = worktree::source(self.repo, branch);
+        let (ok, out) = worktree::add(&path, branch, from);
         self.toast = Some(if ok {
-            let how = if local {
-                "on"
-            } else if remote {
-                "tracking the remote"
-            } else {
-                "on new branch"
+            let how = match from {
+                Source::Local => "on",
+                Source::Remote => "tracking the remote",
+                Source::New => "on new branch",
             };
             Toast::new(format!("Created {} {how} {branch}", self.name(&path)), theme::GREEN)
         } else {
@@ -509,12 +495,7 @@ impl App<'_> {
     fn answer(&mut self, ask: Ask) -> Result<()> {
         match ask {
             Ask::Remove { path, force } => {
-                let mut args: Vec<String> = vec!["worktree".into(), "remove".into()];
-                if force {
-                    args.push("--force".into());
-                }
-                args.push(path.display().to_string());
-                let (ok, out) = git(&args);
+                let (ok, out) = worktree::remove(&path, force);
                 self.toast = Some(if ok {
                     Toast::new(format!("Removed {}", self.name(&path)), theme::GREEN)
                 } else {
@@ -523,7 +504,7 @@ impl App<'_> {
             }
             Ask::Prune => {
                 let before = self.rows.iter().filter(|r| r.wt.prunable.is_some()).count();
-                let (ok, out) = git(&["worktree".into(), "prune".into()]);
+                let (ok, out) = worktree::prune();
                 self.toast = Some(if ok {
                     Toast::new(format!("Pruned {before}"), theme::GREEN)
                 } else {

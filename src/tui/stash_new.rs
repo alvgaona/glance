@@ -376,11 +376,7 @@ impl Picker {
         let fixed = 5 + note.len() + others_rows;
         let room = (inner.height as usize).saturating_sub(fixed).max(1);
         self.cursor = self.cursor.min(covered.len().saturating_sub(1));
-        if self.cursor < self.scroll {
-            self.scroll = self.cursor;
-        } else if self.cursor >= self.scroll + room {
-            self.scroll = self.cursor + 1 - room;
-        }
+        self.scroll = kit::list::follow(self.scroll, self.cursor, self.cursor, room);
         self.rows = Rect { y: inner.y + 4, height: room as u16, ..inner };
         let name_w = self.files.iter().map(|f| f.path.chars().count()).max().unwrap_or(0).min(inner.width as usize / 2);
         for (n, &i) in covered.iter().enumerate().skip(self.scroll).take(room) {

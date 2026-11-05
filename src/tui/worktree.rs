@@ -19,7 +19,7 @@ use ratatui::{
 };
 
 use super::app::{self, Flow, Screen};
-use super::kit::{self, Command, Confirm, Input, InputEvent, Palette, PaletteEvent, Toast, footer};
+use super::kit::{self, Command, Confirm, Input, InputEvent, Palette, PaletteEvent, Scroll, Toast, footer, list};
 use super::{diffview, first_lines, theme};
 use crate::fmt::paths::tilde;
 use crate::fmt::{now, relative_time};
@@ -87,7 +87,7 @@ struct App<'r> {
     rows: Vec<Row>,
     selected: usize,
     scroll: usize,
-    detail_scroll: u16,
+    detail_scroll: Scroll,
     list_area: Rect,
     detail_area: Rect,
     states: Option<Receiver<(PathBuf, Load)>>,
@@ -107,7 +107,7 @@ pub fn run(repo: &gix::Repository) -> Result<Option<PathBuf>> {
         rows: Vec::new(),
         selected: 0,
         scroll: 0,
-        detail_scroll: 0,
+        detail_scroll: Scroll::default(),
         list_area: Rect::default(),
         detail_area: Rect::default(),
         states: None,
@@ -248,7 +248,7 @@ impl App<'_> {
     fn step(&mut self, n: isize) {
         let last = self.rows.len().saturating_sub(1) as isize;
         self.selected = (self.selected as isize + n).clamp(0, last) as usize;
-        self.detail_scroll = 0;
+        self.detail_scroll.reset();
     }
 
     /// Returns `Some` to quit, with the folder picked (if any).
@@ -291,7 +291,9 @@ impl App<'_> {
             return Ok(None);
         }
 
-        let half = self.detail_area.height / 2;
+        if self.detail_scroll.key(k, self.detail_area.height) {
+            return Ok(None);
+        }
         let cmd = match k.code {
             KeyCode::Char('p') if ctrl => {
                 self.palette = Some(Palette::new(commands()));
@@ -299,22 +301,6 @@ impl App<'_> {
             }
             KeyCode::Char(':') => {
                 self.palette = Some(Palette::new(commands()));
-                return Ok(None);
-            }
-            KeyCode::Char('d') if ctrl => {
-                self.detail_scroll = self.detail_scroll.saturating_add(half);
-                return Ok(None);
-            }
-            KeyCode::Char('u') if ctrl => {
-                self.detail_scroll = self.detail_scroll.saturating_sub(half);
-                return Ok(None);
-            }
-            KeyCode::Char('J') => {
-                self.detail_scroll = self.detail_scroll.saturating_add(3);
-                return Ok(None);
-            }
-            KeyCode::Char('K') => {
-                self.detail_scroll = self.detail_scroll.saturating_sub(3);
                 return Ok(None);
             }
             KeyCode::Down | KeyCode::Char('j') => {
@@ -520,21 +506,18 @@ impl App<'_> {
         if self.palette.is_some() || self.confirm.is_some() || self.input.is_some() {
             return;
         }
-        let inside = |a: Rect| m.column >= a.x && m.column < a.right() && m.row >= a.y && m.row < a.bottom();
+        let in_details = list::inside(self.detail_area, &m);
         match m.kind {
-            MouseEventKind::ScrollDown if inside(self.detail_area) => {
-                self.detail_scroll = self.detail_scroll.saturating_add(3)
-            }
-            MouseEventKind::ScrollUp if inside(self.detail_area) => {
-                self.detail_scroll = self.detail_scroll.saturating_sub(3)
-            }
+            MouseEventKind::ScrollDown if in_details => self.detail_scroll.wheel(true),
+            MouseEventKind::ScrollUp if in_details => self.detail_scroll.wheel(false),
             MouseEventKind::ScrollDown => self.step(1),
             MouseEventKind::ScrollUp => self.step(-1),
-            MouseEventKind::Down(MouseButton::Left) if inside(self.list_area) => {
-                let i = self.scroll + (m.row - self.list_area.y) as usize;
-                if i < self.rows.len() {
+            MouseEventKind::Down(MouseButton::Left) => {
+                if let Some(i) = list::row_at(self.list_area, self.scroll, &m)
+                    && i < self.rows.len()
+                {
                     self.selected = i;
-                    self.detail_scroll = 0;
+                    self.detail_scroll.reset();
                 }
             }
             _ => {}
@@ -640,11 +623,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     app.list_area = inner;
 
     let height = inner.height as usize;
-    if app.selected < app.scroll {
-        app.scroll = app.selected;
-    } else if height > 0 && app.selected >= app.scroll + height {
-        app.scroll = app.selected + 1 - height;
-    }
+    app.scroll = list::follow(app.scroll, app.selected, app.selected, height);
 
     let now = now();
     let paths: Vec<String> = app.rows.iter().map(|r| app.name(&r.wt.path)).collect();
@@ -698,26 +677,15 @@ fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
     let Some(r) = app.current() else { return };
     let lines = build_detail(r, inner.width as usize);
 
-    let max = (lines.len() as u16).saturating_sub(inner.height);
-    app.detail_scroll = app.detail_scroll.min(max);
+    app.detail_scroll.fit(lines.len(), inner.height);
     let shown: Vec<Line> = lines
         .into_iter()
-        .skip(app.detail_scroll as usize)
+        .skip(app.detail_scroll.top() as usize)
         .take(inner.height as usize)
         .map(|l| kit::truncate(l, inner.width))
         .collect();
     f.render_widget(Paragraph::new(shown), inner);
-
-    if max > 0 {
-        let text = if app.detail_scroll < max {
-            format!(" ↓ {} more · J/K ", max - app.detail_scroll)
-        } else {
-            " ↑ J/K ".to_string()
-        };
-        let w = text.chars().count() as u16;
-        let r = Rect { x: area.right().saturating_sub(w + 1), y: area.bottom().saturating_sub(1), width: w, height: 1 };
-        f.render_widget(Paragraph::new(Span::styled(text, theme::faint())), r.intersection(area));
-    }
+    app.detail_scroll.draw_more(f, area);
 }
 
 fn build_detail(r: &Row, width: usize) -> Vec<Line<'static>> {

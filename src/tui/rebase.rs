@@ -13,7 +13,7 @@ use ratatui::{
 };
 
 use super::app::{self, Flow, Screen};
-use super::kit::{self, Command, Confirm, Palette, PaletteEvent, Toast, footer};
+use super::kit::{self, Command, Confirm, Palette, PaletteEvent, Toast, footer, list};
 use super::theme;
 use crate::fmt::{now, relative_time};
 use crate::git::commit::{self, Details};
@@ -298,9 +298,8 @@ impl App {
             MouseEventKind::ScrollUp => self.select(self.selected.saturating_sub(1)),
             MouseEventKind::ScrollDown => self.select(self.selected + 1),
             MouseEventKind::Down(MouseButton::Left) => {
-                let a = self.list_area;
-                if m.column >= a.x && m.column < a.right() && m.row >= a.y && m.row < a.bottom() {
-                    self.select(self.scroll + (m.row - a.y) as usize);
+                if let Some(i) = list::row_at(self.list_area, self.scroll, &m) {
+                    self.select(i);
                 }
             }
             _ => {}
@@ -398,11 +397,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     app.list_area = inner;
 
     let height = inner.height as usize;
-    if app.selected < app.scroll {
-        app.scroll = app.selected;
-    } else if height > 0 && app.selected >= app.scroll + height {
-        app.scroll = app.selected + 1 - height;
-    }
+    app.scroll = list::follow(app.scroll, app.selected, app.selected, height);
 
     // Squash/fixup fold into the older commit: above when oldest-first, below when newest-first.
     let meld = if app.newest_first { "↓ " } else { "↑ " };

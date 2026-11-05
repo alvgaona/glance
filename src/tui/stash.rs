@@ -16,7 +16,7 @@ use ratatui::{
 };
 
 use super::app::{self, Flow, Screen};
-use super::kit::{self, Command, Confirm, Input, InputEvent, Palette, PaletteEvent, Toast, footer};
+use super::kit::{self, Command, Confirm, Input, InputEvent, Palette, PaletteEvent, Scroll, Toast, footer, list};
 use super::stash_new::{Mode, Picked, Picker};
 use super::{diffview, first_lines, theme};
 use crate::fmt::{now, relative_time};
@@ -71,7 +71,7 @@ struct App<'r> {
     focus: Pane,
     /// Details by (stash, panel width).
     cache: HashMap<(ObjectId, u16), Rc<Vec<Line<'static>>>>,
-    detail_scroll: u16,
+    detail_scroll: Scroll,
     detail_for: Option<ObjectId>,
     detail_area: Rect,
     list_area: Rect,
@@ -100,7 +100,7 @@ pub fn run(repo: &gix::Repository) -> Result<()> {
         searching: false,
         focus: Pane::Stashes,
         cache: HashMap::new(),
-        detail_scroll: 0,
+        detail_scroll: Scroll::default(),
         detail_for: None,
         detail_area: Rect::default(),
         list_area: Rect::default(),
@@ -225,7 +225,6 @@ impl App<'_> {
     /// Returns true to quit.
     fn on_key(&mut self, k: KeyEvent) -> Result<bool> {
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
-        let shift = k.modifiers.contains(KeyModifiers::SHIFT);
         if let Some((input, _)) = &mut self.input {
             match input.key(k) {
                 Some(InputEvent::Cancel) => self.input = None,
@@ -312,33 +311,10 @@ impl App<'_> {
             return Ok(false);
         }
 
-        let half = self.detail_area.height / 2;
+        if self.detail_scroll.key(k, self.detail_area.height) {
+            return Ok(false);
+        }
         let cmd = match k.code {
-            // Details scrolling, as in `gg log`.
-            KeyCode::Char('d') if ctrl => {
-                self.detail_scroll = self.detail_scroll.saturating_add(half);
-                return Ok(false);
-            }
-            KeyCode::Char('u') if ctrl => {
-                self.detail_scroll = self.detail_scroll.saturating_sub(half);
-                return Ok(false);
-            }
-            KeyCode::Down | KeyCode::Char('j') if shift => {
-                self.detail_scroll = self.detail_scroll.saturating_add(3);
-                return Ok(false);
-            }
-            KeyCode::Up | KeyCode::Char('k') if shift => {
-                self.detail_scroll = self.detail_scroll.saturating_sub(3);
-                return Ok(false);
-            }
-            KeyCode::Char('J') => {
-                self.detail_scroll = self.detail_scroll.saturating_add(3);
-                return Ok(false);
-            }
-            KeyCode::Char('K') => {
-                self.detail_scroll = self.detail_scroll.saturating_sub(3);
-                return Ok(false);
-            }
             KeyCode::Down | KeyCode::Char('j') => {
                 self.step(1);
                 return Ok(false);
@@ -546,7 +522,7 @@ impl App<'_> {
         if self.palette.is_some() || self.confirm.is_some() || self.input.is_some() {
             return;
         }
-        let inside = |a: Rect| m.column >= a.x && m.column < a.right() && m.row >= a.y && m.row < a.bottom();
+        let inside = |a: Rect| list::inside(a, &m);
         match m.kind {
             MouseEventKind::ScrollDown if inside(self.changes_area) => self.changes.step(1),
             MouseEventKind::ScrollUp if inside(self.changes_area) => self.changes.step(-1),
@@ -556,19 +532,14 @@ impl App<'_> {
             }
             MouseEventKind::Down(MouseButton::Left) if inside(self.list_area) || inside(self.detail_area) => {
                 self.focus = Pane::Stashes;
-                if inside(self.list_area) {
-                    let i = self.scroll + (m.row - self.list_area.y) as usize;
-                    if i < self.visible.len() {
-                        self.selected = i;
-                    }
+                if let Some(i) = list::row_at(self.list_area, self.scroll, &m)
+                    && i < self.visible.len()
+                {
+                    self.selected = i;
                 }
             }
-            MouseEventKind::ScrollDown if inside(self.detail_area) => {
-                self.detail_scroll = self.detail_scroll.saturating_add(3)
-            }
-            MouseEventKind::ScrollUp if inside(self.detail_area) => {
-                self.detail_scroll = self.detail_scroll.saturating_sub(3)
-            }
+            MouseEventKind::ScrollDown if inside(self.detail_area) => self.detail_scroll.wheel(true),
+            MouseEventKind::ScrollUp if inside(self.detail_area) => self.detail_scroll.wheel(false),
             MouseEventKind::ScrollDown => self.step(1),
             MouseEventKind::ScrollUp => self.step(-1),
             _ => {}
@@ -699,11 +670,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
     app.list_area = inner;
 
     let height = inner.height as usize;
-    if app.selected < app.scroll {
-        app.scroll = app.selected;
-    } else if height > 0 && app.selected >= app.scroll + height {
-        app.scroll = app.selected + 1 - height;
-    }
+    app.scroll = list::follow(app.scroll, app.selected, app.selected, height);
     if app.list.is_empty() {
         let hint = if app.changes.is_empty() { "  Nothing stashed" } else { "  Pick changes on the left, then enter" };
         f.render_widget(Paragraph::new(Span::styled(hint, theme::muted())), inner);
@@ -781,29 +748,18 @@ fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
     let id = app.current().map(|s| s.oid);
     if id != app.detail_for {
         app.detail_for = id;
-        app.detail_scroll = 0;
+        app.detail_scroll.reset();
     }
-    let max = (lines.len() as u16).saturating_sub(inner.height);
-    app.detail_scroll = app.detail_scroll.min(max);
+    app.detail_scroll.fit(lines.len(), inner.height);
 
     let shown: Vec<Line> = lines
         .iter()
-        .skip(app.detail_scroll as usize)
+        .skip(app.detail_scroll.top() as usize)
         .take(inner.height as usize)
         .map(|l| kit::truncate(l.clone(), inner.width))
         .collect();
     f.render_widget(Paragraph::new(shown), inner);
-
-    if max > 0 {
-        let text = if app.detail_scroll < max {
-            format!(" ↓ {} more · J/K ", max - app.detail_scroll)
-        } else {
-            " ↑ J/K ".to_string()
-        };
-        let w = text.chars().count() as u16;
-        let r = Rect { x: area.right().saturating_sub(w + 1), y: area.bottom().saturating_sub(1), width: w, height: 1 };
-        f.render_widget(Paragraph::new(Span::styled(text, theme::faint())), r.intersection(area));
-    }
+    app.detail_scroll.draw_more(f, area);
 }
 
 fn build_detail(repo: &gix::Repository, s: &Stash, branch: Option<&str>, width: usize) -> Vec<Line<'static>> {

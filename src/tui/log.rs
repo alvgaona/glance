@@ -14,7 +14,7 @@ use ratatui::{
 };
 
 use super::app::{self, Flow, Screen};
-use super::kit::{self, Command, Palette, PaletteEvent, Toast, footer};
+use super::kit::{self, Command, Palette, PaletteEvent, Scroll, Toast, footer, list};
 use super::{diffview, theme};
 use crate::fmt::{now, relative_time};
 use crate::git::commit::{self, Details};
@@ -68,7 +68,7 @@ struct App<'r> {
     query: String,
     searching: bool,
     details: bool,
-    detail_scroll: u16,
+    detail_scroll: Scroll,
     cache: HashMap<gix::ObjectId, Rc<Detail>>,
     toast: Option<Toast>,
     palette: Option<Palette<Cmd>>,
@@ -93,7 +93,7 @@ pub fn run(repo: &gix::Repository, opts: Options) -> Result<Option<String>> {
         query: String::new(),
         searching: false,
         details: true,
-        detail_scroll: 0,
+        detail_scroll: Scroll::default(),
         cache: HashMap::new(),
         toast: None,
         palette: None,
@@ -153,7 +153,7 @@ impl App<'_> {
             })
             .or(first)
             .unwrap_or(0);
-        self.detail_scroll = 0;
+        self.detail_scroll.reset();
     }
 
     fn selected_commit(&self) -> Option<&Commit> {
@@ -185,7 +185,7 @@ impl App<'_> {
         }
         if i != self.selected {
             self.selected = i;
-            self.detail_scroll = 0;
+            self.detail_scroll.reset();
         }
     }
 
@@ -207,7 +207,6 @@ impl App<'_> {
 
     fn on_key(&mut self, k: KeyEvent) -> Result<Option<Outcome>> {
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
-        let shift = k.modifiers.contains(KeyModifiers::SHIFT);
         if ctrl && k.code == KeyCode::Char('c') {
             return Ok(Some(Outcome::Done(None)));
         }
@@ -222,7 +221,6 @@ impl App<'_> {
             }
             return Ok(None);
         }
-        let half = (self.detail_area.height / 2).max(1);
 
         if self.searching {
             match k.code {
@@ -247,6 +245,9 @@ impl App<'_> {
             return Ok(None);
         }
 
+        if self.detail_scroll.key(k, self.detail_area.height) {
+            return Ok(None);
+        }
         let cmd = match k.code {
             KeyCode::Char('p') if ctrl => {
                 self.palette = Some(Palette::new(self.commands()));
@@ -254,30 +255,6 @@ impl App<'_> {
             }
             KeyCode::Char(':') => {
                 self.palette = Some(Palette::new(self.commands()));
-                return Ok(None);
-            }
-            KeyCode::Char('d') if ctrl => {
-                self.detail_scroll = self.detail_scroll.saturating_add(half);
-                return Ok(None);
-            }
-            KeyCode::Char('u') if ctrl => {
-                self.detail_scroll = self.detail_scroll.saturating_sub(half);
-                return Ok(None);
-            }
-            KeyCode::Down if shift => {
-                self.detail_scroll = self.detail_scroll.saturating_add(3);
-                return Ok(None);
-            }
-            KeyCode::Up if shift => {
-                self.detail_scroll = self.detail_scroll.saturating_sub(3);
-                return Ok(None);
-            }
-            KeyCode::Char('J') => {
-                self.detail_scroll = self.detail_scroll.saturating_add(3);
-                return Ok(None);
-            }
-            KeyCode::Char('K') => {
-                self.detail_scroll = self.detail_scroll.saturating_sub(3);
                 return Ok(None);
             }
             KeyCode::Down | KeyCode::Char('j') => {
@@ -349,25 +326,21 @@ impl App<'_> {
         if self.palette.is_some() {
             return;
         }
-        let inside = |a: Rect| m.column >= a.x && m.column < a.right() && m.row >= a.y && m.row < a.bottom();
+        let in_details = list::inside(self.detail_area, &m);
         match m.kind {
-            MouseEventKind::ScrollDown if inside(self.detail_area) => {
-                self.detail_scroll = self.detail_scroll.saturating_add(3)
-            }
-            MouseEventKind::ScrollUp if inside(self.detail_area) => {
-                self.detail_scroll = self.detail_scroll.saturating_sub(3)
-            }
+            MouseEventKind::ScrollDown if in_details => self.detail_scroll.wheel(true),
+            MouseEventKind::ScrollUp if in_details => self.detail_scroll.wheel(false),
             MouseEventKind::ScrollDown => self.step(1),
             MouseEventKind::ScrollUp => self.step(-1),
-            MouseEventKind::Down(MouseButton::Left) if inside(self.list_area) => {
-                let mut i = self.scroll + (m.row - self.list_area.y) as usize;
+            MouseEventKind::Down(MouseButton::Left) => {
+                let Some(mut i) = list::row_at(self.list_area, self.scroll, &m) else { return };
                 // A click on a label selects the commit below it.
                 if matches!(self.visible.get(i), Some(Item::Label(_))) {
                     i += 1;
                 }
                 if i < self.visible.len() && i != self.selected {
                     self.selected = i;
-                    self.detail_scroll = 0;
+                    self.detail_scroll.reset();
                 }
             }
             _ => {}
@@ -472,15 +445,11 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
 
     let height = inner.height as usize;
     // Keep the selected commit on screen, together with its label row if it has one.
-    let top = match app.selected.checked_sub(1).map(|i| app.visible[i]) {
+    let first = match app.selected.checked_sub(1).map(|i| app.visible[i]) {
         Some(Item::Label(_)) => app.selected - 1,
         _ => app.selected,
     };
-    if top < app.scroll {
-        app.scroll = top;
-    } else if height > 0 && app.selected >= app.scroll + height {
-        app.scroll = app.selected + 1 - height;
-    }
+    app.scroll = list::follow(app.scroll, first, app.selected, height);
 
     if app.visible.is_empty() {
         let msg = if app.query.is_empty() { "No commits yet" } else { "No commits match" };
@@ -566,10 +535,9 @@ fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
         f.render_widget(block, area);
         return;
     };
-    // Don't scroll past the end.
-    let max = (d.lines.len() as u16).saturating_sub(inner_h);
-    app.detail_scroll = app.detail_scroll.min(max);
-    f.render_widget(Paragraph::new(d.lines.clone()).scroll((app.detail_scroll, 0)).block(block), area);
+    app.detail_scroll.fit(d.lines.len(), inner_h);
+    f.render_widget(Paragraph::new(d.lines.clone()).scroll((app.detail_scroll.top(), 0)).block(block), area);
+    app.detail_scroll.draw_more(f, area);
 }
 
 fn detail_lines(repo: &gix::Repository, s: &Details) -> Vec<Line<'static>> {

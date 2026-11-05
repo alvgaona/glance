@@ -1,5 +1,7 @@
 mod cli;
 mod core;
+// With the TUI, fzf only provides the clipboard helper; its picker is the no-TUI fallback.
+#[cfg_attr(feature = "tui", allow(dead_code))]
 mod fzf;
 mod patch;
 mod rebase;
@@ -25,10 +27,10 @@ fn main() -> Result<()> {
         Command::Log { count, interactive, all } => {
             let repo = core::open()?;
             let count = count.unwrap_or(if interactive { 5000 } else { 20 });
-            let commits = core::log::read(&repo, count, all)?;
             if interactive {
-                return log_interactive(&repo, &commits);
+                return log_interactive(&repo, count, all);
             }
+            let commits = core::log::read(&repo, count, all)?;
             render::log::print(&commits, &paint);
         }
         Command::Branches => {
@@ -60,19 +62,21 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// fzf picker when installed, otherwise the built-in ratatui list.
-fn log_interactive(repo: &gix::Repository, commits: &[core::log::Commit]) -> Result<()> {
-    if fzf::available() {
-        let lines = render::log::lines(commits, &render::Paint { on: true });
-        let label = core::repo_name(repo);
-        if let Some(id) = fzf::pick_commit(&lines, &label, "copy")? {
-            fzf::copy(&id);
-            println!("{id}");
-        }
-        return Ok(());
-    }
+/// Full-screen log; Enter copies the commit id and prints it (so `$(gg log -i)` works).
+/// Without the `tui` feature, falls back to fzf.
+fn log_interactive(repo: &gix::Repository, count: usize, all: bool) -> Result<()> {
     #[cfg(feature = "tui")]
-    return tui::log::run(commits);
+    let picked = tui::log::run(repo, tui::log::Options { mode: tui::log::Mode::Browse, all, count })?;
     #[cfg(not(feature = "tui"))]
-    anyhow::bail!("`gg log -i` needs fzf installed");
+    let picked = {
+        anyhow::ensure!(fzf::available(), "`gg log -i` needs fzf installed");
+        let commits = core::log::read(repo, count, all)?;
+        let lines = render::log::lines(&commits, &render::Paint { on: true });
+        fzf::pick_commit(&lines, &core::repo_name(repo), "copy")?
+    };
+    if let Some(id) = picked {
+        fzf::copy(&id);
+        println!("{id}");
+    }
+    Ok(())
 }

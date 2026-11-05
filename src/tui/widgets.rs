@@ -38,6 +38,28 @@ pub fn hints(pairs: &[(&str, &str)]) -> Line<'static> {
     Line::from(spans)
 }
 
+/// Cuts a line to `width` columns, ending in "…" when it doesn't fit.
+pub fn truncate(line: Line<'static>, width: u16) -> Line<'static> {
+    let width = width as usize;
+    if line.width() <= width {
+        return line;
+    }
+    let mut out = Vec::new();
+    let mut used = 0;
+    for span in line.spans {
+        let w = span.width();
+        if used + w < width {
+            used += w;
+            out.push(span);
+            continue;
+        }
+        let keep: String = span.content.chars().take(width.saturating_sub(used + 1)).collect();
+        out.push(Span::styled(format!("{keep}…"), span.style));
+        break;
+    }
+    Line::from(out)
+}
+
 /// A coloured tag like ` fixup `.
 pub fn pill(text: &str, bg: Color, fg: Color) -> Span<'static> {
     Span::styled(format!(" {text} "), Style::new().bg(bg).fg(fg))

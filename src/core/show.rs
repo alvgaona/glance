@@ -28,6 +28,15 @@ pub struct FileStat {
     pub path: String,
     pub from: Option<String>,
     pub size: Option<Size>,
+    /// Blob before and after, for building the diff later.
+    pub old: Option<gix::ObjectId>,
+    pub new: Option<gix::ObjectId>,
+}
+
+/// Unified diff of one file of a shown commit.
+pub fn file_patch(repo: &gix::Repository, f: &FileStat) -> Option<Vec<diff::PatchLine>> {
+    let read = |id: Option<gix::ObjectId>| id.map(|id| diff::blob(repo, id)).unwrap_or_default();
+    diff::patch(&read(f.old), &read(f.new), 3)
 }
 
 /// One commit and what it changed compared with its first parent.
@@ -79,6 +88,8 @@ pub fn read(repo: &gix::Repository, rev: &str) -> Result<Shown> {
             path: path.to_str_lossy().into_owned(),
             from: from.map(|f| f.to_str_lossy().into_owned()),
             size: if mode.is_commit() { None } else { diff::count(&read(old), &read(new)) },
+            old: old.filter(|_| !mode.is_commit()),
+            new: new.filter(|_| !mode.is_commit()),
         });
     }
     files.sort_by(|a, b| a.path.cmp(&b.path));

@@ -381,30 +381,8 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     let right = Line::from(right);
     let [l, _, r] = Layout::horizontal([Constraint::Min(1), Constraint::Length(3), Constraint::Length(right.width() as u16)])
         .areas(area);
-    f.render_widget(Paragraph::new(truncate(left, l.width)), l);
+    f.render_widget(Paragraph::new(widgets::truncate(left, l.width)), l);
     f.render_widget(Paragraph::new(right), r);
-}
-
-/// Cuts a line to `width` columns, ending in "…" when it doesn't fit.
-fn truncate(line: Line<'static>, width: u16) -> Line<'static> {
-    let width = width as usize;
-    if line.width() <= width {
-        return line;
-    }
-    let mut out = Vec::new();
-    let mut used = 0;
-    for span in line.spans {
-        let w = span.width();
-        if used + w < width {
-            used += w;
-            out.push(span);
-            continue;
-        }
-        let keep: String = span.content.chars().take(width.saturating_sub(used + 1)).collect();
-        out.push(Span::styled(format!("{keep}…"), span.style));
-        break;
-    }
-    Line::from(out)
 }
 
 fn action_colors(a: Action) -> (Color, Color) {
@@ -476,7 +454,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
 
         let right = Line::from(right);
         let [l, rr] = Layout::horizontal([Constraint::Min(1), Constraint::Length(right.width() as u16)]).areas(r);
-        f.render_widget(Paragraph::new(truncate(Line::from(left), l.width)).style(Style::new().bg(bg)), l);
+        f.render_widget(Paragraph::new(widgets::truncate(Line::from(left), l.width)).style(Style::new().bg(bg)), l);
         f.render_widget(Paragraph::new(right).style(Style::new().bg(bg)), rr);
     }
 }

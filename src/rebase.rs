@@ -150,12 +150,21 @@ fn unpushed(repo: &gix::Repository) -> Result<Option<(gix::ObjectId, String)>> {
     Ok(Some((base, format!("{n} unpushed commit{s} (not on {})", up.shorten()))))
 }
 
-/// fzf over this branch's history; the picked commit is the oldest one to edit.
+/// Choose the oldest commit to edit from this branch's history (full-screen log, or fzf).
 fn pick(repo: &gix::Repository, rest: &[String]) -> Result<Option<(Vec<String>, Option<String>)>> {
-    let commits = core::log::read(repo, 5000, false)?;
-    let lines = crate::render::log::lines(&commits, &crate::render::Paint { on: true });
-    let label = format!("{} · rebase: choose the oldest commit to edit", core::repo_name(repo));
-    let Some(picked) = crate::fzf::pick_commit(&lines, &label, "rebase from here")? else {
+    #[cfg(feature = "tui")]
+    let picked = {
+        use crate::tui::log::{Mode, Options, run};
+        run(repo, Options { mode: Mode::Pick, all: false, count: 5000 })?
+    };
+    #[cfg(not(feature = "tui"))]
+    let picked = {
+        let commits = core::log::read(repo, 5000, false)?;
+        let lines = crate::render::log::lines(&commits, &crate::render::Paint { on: true });
+        let label = format!("{} · rebase: choose the oldest commit to edit", core::repo_name(repo));
+        crate::fzf::pick_commit(&lines, &label, "rebase from here")?
+    };
+    let Some(picked) = picked else {
         return Ok(None);
     };
     let commit = repo.rev_parse_single(picked.as_str())?.object()?.peel_to_commit()?;

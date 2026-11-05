@@ -33,7 +33,8 @@ pub fn read(repo: &gix::Repository, count: usize, all: bool) -> Result<Vec<Commi
     let labels = ref_labels(repo)?;
     let mut tips: Vec<ObjectId> = repo.head_id().ok().map(|id| id.detach()).into_iter().collect();
     if all {
-        tips.extend(labels.keys().copied());
+        // A tag can point at a tree or blob (linux.git has one): the walk takes commits only.
+        tips.extend(labels.keys().copied().filter(|id| repo.find_commit(*id).is_ok()));
     }
     if tips.is_empty() {
         return Ok(Vec::new()); // unborn branch: no commits yet
@@ -93,4 +94,15 @@ pub fn ref_labels(repo: &gix::Repository) -> Result<HashMap<ObjectId, Vec<RefLab
         map.entry(id).or_default().push(label);
     }
     Ok(map)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn all_skips_tags_that_are_not_commits() {
+        let s = crate::git::run::Scratch::new("log-treetag");
+        s.commit("a.txt", "one\n");
+        s.git(&["update-ref", "refs/tags/treetag", "HEAD^{tree}"]);
+        assert_eq!(super::read(&s.repo(), 10, true).unwrap().len(), 1);
+    }
 }

@@ -176,7 +176,7 @@ fn pick(repo: &gix::Repository, rest: &[String]) -> Result<Option<(Vec<String>, 
     #[cfg(not(feature = "tui"))]
     let picked = {
         let commits = core::log::read(repo, 5000, false)?;
-        let lines = crate::render::log::lines(&commits, &crate::render::Paint { on: true });
+        let lines = crate::render::log::lines(&commits, &crate::render::Paint { on: true, rgb: false });
         let label = format!("{} · rebase: choose the oldest commit to edit", core::repo_name(repo));
         crate::fzf::pick_commit(&lines, &label, "rebase from here")?
     };

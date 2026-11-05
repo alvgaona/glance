@@ -76,7 +76,7 @@ fn log_interactive(repo: &gix::Repository, count: usize, all: bool) -> Result<()
     let picked = {
         anyhow::ensure!(fzf::available(), "`gg log -i` needs fzf installed");
         let commits = core::log::read(repo, count, all)?;
-        let lines = render::log::lines(&commits, &render::Paint { on: true });
+        let lines = render::log::lines(&commits, &render::Paint { on: true, rgb: false });
         fzf::pick_commit(&lines, &core::repo_name(repo), "copy")?
     };
     if let Some(id) = picked {

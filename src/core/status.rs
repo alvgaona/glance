@@ -101,7 +101,9 @@ pub fn read(repo: &gix::Repository, sizes: bool) -> Result<Status> {
                 let kind = match item.summary() {
                     None => continue,
                     Some(Summary::Added) => {
-                        st.untracked.push(path);
+                        // Collapsed folders get a trailing slash, like `git status`.
+                        let is_dir = workdir.as_ref().is_some_and(|d| d.join(&path).is_dir());
+                        st.untracked.push(if is_dir && !path.ends_with('/') { format!("{path}/") } else { path });
                         continue;
                     }
                     Some(Summary::Conflict) => {

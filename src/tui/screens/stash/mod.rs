@@ -26,7 +26,7 @@ use crate::fmt::{now, relative_time};
 use crate::git::stash::{self, Stash};
 use crate::tui::app::{self, Flow, Screen};
 use crate::tui::kit::{self, Command, Confirm, Input, InputEvent, Palette, PaletteEvent, Scroll, Toast, footer, list};
-use crate::tui::panels::diff;
+use crate::tui::panels::{self, diff};
 use crate::tui::{first_lines, theme};
 
 #[derive(Clone)]

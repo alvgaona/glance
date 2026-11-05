@@ -1,57 +1,18 @@
-//! File lists and coloured diffs for details panels (`gg log`, `gg stash`).
+//! Coloured diffs for details panels (`gg log`, `gg stash`). The file lists above them
+//! are in `changes`.
 
 use ratatui::{
     style::{Color, Style},
     text::{Line, Span},
 };
 
-use crate::git::diff::{PatchLine, Size};
-use crate::git::status::ChangeKind;
+use super::changes::kind_mark;
+use crate::git::diff::PatchLine;
 use crate::git::tree::{self, FileStat};
 use crate::tui::theme;
 
 /// Stop drawing diffs after this many lines; huge commits would make the panel slow.
 const MAX_DIFF_LINES: usize = 4000;
-
-pub fn kind_mark(k: ChangeKind) -> (&'static str, Color) {
-    match k {
-        ChangeKind::Added => ("A", theme::GREEN),
-        ChangeKind::Deleted => ("D", theme::RED),
-        ChangeKind::Renamed | ChangeKind::Copied => ("R", theme::BLUE),
-        ChangeKind::Modified | ChangeKind::TypeChange => ("M", theme::YELLOW),
-    }
-}
-
-/// `3 files   +24 −5` and one row per file. `title` replaces "files" (e.g. "untracked").
-pub fn file_list(files: &[FileStat], title: Option<&str>) -> Vec<Line<'static>> {
-    let (mut ta, mut tr) = (0, 0);
-    for f in files {
-        if let Some(Size::Lines { added, removed }) = f.size {
-            ta += added;
-            tr += removed;
-        }
-    }
-    let n = files.len();
-    let noun = title.map(str::to_string).unwrap_or_else(|| if n == 1 { "file".into() } else { "files".into() });
-    let mut out = vec![Line::from(vec![
-        Span::styled(format!("{n} {noun}   "), theme::faint()),
-        Span::styled(format!("+{ta} "), Style::new().fg(theme::GREEN)),
-        Span::styled(format!("−{tr}"), Style::new().fg(theme::RED)),
-    ])];
-    for f in files {
-        let (mark, color) = kind_mark(f.kind);
-        let mut spans = vec![
-            Span::styled(format!("{mark}  "), Style::new().fg(color)),
-            Span::styled(f.path.clone(), theme::text()),
-        ];
-        if let Some(Size::Lines { added, removed }) = f.size {
-            spans.push(Span::styled(format!("  +{added} "), Style::new().fg(theme::GREEN)));
-            spans.push(Span::styled(format!("−{removed}"), Style::new().fg(theme::RED)));
-        }
-        out.push(Line::from(spans));
-    }
-    out
-}
 
 /// A header bar per file and its diff, added lines on green and removed on red.
 pub fn patches(repo: &gix::Repository, files: &[FileStat]) -> Vec<Line<'static>> {

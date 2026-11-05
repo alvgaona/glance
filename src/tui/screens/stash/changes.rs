@@ -16,6 +16,7 @@ use crate::git::diff::Size;
 pub use crate::git::stash::Mode;
 use crate::git::stash::Push;
 use crate::git::status::{ChangeKind, Status};
+use crate::tui::panels::changes;
 use crate::tui::{kit, theme};
 
 const STAGED_ONLY_ALL: &str = "This mode takes every file: git can't pick single files here. Press e to pick.";
@@ -432,16 +433,8 @@ impl Picker {
         };
         let pad = " ".repeat(name_w.saturating_sub(file.path.chars().count()) + 2);
         spans.push(Span::styled(format!("  {}{pad}", file.path), st(text)));
-        if file.binary {
-            spans.push(Span::styled("binary", st(theme::faint())));
-        } else if file.added + file.removed > 0 {
-            if file.added > 0 {
-                spans.push(Span::styled(format!("+{} ", file.added), st(Style::new().fg(theme::GREEN))));
-            }
-            if file.removed > 0 {
-                spans.push(Span::styled(format!("−{}", file.removed), st(Style::new().fg(theme::RED))));
-            }
-        }
+        let size = if file.binary { Size::Binary } else { Size::Lines { added: file.added, removed: file.removed } };
+        spans.extend(changes::counts(Some(size)).into_iter().map(|s| s.patch_style(st(Style::new()))));
         let used = Line::from(spans.clone()).width();
         spans.push(Span::styled(" ".repeat((width as usize).saturating_sub(used)), st(Style::new())));
         Line::from(spans)

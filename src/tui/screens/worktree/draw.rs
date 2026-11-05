@@ -232,55 +232,10 @@ fn build_detail(r: &Row, width: usize) -> Vec<Line<'static>> {
             if r.dirty() == Some(0) {
                 out.push(Line::styled("Clean: nothing uncommitted.", theme::muted()));
             }
-            files(&mut out, "staged", &st.staged);
-            files(&mut out, "changes", &st.unstaged);
-            names(&mut out, "untracked", &st.untracked, theme::MUTED);
-            names(&mut out, "conflicts", &st.conflicted, theme::RED);
+            out.extend(changes::status(st));
         }
     }
     out
-}
-
-fn files(out: &mut Vec<Line<'static>>, title: &str, list: &[FileChange]) {
-    if list.is_empty() {
-        return;
-    }
-    let (mut ta, mut tr) = (0, 0);
-    for f in list {
-        if let Some(Size::Lines { added, removed }) = f.size {
-            ta += added;
-            tr += removed;
-        }
-    }
-    out.push(Line::from(vec![
-        Span::styled(format!("{title} {}   ", list.len()), theme::faint()),
-        Span::styled(format!("+{ta} "), Style::new().fg(theme::GREEN)),
-        Span::styled(format!("−{tr}"), Style::new().fg(theme::RED)),
-    ]));
-    for f in list {
-        let (mark, color) = diff::kind_mark(f.kind);
-        let mut spans = vec![
-            Span::styled(format!("{mark}  "), Style::new().fg(color)),
-            Span::styled(f.path.clone(), theme::text()),
-        ];
-        if let Some(Size::Lines { added, removed }) = f.size {
-            spans.push(Span::styled(format!("  +{added} "), Style::new().fg(theme::GREEN)));
-            spans.push(Span::styled(format!("−{removed}"), Style::new().fg(theme::RED)));
-        }
-        out.push(Line::from(spans));
-    }
-    out.push(Line::raw(""));
-}
-
-fn names(out: &mut Vec<Line<'static>>, title: &str, list: &[String], color: ratatui::style::Color) {
-    if list.is_empty() {
-        return;
-    }
-    out.push(Line::styled(format!("{title} {}", list.len()), theme::faint()));
-    for p in list {
-        out.push(Line::from(vec![Span::styled("?  ", Style::new().fg(color)), Span::styled(p.clone(), theme::text())]));
-    }
-    out.push(Line::raw(""));
 }
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {

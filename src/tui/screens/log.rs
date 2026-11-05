@@ -18,7 +18,7 @@ use crate::git::commit::{self, Details};
 use crate::git::log::{Commit, RefLabel};
 use crate::tui::app::{self, Flow, Screen};
 use crate::tui::kit::{self, Command, Palette, PaletteEvent, Scroll, Toast, footer, list};
-use crate::tui::panels::diff;
+use crate::tui::panels::{changes, diff};
 use crate::tui::theme;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -570,7 +570,7 @@ fn detail_lines(repo: &gix::Repository, s: &Details) -> Vec<Line<'static>> {
     }
 
     out.push(Line::raw(""));
-    out.extend(diff::file_list(&s.files, None));
+    out.extend(changes::files(&s.files, None));
     out.extend(diff::patches(repo, &s.files));
     out
 }

@@ -25,12 +25,11 @@ use ratatui::{
 
 use crate::fmt::paths::tilde;
 use crate::fmt::{now, relative_time};
-use crate::git::diff::Size;
-use crate::git::status::{FileChange, Status};
+use crate::git::status::Status;
 use crate::git::worktree::{self, Source, Worktree};
 use crate::tui::app::{self, Flow, Screen};
 use crate::tui::kit::{self, Command, Confirm, Input, InputEvent, Palette, PaletteEvent, Scroll, Toast, footer, list};
-use crate::tui::panels::diff;
+use crate::tui::panels::changes;
 use crate::tui::{first_lines, theme};
 
 #[derive(Clone)]

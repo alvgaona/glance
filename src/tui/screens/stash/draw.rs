@@ -237,10 +237,10 @@ pub(super) fn build_detail(
     match stash::files(repo, s) {
         Ok((tracked, untracked)) => {
             out.push(Line::raw(""));
-            out.extend(diff::file_list(&tracked, None));
+            out.extend(panels::changes::files(&tracked, None));
             if !untracked.is_empty() {
                 out.push(Line::raw(""));
-                out.extend(diff::file_list(&untracked, Some("untracked")));
+                out.extend(panels::changes::files(&untracked, Some("untracked")));
             }
             out.extend(diff::patches(repo, &tracked));
             out.extend(diff::patches(repo, &untracked));

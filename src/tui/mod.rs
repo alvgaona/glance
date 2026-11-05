@@ -2,3 +2,5 @@
 
 pub mod log;
 pub mod rebase;
+pub mod theme;
+pub mod widgets;

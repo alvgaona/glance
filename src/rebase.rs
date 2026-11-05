@@ -181,7 +181,8 @@ pub fn edit(file: &Path, keep_on_quit: bool) -> Result<()> {
 
     #[cfg(feature = "tui")]
     {
-        use crate::tui::rebase::{Outcome, run};
+        use crate::tui::rebase::{Header, Outcome, run};
+        let header = Header { branch: header.0, detail: header.1 };
         match run(&repo, lines, header, newest_first(&repo))? {
             Outcome::Apply(new) => std::fs::write(file, todo::render(&new))?,
             Outcome::Quit if keep_on_quit => {} // leave the file as git wrote it
@@ -207,8 +208,8 @@ fn newest_first(repo: &gix::Repository) -> bool {
     !order.is_some_and(|o| o.eq_ignore_ascii_case(b"oldest"))
 }
 
-/// "Rebase feat/x onto 1a2b3c4 · 5 commits"
-fn header(repo: &gix::Repository, lines: &[todo::Line]) -> String {
+/// Branch name and a short description of which commits are listed.
+fn header(repo: &gix::Repository, lines: &[todo::Line]) -> (String, String) {
     let dir = repo.path().join("rebase-merge");
     let read = |name: &str| std::fs::read_to_string(dir.join(name)).ok().map(|s| s.trim().to_string());
     let branch = read("head-name")
@@ -217,16 +218,20 @@ fn header(repo: &gix::Repository, lines: &[todo::Line]) -> String {
     let onto = read("onto").map(|o| o.chars().take(7).collect::<String>()).unwrap_or_default();
     let n = lines.iter().filter(|l| matches!(l, todo::Line::Commit { .. })).count();
     let done = read("done").map(|d| todo::parse(&d).len()).unwrap_or(0);
-    let mut s = format!("Rebase {branch}");
-    match std::env::var(DESC_ENV) {
-        // "Rebase feat · 4 commits since branching off main"
-        Ok(desc) if !desc.is_empty() => s += &format!(" · {desc}"),
-        _ if !onto.is_empty() => s += &format!(" onto {onto}"),
-        _ => {}
-    }
-    s += &format!(" · {n} commit{}", if n == 1 { "" } else { "s" });
-    if done > 0 {
-        s += &format!(" left · {done} done");
-    }
-    s
+    // "4 commits since branching off main", or "onto 1a2b3c4 · 4 commits".
+    let detail = match std::env::var(DESC_ENV) {
+        Ok(desc) if !desc.is_empty() => desc,
+        _ => {
+            let s = if n == 1 { "" } else { "s" };
+            let mut d = format!("{n} commit{s}");
+            if !onto.is_empty() {
+                d = format!("onto {onto} · {d}");
+            }
+            if done > 0 {
+                d += &format!(" left · {done} done");
+            }
+            d
+        }
+    };
+    (branch, detail)
 }

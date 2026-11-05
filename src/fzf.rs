@@ -10,6 +10,12 @@ const HASH: &str = r#"h=$(grep -oE "[a-f0-9]{7,}" <<< {} | head -1); [ -z "$h" ]
 
 const SHOW: &str = r#"git show --color=always --stat --patch --date=format:"%a %d %b %Y %H:%M" --format="%C(yellow bold)%h%C(reset)%C(auto)%d%C(reset)%n%C(blue)%aN%C(reset) %C(dim)<%aE>%C(reset)%n%C(green)%ar%C(reset) %C(dim)· %ad%C(reset)%n%n%C(bold)%s%C(reset)%n%n%b" "$h""#;
 
+/// Same palette as the full-screen views (src/tui/theme.rs).
+const COLORS: &str = "fg:#eeeeee,fg+:#eeeeee,bg+:#202020,hl:#e5c07b:bold,hl+:#e5c07b:bold,\
+border:#303030,label:#fab283:bold,prompt:#fab283,pointer:#fab283,marker:#fab283,\
+info:#808080,header:#808080,spinner:#fab283,gutter:-1,preview-border:#303030,preview-label:#808080,\
+separator:#303030,scrollbar:#303030,query:#eeeeee:regular,ghost:#505050";
+
 pub fn available() -> bool {
     which("fzf")
 }
@@ -36,11 +42,11 @@ pub fn pick_commit(lines: &[String], label: &str, enter: &str) -> Result<Option<
             "--border=rounded",
             &format!("--border-label= {label} "),
             "--prompt=  ",
-            "--pointer=▌",
+            "--pointer=┃",
             "--info=inline-right",
             "--ghost=search commits",
             "--highlight-line",
-            "--color=border:8,label:4:bold,prompt:4,pointer:4,hl:3:bold,hl+:3:bold,bg+:236,gutter:-1,info:8,header:8,preview-border:8,preview-label:8",
+            &format!("--color={COLORS}"),
             &format!("--preview={unified}"),
             "--preview-window=right,60%,border-left,<140(down,60%,border-top)",
             "--preview-label= diff ",

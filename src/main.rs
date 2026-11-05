@@ -2,6 +2,7 @@ mod cli;
 mod core;
 mod fzf;
 mod patch;
+mod rebase;
 mod render;
 #[cfg(feature = "tui")]
 mod tui;
@@ -45,6 +46,15 @@ fn main() -> Result<()> {
         }
         Command::Repos { dir } => {
             render::repos::print(&core::repos::read(&dir)?, &paint);
+        }
+        Command::Rebase { args } => {
+            let code = rebase::run(&args)?;
+            if code != 0 {
+                std::process::exit(code);
+            }
+        }
+        Command::RebaseEditor { file, keep_on_quit } => {
+            rebase::edit(&file, keep_on_quit)?;
         }
     }
     Ok(())

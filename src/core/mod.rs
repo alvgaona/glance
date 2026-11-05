@@ -7,6 +7,9 @@ pub mod log;
 pub mod repos;
 pub mod show;
 pub mod status;
+// Only the TUI rebase editor edits the todo list.
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
+pub mod todo;
 
 use anyhow::{Context, Result};
 

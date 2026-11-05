@@ -69,9 +69,15 @@ fn print_header(st: &Status, p: &Paint) {
         line += &format!("  {}", format!("{} stash{s}", st.stashes).style(p.magenta()));
     }
     if let Some(op) = &st.in_progress {
-        line += &format!("  {}", format!("[{op} in progress]").style(p.pick(Style::new().red().bold())));
+        line += &format!("  {}", format!("[{op}]").style(p.pick(Style::new().red().bold())));
     }
     println!("{line}");
+    if st.in_progress.as_deref().is_some_and(|op| op.starts_with("rebasing")) {
+        println!(
+            "{}",
+            "  gg rebase --continue · --skip · --abort · --edit-todo".style(p.dim())
+        );
+    }
 }
 
 /// `color` is a plain style (e.g. `Style::new().green()`); it is only applied when colour is on.

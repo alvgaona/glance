@@ -55,7 +55,7 @@ pub fn read(repo: &gix::Repository, sizes: bool) -> Result<Status> {
     let head_ref = repo.head_name()?;
     st.branch = head_ref.as_ref().map(|n| n.shorten().to_string());
     st.head = repo.head_id().ok().map(|id| id.shorten_or_id().to_string());
-    st.in_progress = repo.state().map(|s| format!("{s:?}").to_lowercase());
+    st.in_progress = in_progress(repo);
     st.stashes = count_stashes(repo);
 
     if let (Some(name), Ok(head_id)) = (&head_ref, repo.head_id()) {
@@ -170,6 +170,39 @@ pub fn upstream(
         ahead: count(head, up)?,
         behind: count(up, head)?,
     }))
+}
+
+/// "rebase 3/5", "merge", "cherry-pick"... for an operation that was started but not finished.
+fn in_progress(repo: &gix::Repository) -> Option<String> {
+    use gix::state::InProgress::*;
+    let state = repo.state()?;
+    let name = match state {
+        Rebase | RebaseInteractive => "rebase",
+        Merge => "merge",
+        CherryPick | CherryPickSequence => "cherry-pick",
+        Revert | RevertSequence => "revert",
+        Bisect => "bisect",
+        ApplyMailbox | ApplyMailboxRebase => "am",
+    };
+    if name != "rebase" {
+        return Some(name.into());
+    }
+    // Files under rebase-merge/ for -i and merge rebases, rebase-apply/ otherwise.
+    let text = |f: &str| {
+        ["rebase-merge", "rebase-apply"]
+            .iter()
+            .find_map(|d| std::fs::read_to_string(repo.path().join(d).join(f)).ok())
+            .map(|s| s.trim().to_string())
+    };
+    let num = |a: &str, b: &str| text(a).or_else(|| text(b)).and_then(|s| s.parse::<u32>().ok());
+    let mut label = "rebasing".to_string();
+    if let Some(branch) = text("head-name") {
+        label += &format!(" {}", branch.trim_start_matches("refs/heads/"));
+    }
+    if let (Some(n), Some(total)) = (num("msgnum", "next"), num("end", "last")) {
+        label += &format!(" {n}/{total}");
+    }
+    Some(label)
 }
 
 pub fn count_stashes(repo: &gix::Repository) -> usize {

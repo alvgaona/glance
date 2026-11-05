@@ -38,7 +38,8 @@ pub fn print(repos: &[Repo], p: &Paint) {
         // What needs attention, most important first.
         let mut notes: Vec<String> = Vec::new();
         if let Some(op) = &st.in_progress {
-            notes.push(format!("{op} in progress").style(p.red()).to_string());
+            let op = if op.starts_with("rebasing") { op.clone() } else { format!("{op} in progress") };
+            notes.push(op.style(p.red()).to_string());
         }
         if !st.conflicted.is_empty() {
             notes.push(format!("{} conflicts", st.conflicted.len()).style(p.red()).to_string());

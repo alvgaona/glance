@@ -61,4 +61,21 @@ pub enum Command {
         #[arg(default_value = ".")]
         dir: std::path::PathBuf,
     },
+
+    /// Interactive rebase with a visual todo editor. Arguments go to `git rebase -i`
+    /// (e.g. `gg rebase main`, `gg rebase HEAD~5`, `gg rebase --continue`).
+    #[command(visible_alias = "rb")]
+    Rebase {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+
+    /// Used by git as GIT_SEQUENCE_EDITOR during `gg rebase`.
+    #[command(name = "__rebase-editor", hide = true)]
+    RebaseEditor {
+        file: std::path::PathBuf,
+        /// Quitting keeps the list unchanged instead of aborting (for --edit-todo).
+        #[arg(long)]
+        keep_on_quit: bool,
+    },
 }

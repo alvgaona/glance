@@ -19,6 +19,17 @@ pub struct Branch {
     pub upstream: Option<Upstream>,
     /// Fully contained in the default branch (safe to delete).
     pub merged: bool,
+    /// For a local branch: the remotes that have it (same name, or its upstream), as last fetched.
+    pub copies: Vec<Copy>,
+}
+
+/// A local branch as it exists on one remote.
+#[derive(Debug, Clone)]
+pub struct Copy {
+    pub remote: String,
+    /// Branch name on the remote (usually the same as the local one).
+    pub branch: String,
+    pub oid: ObjectId,
 }
 
 impl Branch {
@@ -27,18 +38,50 @@ impl Branch {
         self.upstream.as_ref().is_some_and(|u| u.name.ends_with("(gone)"))
     }
 
-    /// `(remote, branch)` to delete on the remote: the upstream of a local branch,
-    /// or the branch itself when it is a remote one. `None` if there's nothing there.
-    pub fn remote_target(&self) -> Option<(String, String)> {
-        let full = if self.remote {
-            self.name.clone()
-        } else {
-            let up = self.upstream.as_ref().filter(|_| !self.gone())?;
-            up.name.clone()
-        };
-        let (remote, branch) = full.split_once('/')?;
-        Some((remote.to_string(), branch.to_string()))
+    /// `(remote, branch)` pairs to delete on remotes: every copy of a local branch,
+    /// or the branch itself when it is a remote one.
+    pub fn remote_targets(&self) -> Vec<(String, String)> {
+        if self.remote {
+            return self.name.split_once('/').map(|(r, b)| (r.to_string(), b.to_string())).into_iter().collect();
+        }
+        self.copies.iter().map(|c| (c.remote.clone(), c.branch.clone())).collect()
     }
+}
+
+/// Where `name` exists on each remote: `refs/remotes/<remote>/<name>`, plus the upstream
+/// (which may have another name). Upstream first, then by remote name.
+fn copies(repo: &gix::Repository, remotes: &[String], name: &str, upstream: Option<&Upstream>) -> Vec<Copy> {
+    let mut out: Vec<Copy> = Vec::new();
+    let mut add = |remote: &str, branch: &str| {
+        if out.iter().any(|c| c.remote == remote && c.branch == branch) {
+            return;
+        }
+        if let Ok(mut r) = repo.find_reference(format!("refs/remotes/{remote}/{branch}").as_str())
+            && let Ok(id) = r.peel_to_id()
+        {
+            out.push(Copy { remote: remote.to_string(), branch: branch.to_string(), oid: id.detach() });
+        }
+    };
+    if let Some(up) = upstream.filter(|u| !u.name.ends_with("(gone)")) {
+        // The upstream's remote is the longest remote name that prefixes it.
+        let remote = remotes.iter().filter(|r| up.name.starts_with(&format!("{r}/"))).max_by_key(|r| r.len());
+        if let Some(r) = remote {
+            add(r, &up.name[r.len() + 1..]);
+        }
+    }
+    for r in remotes {
+        add(r, name);
+    }
+    out
+}
+
+/// How far `a` is ahead of and behind `b`.
+pub fn ahead_behind(repo: &gix::Repository, a: ObjectId, b: ObjectId) -> (usize, usize) {
+    if a == b {
+        return (0, 0);
+    }
+    let count = |x: ObjectId, y: ObjectId| repo.rev_walk([x]).with_hidden([y]).all().map(|w| w.count()).unwrap_or(0);
+    (count(a, b), count(b, a))
 }
 
 pub struct Branches {
@@ -52,6 +95,7 @@ pub struct Branches {
 pub fn read(repo: &gix::Repository, remotes: bool) -> Result<Branches> {
     let current = repo.head_name()?.map(|n| n.shorten().to_string());
     let default = default_branch(repo);
+    let remote_names: Vec<String> = repo.remote_names().into_iter().map(|r| r.to_string()).collect();
 
     let refs = repo.references()?;
     let mut iters = vec![refs.local_branches()?];
@@ -81,6 +125,7 @@ pub fn read(repo: &gix::Repository, remotes: bool) -> Result<Branches> {
                 _ => false,
             };
 
+            let up = if remote { None } else { upstream(repo, full.as_ref(), tip).ok().flatten() };
             list.push(Branch {
                 current: !remote && current.as_deref() == Some(name.as_str()),
                 remote,
@@ -89,7 +134,8 @@ pub fn read(repo: &gix::Repository, remotes: bool) -> Result<Branches> {
                 time: commit.time()?.seconds,
                 summary: commit.message()?.summary().to_str_lossy().into_owned(),
                 author: commit.author()?.name.to_str_lossy().into_owned(),
-                upstream: if remote { None } else { upstream(repo, full.as_ref(), tip).ok().flatten() },
+                copies: if remote { Vec::new() } else { copies(repo, &remote_names, &name, up.as_ref()) },
+                upstream: up,
                 merged,
                 name,
             });

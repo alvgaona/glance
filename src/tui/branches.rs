@@ -43,6 +43,77 @@ enum Pending {
     Remote(Vec<(String, String)>),
 }
 
+/// Choosing which remotes to delete from, when there's more than one.
+struct RemotePick {
+    title: String,
+    items: Vec<PickItem>,
+    cursor: usize,
+}
+
+struct PickItem {
+    remote: String,
+    branch: String,
+    /// How it compares to the local branch: "up to date", "2 to push", ...
+    note: String,
+    on: bool,
+}
+
+impl RemotePick {
+    fn chosen(&self) -> Vec<(String, String)> {
+        self.items.iter().filter(|i| i.on).map(|i| (i.remote.clone(), i.branch.clone())).collect()
+    }
+
+    fn draw(&self, f: &mut Frame, area: Rect) {
+        let shown = self.items.len().min(12);
+        let start = self.cursor.saturating_sub(shown - 1);
+        let r = widgets::centered(area, 68, shown as u16 + 9);
+        f.render_widget(ratatui::widgets::Clear, r);
+        let block = widgets::panel(theme::ELEMENT);
+        let inner = block.inner(r);
+        f.render_widget(block, r);
+
+        let name_w =
+            self.items.iter().map(|i| i.remote.chars().count() + i.branch.chars().count() + 1).max().unwrap_or(0);
+        let mut lines = vec![Line::styled(self.title.clone(), theme::bold()), Line::raw("")];
+        for (n, item) in self.items.iter().enumerate().skip(start).take(shown) {
+            let selected = n == self.cursor;
+            let bg = if selected { theme::BORDER } else { theme::ELEMENT };
+            let check = if item.on {
+                Span::styled("✓ ", Style::new().fg(theme::RED).bg(bg))
+            } else {
+                Span::styled("· ", Style::new().fg(theme::FAINT).bg(bg))
+            };
+            let full = format!("{}/{}", item.remote, item.branch);
+            let pad = " ".repeat(name_w.saturating_sub(full.chars().count()) + 3);
+            let name_style = if item.on { theme::text() } else { theme::muted() };
+            let mut line = Line::from(vec![
+                Span::styled(if selected { "┃ " } else { "  " }, Style::new().fg(theme::ACCENT).bg(bg)),
+                check,
+                Span::styled(full + &pad, name_style.bg(bg)),
+                Span::styled(item.note.clone(), theme::muted().bg(bg)),
+            ]);
+            let w = line.width();
+            line.spans.push(Span::styled(" ".repeat((inner.width as usize).saturating_sub(w)), Style::new().bg(bg)));
+            lines.push(widgets::truncate(line, inner.width));
+        }
+        let n = self.items.iter().filter(|i| i.on).count();
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(
+            "This removes them for everyone using those remotes. Local branches stay.",
+            theme::muted(),
+        ));
+        lines.push(Line::raw(""));
+        lines.push(Line::from(vec![
+            widgets::pill(&format!("enter  Delete {n}"), if n > 0 { theme::RED } else { theme::BORDER }, theme::BG),
+            Span::raw("  "),
+            widgets::pill("space  toggle", theme::BORDER, theme::TEXT),
+            Span::raw("  "),
+            widgets::pill("esc  Cancel", theme::BORDER, theme::TEXT),
+        ]));
+        f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    }
+}
+
 /// What the event loop has to do after a key press.
 enum Effect {
     Quit,
@@ -67,6 +138,7 @@ struct App<'r> {
     toast: Option<Toast>,
     palette: Option<Palette<Cmd>>,
     confirm: Option<(Confirm, Pending)>,
+    pick: Option<RemotePick>,
     list_area: Rect,
     repo_name: String,
     /// What the last single delete removed, for its toast.
@@ -89,6 +161,7 @@ pub fn run(repo: &gix::Repository) -> Result<()> {
         toast: None,
         palette: None,
         confirm: None,
+        pick: None,
         list_area: Rect::default(),
         repo_name: crate::core::repo_name(repo),
         last_deleted: String::new(),
@@ -161,7 +234,7 @@ fn commands() -> Vec<Command<Cmd>> {
     vec![
         Command { label: "Check out this branch", keys: "enter", action: Cmd::Checkout },
         Command { label: "Delete local branch", keys: "d", action: Cmd::DeleteLocal },
-        Command { label: "Delete branch on the remote", keys: "D", action: Cmd::DeleteRemote },
+        Command { label: "Delete branch on remotes", keys: "D", action: Cmd::DeleteRemote },
         Command { label: "Select or unselect", keys: "space", action: Cmd::Mark },
         Command { label: "Select merged and gone branches", keys: "m", action: Cmd::MarkMerged },
         Command { label: "Clear selection", keys: "esc", action: Cmd::ClearMarks },
@@ -228,6 +301,33 @@ impl App<'_> {
         if ctrl && k.code == KeyCode::Char('c') {
             return Ok(Some(Effect::Quit));
         }
+        if let Some(p) = &mut self.pick {
+            let last = p.items.len().saturating_sub(1);
+            match k.code {
+                KeyCode::Down | KeyCode::Char('j') => p.cursor = (p.cursor + 1).min(last),
+                KeyCode::Up | KeyCode::Char('k') => p.cursor = p.cursor.saturating_sub(1),
+                KeyCode::Char(' ') => {
+                    p.items[p.cursor].on = !p.items[p.cursor].on;
+                }
+                KeyCode::Char('a') => {
+                    let all = p.items.iter().all(|i| i.on);
+                    p.items.iter_mut().for_each(|i| i.on = !all);
+                }
+                KeyCode::Enter => {
+                    let chosen = p.chosen();
+                    if chosen.is_empty() {
+                        self.toast = Some(Toast::new("Nothing selected", theme::YELLOW));
+                        return Ok(None);
+                    }
+                    self.pick = None;
+                    self.marked.clear();
+                    return Ok(Some(Effect::InTerminal(self.remote_deletes(chosen))));
+                }
+                KeyCode::Esc | KeyCode::Char('q') => self.pick = None,
+                _ => {}
+            }
+            return Ok(None);
+        }
         if self.confirm.is_some() {
             return Ok(match k.code {
                 KeyCode::Enter | KeyCode::Char('y') => {
@@ -238,14 +338,7 @@ impl App<'_> {
                             self.last_deleted = list.first().map(|b| b.name.clone()).unwrap_or_default();
                             list.iter().map(|b| vec!["branch".into(), "-D".into(), b.name.clone()]).collect()
                         }
-                        Pending::Remote(list) => {
-                            self.last_deleted = list.first().map(|(r, b)| format!("{b} on {r}")).unwrap_or_default();
-                            list.iter()
-                                .map(|(remote, branch)| {
-                                    vec!["push".into(), remote.clone(), "--delete".into(), branch.clone()]
-                                })
-                                .collect()
-                        }
+                        Pending::Remote(list) => self.remote_deletes(list),
                     }))
                 }
                 KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('q') => {
@@ -488,18 +581,42 @@ impl App<'_> {
             Some((Confirm { title, body, yes: "Delete".into(), no: "Cancel".into(), danger }, Pending::Local(list)));
     }
 
+    /// `git push <remote> --delete <branch>` for each pair.
+    fn remote_deletes(&mut self, list: Vec<(String, String)>) -> Vec<Vec<String>> {
+        self.last_deleted = list.first().map(|(r, b)| format!("{b} on {r}")).unwrap_or_default();
+        list.into_iter().map(|(remote, branch)| vec!["push".into(), remote, "--delete".into(), branch]).collect()
+    }
+
     fn ask_delete_remote(&mut self) {
         let main = self.default_name().map(str::to_string);
-        let targets: Vec<(String, String)> = self
-            .targets()
-            .iter()
-            .filter_map(|b| b.remote_target())
-            .filter(|(_, branch)| Some(branch) != main.as_ref())
-            .collect();
-        if targets.is_empty() {
-            self.toast = Some(Toast::new("No remote branch to delete here", theme::YELLOW));
+        let picked = self.targets();
+        let mut items: Vec<PickItem> = Vec::new();
+        for b in &picked {
+            for (remote, branch) in b.remote_targets() {
+                if Some(&branch) == main.as_ref() {
+                    continue;
+                }
+                let note = match b.copies.iter().find(|c| c.remote == remote && c.branch == branch) {
+                    Some(c) => sync_note(branches::ahead_behind(self.repo, b.oid, c.oid)),
+                    None => String::new(),
+                };
+                items.push(PickItem { remote, branch, note, on: true });
+            }
+        }
+        if items.is_empty() {
+            self.toast = Some(Toast::new("Not on any remote", theme::YELLOW));
             return;
         }
+        if items.len() > 1 {
+            let title = if picked.len() == 1 {
+                format!("Delete {} on which remotes?", picked[0].name)
+            } else {
+                format!("Delete {} branches on which remotes?", picked.len())
+            };
+            self.pick = Some(RemotePick { title, items, cursor: 0 });
+            return;
+        }
+        let targets: Vec<(String, String)> = items.into_iter().map(|i| (i.remote, i.branch)).collect();
         let mut body: String = targets.iter().map(|(r, b)| format!("$ git push {r} --delete {b}\n")).collect();
         body += "This removes it for everyone using the remote. Local branches stay.";
         let title = if targets.len() == 1 {
@@ -528,7 +645,7 @@ impl App<'_> {
     }
 
     fn mouse(&mut self, m: crossterm::event::MouseEvent) {
-        if self.palette.is_some() || self.confirm.is_some() {
+        if self.palette.is_some() || self.confirm.is_some() || self.pick.is_some() {
             return;
         }
         match m.kind {
@@ -557,6 +674,16 @@ impl App<'_> {
         let lines = Rc::new(build_detail(self.repo, &b, default.as_ref(), self.protected(&b)));
         self.cache.insert(key, lines.clone());
         Some(lines)
+    }
+}
+
+/// Local vs. a remote copy, from (ahead, behind): "up to date", "2 to push", "1 to pull".
+fn sync_note((ahead, behind): (usize, usize)) -> String {
+    match (ahead, behind) {
+        (0, 0) => "up to date".into(),
+        (a, 0) => format!("{a} to push"),
+        (0, b) => format!("{b} to pull"),
+        (a, b) => format!("differs: {a} to push, {b} to pull"),
     }
 }
 
@@ -606,6 +733,9 @@ fn draw(f: &mut Frame, app: &mut App) {
     }
     if let Some((c, _)) = &app.confirm {
         c.draw(f, full);
+    }
+    if let Some(p) = &app.pick {
+        p.draw(f, full);
     }
     if let Some(t) = &app.toast {
         t.draw(f, full);
@@ -695,7 +825,10 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
             None => {}
         }
         let track_w = Line::from(track.clone()).width();
-        let mut right = vec![Span::raw("  ")];
+        // On several remotes, or on one it doesn't track: "2r".
+        let on = b.copies.len();
+        let show = on > 1 || (on == 1 && (b.upstream.is_none() || b.gone()));
+        let mut right = vec![Span::styled(if show { format!("  {on}r") } else { "    ".into() }, theme::faint())];
         right.push(Span::raw(" ".repeat(9usize.saturating_sub(track_w))));
         right.extend(track);
         right.push(Span::styled(if b.merged { "   merged" } else { "         " }, theme::faint()));
@@ -749,7 +882,8 @@ fn build_detail(
     // Upstream.
     if !b.remote {
         let up: Vec<Span> = match &b.upstream {
-            None => vec![Span::styled("none (never pushed)", theme::muted())],
+            None if b.copies.is_empty() => vec![Span::styled("none (never pushed)", theme::muted())],
+            None => vec![Span::styled("none (not tracking a remote branch)", theme::muted())],
             Some(u) if b.gone() => vec![
                 Span::styled(u.name.trim_end_matches(" (gone)").to_string(), theme::text()),
                 Span::styled("  deleted on the remote", Style::new().fg(theme::RED)),
@@ -773,6 +907,27 @@ fn build_detail(
         let mut line = vec![label("upstream")];
         line.extend(up);
         out.push(Line::from(line));
+
+        // Every remote that has it, when that says more than the upstream row.
+        if b.copies.len() > 1 || (b.copies.len() == 1 && (b.upstream.is_none() || b.gone())) {
+            let w = b.copies.iter().map(|c| c.remote.chars().count() + c.branch.chars().count() + 1).max().unwrap_or(0);
+            for (i, c) in b.copies.iter().enumerate() {
+                let full = format!("{}/{}", c.remote, c.branch);
+                let pad = " ".repeat(w - full.chars().count() + 2);
+                let (ahead, behind) = branches::ahead_behind(repo, b.oid, c.oid);
+                let color = match (ahead, behind) {
+                    (0, 0) => theme::MUTED,
+                    (_, 0) => theme::GREEN,
+                    (0, _) => theme::RED,
+                    _ => theme::YELLOW,
+                };
+                out.push(Line::from(vec![
+                    if i == 0 { label("remotes") } else { label("") },
+                    Span::styled(full + &pad, theme::text()),
+                    Span::styled(sync_note((ahead, behind)), Style::new().fg(color)),
+                ]));
+            }
+        }
     }
 
     // Relation to main.

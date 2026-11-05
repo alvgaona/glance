@@ -88,7 +88,7 @@ pub enum Command {
     ///   glance rebase          this branch's commits (since it split off main),
     ///                          or on main, the commits you haven't pushed yet
     ///   glance rebase 5        the last 5 commits
-    ///   glance rebase -p       pick the oldest commit to edit, in fzf
+    ///   glance rebase -p       pick the oldest commit to edit
     ///   glance rebase <ref>    anything else goes to `git rebase -i` as is
     ///   glance rebase --continue | --skip | --abort | --edit-todo
     #[command(visible_alias = "rb", verbatim_doc_comment)]

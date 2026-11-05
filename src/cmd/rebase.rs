@@ -6,6 +6,10 @@ use anyhow::{Context, Result};
 
 use crate::git::{self, rebase, todo};
 
+/// Without the full screen there's no todo editor, and git would only fail once it asks.
+#[cfg(not(feature = "tui"))]
+const NEEDS_TUI: &str = "glance rebase needs the `tui` build: its todo editor is a full screen";
+
 /// Flags that control a rebase already in progress; these never get `-i` added.
 const CONTROL: [&str; 6] = ["--continue", "--abort", "--skip", "--quit", "--edit-todo", "--show-current-patch"];
 
@@ -18,6 +22,11 @@ const CONTROL: [&str; 6] = ["--continue", "--abort", "--skip", "--quit", "--edit
 /// - `-p` / `--pick`: choose the oldest commit to edit.
 pub fn run(args: &[String]) -> Result<i32> {
     let control = args.iter().any(|a| CONTROL.contains(&a.as_str()));
+    // --continue, --abort and the like don't open the editor, so they still work.
+    #[cfg(not(feature = "tui"))]
+    if !control || args.iter().any(|a| a == "--edit-todo") {
+        anyhow::bail!(NEEDS_TUI);
+    }
     let (args, desc) = if control {
         (args.to_vec(), None)
     } else {
@@ -67,6 +76,7 @@ fn resolve(args: &[String]) -> Result<Option<(Vec<String>, Option<String>)>> {
                  Try `glance rebase 5` (last 5 commits) or `glance rebase -p` (choose where to start)."
             ),
         },
+        #[cfg(feature = "tui")]
         Some("-p" | "--pick") => pick(&repo, rest),
         Some(n) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => {
             let n: usize = n.parse().context("count is too large")?;
@@ -77,20 +87,11 @@ fn resolve(args: &[String]) -> Result<Option<(Vec<String>, Option<String>)>> {
     }
 }
 
-/// Choose the oldest commit to edit from this branch's history (full-screen log, or fzf).
+/// Choose the oldest commit to edit from this branch's history, on the full-screen log.
+#[cfg(feature = "tui")]
 fn pick(repo: &gix::Repository, rest: &[String]) -> Result<Option<(Vec<String>, Option<String>)>> {
-    #[cfg(feature = "tui")]
-    let picked = {
-        use crate::tui::screens::log::{Mode, Options, run};
-        run(repo, Options { mode: Mode::Pick, all: false, count: 5000 })?
-    };
-    #[cfg(not(feature = "tui"))]
-    let picked = {
-        let commits = git::log::read(repo, 5000, false)?;
-        let lines = crate::print::log::lines(&commits, &crate::print::Paint { on: true, rgb: false });
-        let label = format!("{} · rebase: choose the oldest commit to edit", git::repo_name(repo));
-        crate::fzf::pick_commit(&lines, &label, "rebase from here")?
-    };
+    use crate::tui::screens::log::{Mode, Options, run};
+    let picked = run(repo, Options { mode: Mode::Pick, all: false, count: 5000 })?;
     let Some(picked) = picked else {
         return Ok(None);
     };
@@ -126,7 +127,7 @@ pub fn edit(file: &Path, keep_on_quit: bool) -> Result<()> {
     #[cfg(not(feature = "tui"))]
     {
         let _ = (lines, branch, detail, keep_on_quit);
-        anyhow::bail!("the rebase editor needs glance built with the `tui` feature")
+        anyhow::bail!(NEEDS_TUI)
     }
 }
 

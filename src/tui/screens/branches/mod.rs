@@ -9,7 +9,6 @@ mod prs;
 use draw::{build_detail, draw};
 
 use std::collections::{BTreeSet, HashMap};
-use std::process::{Command as Process, Stdio};
 use std::rc::Rc;
 use std::sync::mpsc;
 
@@ -27,6 +26,7 @@ use crate::fmt::paths::short as short_path;
 use crate::fmt::{now, relative_time};
 use crate::git::branches::{self, Branch, Branches};
 use crate::github::{self, Pr};
+use crate::process;
 use crate::tui::app::{self, Flow, Screen};
 use crate::tui::kit::{self, Command, Confirm, Input, InputEvent, Palette, PaletteEvent, Scroll, Toast, footer, list};
 use crate::tui::{first_lines, theme};
@@ -323,15 +323,10 @@ impl App<'_> {
         if self.fetching.is_some() {
             return;
         }
-        let mut cmd = branches::fetch_command(self.repo);
-        cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        let job = branches::fetch(self.repo);
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let result = match cmd.output() {
-                Ok(out) => (out.status.success(), String::from_utf8_lossy(&out.stderr).trim().to_string()),
-                Err(e) => (false, format!("could not run git: {e}")),
-            };
-            let _ = tx.send(result);
+            let _ = tx.send(job());
         });
         self.fetching = Some(rx);
     }

@@ -7,7 +7,6 @@ mod keys;
 
 use draw::draw;
 
-use std::process::Stdio;
 use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
@@ -24,6 +23,7 @@ use ratatui::{
 use crate::fmt::url;
 use crate::fmt::{now, relative_time};
 use crate::git::remote::{self, Fetched, Remote};
+use crate::process;
 use crate::tui::app::{self, Flow, Screen};
 use crate::tui::kit::{self, Command, Confirm, Input, InputEvent, Palette, PaletteEvent, Scroll, Toast, footer, list};
 use crate::tui::{first_lines, theme};
@@ -223,18 +223,10 @@ impl App {
             self.toast = Some(Toast::new(format!("Still busy: {}…", j.what.to_lowercase()), theme::YELLOW));
             return;
         }
-        let mut cmd = remote::no_prompt(&self.repo, &args);
-        cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        let job = remote::no_prompt(&self.repo, args);
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let result = match cmd.output() {
-                Ok(out) => (
-                    out.status.success(),
-                    format!("{}{}", String::from_utf8_lossy(&out.stderr), String::from_utf8_lossy(&out.stdout)),
-                ),
-                Err(e) => (false, format!("could not run git: {e}")),
-            };
-            let _ = tx.send(result);
+            let _ = tx.send(job());
         });
         self.job = Some(Job { what, kind, rx });
     }

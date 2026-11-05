@@ -1,7 +1,6 @@
 //! Worktrees: the folders a repo is checked out in (`git worktree list`).
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use gix::ObjectId;
@@ -27,16 +26,13 @@ pub struct Worktree {
 /// Every worktree, the main one first.
 pub fn list(repo: &gix::Repository) -> Result<Vec<Worktree>> {
     let dir = repo.workdir().unwrap_or(repo.git_dir());
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(["worktree", "list", "--porcelain"])
-        .output()
+    let out = crate::process::run("git", &run::args(&["worktree", "list", "--porcelain"]), Some(dir))
         .context("could not run git")?;
-    if !out.status.success() {
-        bail!("git worktree list: {}", String::from_utf8_lossy(&out.stderr).trim());
+    if !out.ok() {
+        bail!("git worktree list: {}", out.stderr.trim());
     }
-    Ok(parse(&String::from_utf8_lossy(&out.stdout)))
+    // stdout only: `parse` mustn't see git's warnings.
+    Ok(parse(&out.stdout))
 }
 
 /// Reads `git worktree list --porcelain`: one block per worktree, blank line between.
@@ -163,18 +159,8 @@ mod tests {
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
         let dir = std::env::temp_dir().join(format!("gg-test-wt-{}-{nanos}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let git = |args: &[&str]| {
-            let ok = Command::new("git")
-                .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main"])
-                .args(args)
-                .current_dir(&dir)
-                .output()
-                .unwrap()
-                .status
-                .success();
-            assert!(ok, "git {args:?}");
-        };
-        git(&["init", "-q"]);
+        let git = |args: &[&str]| run::test_git(&dir, args);
+        git(&["init", "-q", "-b", "main"]);
         git(&["commit", "-q", "--allow-empty", "-m", "first"]);
         git(&["branch", "here"]);
         git(&["remote", "add", "origin", "https://example.invalid/r.git"]);

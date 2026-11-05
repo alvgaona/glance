@@ -10,7 +10,7 @@ mod git;
 #[cfg(feature = "tui")]
 mod github;
 mod print;
-// Collected output is only needed by the full-screen views (their git calls).
+// Every program glance starts goes through here; some helpers are only used by the full screens.
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
 mod process;
 #[cfg(feature = "tui")]

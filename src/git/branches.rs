@@ -298,8 +298,8 @@ pub fn delete_remote_args(remote: &str, branch: &str) -> Vec<String> {
 
 /// `git fetch --all --prune` that never prompts (a prompt would draw over the screen):
 /// a remote that needs a password fails and says so.
-pub fn fetch_command(repo: &gix::Repository) -> std::process::Command {
-    super::remote::no_prompt(repo, &run::args(&["fetch", "--all", "--prune", "--quiet"]))
+pub fn fetch(repo: &gix::Repository) -> impl FnOnce() -> (bool, String) + Send + 'static {
+    super::remote::no_prompt(repo, run::args(&["fetch", "--all", "--prune", "--quiet"]))
 }
 
 #[cfg(test)]

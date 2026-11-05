@@ -260,7 +260,6 @@ pub fn remove(repo: &gix::Repository, paths: &[String]) -> (bool, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command;
 
     /// A scratch repo, removed when dropped.
     struct Scratch(std::path::PathBuf);
@@ -275,18 +274,7 @@ mod tests {
             s
         }
         fn git(&self, a: &[&str]) {
-            let ok = Command::new("git")
-                .args(a)
-                .current_dir(&self.0)
-                .env("GIT_AUTHOR_NAME", "t")
-                .env("GIT_AUTHOR_EMAIL", "t@t")
-                .env("GIT_COMMITTER_NAME", "t")
-                .env("GIT_COMMITTER_EMAIL", "t@t")
-                .output()
-                .unwrap()
-                .status
-                .success();
-            assert!(ok, "git {a:?}");
+            crate::git::run::test_git(&self.0, a);
         }
         /// Runs one of our writes on the repo, opened afresh.
         fn run(&self, f: impl FnOnce(&gix::Repository) -> (bool, String)) {
@@ -515,7 +503,7 @@ mod tests {
         s.git(&["rm", "-q", "we-del.txt"]);
         s.git(&["commit", "-q", "-a", "-m", "main"]);
         // Fails: that's the conflict.
-        let _ = Command::new("git").args(["merge", "-q", "side"]).current_dir(&s.0).output();
+        let _ = crate::process::run("git", &args(&["merge", "-q", "side"]), Some(&s.0));
 
         let c = conflicts(&s.repo()).unwrap();
         assert_eq!(c.len(), 3);

@@ -115,10 +115,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("gg-commit-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let git = |a: &[&str]| {
-            let ok = std::process::Command::new("git").args(a).current_dir(&dir).status().unwrap().success();
-            assert!(ok, "git {a:?}");
-        };
+        let git = |a: &[&str]| crate::git::run::test_git(&dir, a);
         git(&["init", "-q", "-b", "main"]);
         git(&["config", "user.name", "t"]);
         git(&["config", "user.email", "t@t"]);

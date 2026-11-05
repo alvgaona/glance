@@ -146,14 +146,7 @@ impl App {
                 let page = self.current().and_then(|r| r.url.as_deref()).and_then(url::web);
                 self.toast = Some(match page {
                     Some(page) => {
-                        let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
-                        let ok = std::process::Command::new(opener)
-                            .arg(&page)
-                            .stdout(Stdio::null())
-                            .stderr(Stdio::null())
-                            .status()
-                            .is_ok_and(|s| s.success());
-                        if ok {
+                        if process::open(&page) {
                             Toast::new(format!("Opened {page}"), theme::ACCENT)
                         } else {
                             Toast::new(page, theme::ACCENT)

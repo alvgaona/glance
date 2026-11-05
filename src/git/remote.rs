@@ -2,13 +2,12 @@
 //! fetched) and change them through `git remote`.
 
 use std::path::Path;
-use std::process::Command;
 use std::time::SystemTime;
 
 use anyhow::Result;
 use gix::bstr::{BStr, ByteSlice};
 
-use super::run::{args, git};
+use super::run::{self, args, git};
 
 pub struct Remote {
     pub name: String,
@@ -195,17 +194,19 @@ pub fn set_head_args(name: &str) -> Vec<String> {
 }
 
 /// A git command that talks to remotes but never prompts: it runs behind a full screen,
-/// so a remote that needs a password fails and says so instead.
-pub fn no_prompt(repo: &gix::Repository, args: &[String]) -> Command {
-    let mut cmd = Command::new("git");
-    cmd.args(args).env("GIT_TERMINAL_PROMPT", "0");
+/// so a remote that needs a password fails and says so instead. Returns the job to run
+/// on another thread; the repository is only read here, on this one.
+pub fn no_prompt(repo: &gix::Repository, args: Vec<String>) -> impl FnOnce() -> (bool, String) + Send + 'static {
     // Keep ssh from asking for a passphrase too, unless the user set their own ssh command.
     let own_ssh =
         std::env::var_os("GIT_SSH_COMMAND").is_some() || repo.config_snapshot().string("core.sshCommand").is_some();
-    if !own_ssh {
-        cmd.env("GIT_SSH_COMMAND", "ssh -o BatchMode=yes");
+    move || {
+        let mut env = vec![("GIT_TERMINAL_PROMPT", "0")];
+        if !own_ssh {
+            env.push(("GIT_SSH_COMMAND", "ssh -o BatchMode=yes"));
+        }
+        run::git_no_stdin(&args, &env)
     }
-    cmd
 }
 
 /// What a fetch did, from what it printed.
@@ -269,20 +270,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("gg-remote-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let sh = |cwd: &Path, a: &[&str]| {
-            let ok = Command::new("git")
-                .args(a)
-                .current_dir(cwd)
-                .env("GIT_AUTHOR_NAME", "t")
-                .env("GIT_AUTHOR_EMAIL", "t@t")
-                .env("GIT_COMMITTER_NAME", "t")
-                .env("GIT_COMMITTER_EMAIL", "t@t")
-                .output()
-                .unwrap()
-                .status
-                .success();
-            assert!(ok, "git {a:?}");
-        };
+        let sh = |cwd: &Path, a: &[&str]| run::test_git(cwd, a);
         sh(&dir, &["init", "-q", "-b", "main", "up"]);
         let up = dir.join("up");
         sh(&up, &["commit", "-q", "--allow-empty", "-m", "one"]);

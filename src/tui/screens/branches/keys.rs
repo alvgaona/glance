@@ -212,14 +212,11 @@ impl App<'_> {
             Cmd::OpenPr => {
                 let msg = match (&self.prs, self.current().and_then(|b| self.pr(b))) {
                     (_, Some(pr)) => {
-                        let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
-                        let ok = Process::new(opener)
-                            .arg(&pr.url)
-                            .stdout(Stdio::null())
-                            .stderr(Stdio::null())
-                            .status()
-                            .is_ok_and(|s| s.success());
-                        if ok { format!("Opened #{}", pr.number) } else { pr.url.clone() }
+                        if process::open(&pr.url) {
+                            format!("Opened #{}", pr.number)
+                        } else {
+                            pr.url.clone()
+                        }
                     }
                     (Prs::Loading(_), None) => "Still loading pull requests".into(),
                     (Prs::Off, None) => "Pull requests need a GitHub remote and gh".into(),

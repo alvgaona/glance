@@ -1,4 +1,6 @@
-//! Finding and running other programs (git, gh, fzf, pbcopy).
+//! Finding and running other programs (git, gh, fzf, pbcopy). The only place that
+//! starts a process: clippy.toml bans `Command::new` everywhere else.
+#![allow(clippy::disallowed_methods)]
 
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -12,24 +14,35 @@ pub fn which(bin: &str) -> bool {
 
 /// What a finished program said.
 pub struct Output {
-    pub ok: bool,
+    /// Exit code; `None` when a signal stopped it.
+    pub code: Option<i32>,
     pub stdout: String,
     pub stderr: String,
 }
 
 impl Output {
+    pub fn ok(&self) -> bool {
+        self.code == Some(0)
+    }
+
     /// stderr then stdout, trimmed: where git explains itself.
     pub fn text(&self) -> String {
         format!("{}{}", self.stderr, self.stdout).trim().to_string()
     }
 }
 
-/// Runs `bin args…` in `dir` with `input` on its stdin (a patch for `git apply`), waits,
-/// and collects its output.
-pub fn run_with_input(bin: &str, args: &[String], dir: Option<&Path>, input: &[u8]) -> std::io::Result<Output> {
+/// Runs `bin args…` in `dir` with `input` on its stdin (a patch for `git apply`; empty for
+/// a job that must not read the terminal), with `env` set, waits, and collects its output.
+pub fn run_with_input(
+    bin: &str,
+    args: &[String],
+    dir: Option<&Path>,
+    input: &[u8],
+    env: &[(&str, &str)],
+) -> std::io::Result<Output> {
     use std::io::Write;
     let mut cmd = Command::new(bin);
-    cmd.args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.args(args).envs(env.iter().copied()).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     if let Some(d) = dir {
         cmd.current_dir(d);
     }
@@ -42,7 +55,7 @@ pub fn run_with_input(bin: &str, args: &[String], dir: Option<&Path>, input: &[u
     // A program that stops reading early says why on stderr; that beats "broken pipe".
     let _ = writer.join();
     Ok(Output {
-        ok: out.status.success(),
+        code: out.status.code(),
         stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
         stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
     })
@@ -58,7 +71,7 @@ pub fn run_on_terminal(bin: &str, args: &[String], dir: Option<&Path>) -> std::i
     }
     let out = cmd.spawn()?.wait_with_output()?;
     Ok(Output {
-        ok: out.status.success(),
+        code: out.status.code(),
         stdout: String::new(),
         stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
     })
@@ -74,8 +87,20 @@ pub fn run(bin: &str, args: &[String], dir: Option<&Path>) -> std::io::Result<Ou
     }
     let out = cmd.output()?;
     Ok(Output {
-        ok: out.status.success(),
+        code: out.status.code(),
         stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
         stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
     })
+}
+
+/// Runs `bin args…` with `env` set, attached to the terminal (stdin, stdout and stderr),
+/// and returns its exit code. For `git rebase -i`, which talks to the user as it goes.
+pub fn run_attached(bin: &str, args: &[String], env: &[(&str, &str)]) -> std::io::Result<Option<i32>> {
+    Ok(Command::new(bin).args(args).envs(env.iter().copied()).status()?.code())
+}
+
+/// Opens a URL in the browser (or a file in its app). False if that didn't work.
+pub fn open(target: &str) -> bool {
+    let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+    run(opener, &[target.to_string()], None).is_ok_and(|o| o.ok())
 }

@@ -1,7 +1,6 @@
 //! `gg rebase`: git does the rebase; gg only replaces the todo-list editor.
 
 use std::path::Path;
-use std::process::Command;
 
 use anyhow::{Context, Result};
 
@@ -9,9 +8,6 @@ use crate::git::{self, rebase, todo};
 
 /// Flags that control a rebase already in progress; these never get `-i` added.
 const CONTROL: [&str; 6] = ["--continue", "--abort", "--skip", "--quit", "--edit-todo", "--show-current-patch"];
-
-/// Tells the editor how the commits were chosen, for its header.
-const DESC_ENV: &str = "GG_REBASE_DESC";
 
 /// Runs `git rebase -i <args>` (or `git rebase --continue` etc.) with gg as the todo editor.
 /// Returns git's exit code.
@@ -42,26 +38,15 @@ pub fn run(args: &[String]) -> Result<i32> {
         format!("{quoted} __rebase-editor")
     };
 
-    let mut cmd = Command::new("git");
-    cmd.arg("rebase");
-    if !control && !interactive {
-        cmd.arg("-i");
-    }
-    cmd.args(&args).env("GIT_SEQUENCE_EDITOR", editor);
-    match &desc {
-        Some(d) => cmd.env(DESC_ENV, d),
-        None => cmd.env_remove(DESC_ENV),
-    };
-
     let marker = cancel_marker()?;
     let _ = std::fs::remove_file(&marker);
-    let status = cmd.status().context("could not run git")?;
+    let code = rebase::start(&args, !control && !interactive, &editor, desc.as_deref()).context("could not run git")?;
     if std::fs::remove_file(&marker).is_ok() {
         // The user quit the editor; git's "nothing to do" error is expected.
         eprintln!("Rebase cancelled. Nothing changed.");
         return Ok(0);
     }
-    Ok(status.code().unwrap_or(1))
+    Ok(code.unwrap_or(1))
 }
 
 /// Turns gg's shortcuts into `git rebase` arguments plus a description for the header.
@@ -85,20 +70,8 @@ fn resolve(args: &[String]) -> Result<Option<(Vec<String>, Option<String>)>> {
         Some("-p" | "--pick") => pick(&repo, rest),
         Some(n) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => {
             let n: usize = n.parse().context("count is too large")?;
-            if n == 0 {
-                anyhow::bail!("nothing to rebase: 0 commits");
-            }
-            let head = repo.head_id().context("this branch has no commits yet")?.detach();
-            let available = repo.rev_walk([head]).first_parent_only().all()?.take(n + 1).count();
-            let desc = Some(format!("last {n} commit{}", if n == 1 { "" } else { "s" }));
-            match available.cmp(&n) {
-                std::cmp::Ordering::Greater => Ok(Some((with_rest(format!("HEAD~{n}")), desc))),
-                // Exactly the whole history: git needs --root for that.
-                std::cmp::Ordering::Equal => Ok(Some((with_rest("--root".into()), desc))),
-                std::cmp::Ordering::Less => {
-                    anyhow::bail!("this branch only has {available} commits")
-                }
-            }
+            let (base, desc) = rebase::last(&repo, n)?;
+            Ok(Some((with_rest(base), Some(desc))))
         }
         Some(_) => Ok(Some((args.to_vec(), None))),
     }
@@ -121,14 +94,8 @@ fn pick(repo: &gix::Repository, rest: &[String]) -> Result<Option<(Vec<String>, 
     let Some(picked) = picked else {
         return Ok(None);
     };
-    let commit = repo.rev_parse_single(picked.as_str())?.object()?.peel_to_commit()?;
-    let subject = commit.message()?.summary().to_string();
-    let desc = Some(format!("from {picked} {subject}"));
-    let base = match commit.parent_ids().next() {
-        Some(parent) => parent.to_string(),
-        None => "--root".into(),
-    };
-    Ok(Some(([vec![base], rest.to_vec()].concat(), desc)))
+    let (base, desc) = rebase::from_commit(repo, &picked)?;
+    Ok(Some(([vec![base], rest.to_vec()].concat(), Some(desc))))
 }
 
 /// Left by the editor when the user quits, so `run` can tell a cancel from a failure.
@@ -168,7 +135,7 @@ pub fn edit(file: &Path, keep_on_quit: bool) -> Result<()> {
 fn header(repo: &gix::Repository, lines: &[todo::Line]) -> (String, String) {
     let p = rebase::progress(repo);
     let n = lines.iter().filter(|l| matches!(l, todo::Line::Commit { .. })).count();
-    let detail = match std::env::var(DESC_ENV) {
+    let detail = match std::env::var(rebase::DESC_ENV) {
         Ok(desc) if !desc.is_empty() => desc,
         _ => {
             let s = if n == 1 { "" } else { "s" };

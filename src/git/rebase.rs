@@ -1,7 +1,7 @@
 //! What `gg rebase` needs to know about the repo: where a branch split off, what isn't
 //! pushed, and how far a rebase in progress has got.
 
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 use gix::ObjectId;
 
 use super::todo;
@@ -94,4 +94,42 @@ pub fn progress(repo: &gix::Repository) -> Progress {
 pub fn newest_first(repo: &gix::Repository) -> bool {
     let order = repo.config_snapshot().string("glance.rebaseOrder");
     !order.is_some_and(|o| o.eq_ignore_ascii_case(b"oldest"))
+}
+
+/// Tells the todo editor how the commits were chosen, for its header.
+pub const DESC_ENV: &str = "GG_REBASE_DESC";
+
+/// Runs `git rebase [-i] args…` on the terminal with `editor` as the todo editor and
+/// returns git's exit code.
+pub fn start(args: &[String], add_i: bool, editor: &str, desc: Option<&str>) -> std::io::Result<Option<i32>> {
+    let rebase = std::iter::once("rebase").chain(add_i.then_some("-i")).map(str::to_string);
+    let args: Vec<String> = rebase.chain(args.iter().cloned()).collect();
+    // Empty rather than unset: `header` treats both the same.
+    crate::process::run_attached("git", &args, &[("GIT_SEQUENCE_EDITOR", editor), (DESC_ENV, desc.unwrap_or(""))])
+}
+
+/// Where to rebase from to edit the last `n` commits (`HEAD~n`, or `--root` for the whole
+/// history), and a description like "last 3 commits".
+pub fn last(repo: &gix::Repository, n: usize) -> Result<(String, String)> {
+    if n == 0 {
+        bail!("nothing to rebase: 0 commits");
+    }
+    let head = repo.head_id().context("this branch has no commits yet")?.detach();
+    let available = repo.rev_walk([head]).first_parent_only().all()?.take(n + 1).count();
+    let desc = format!("last {n} commit{}", if n == 1 { "" } else { "s" });
+    match available.cmp(&n) {
+        std::cmp::Ordering::Greater => Ok((format!("HEAD~{n}"), desc)),
+        // Exactly the whole history: git needs --root for that.
+        std::cmp::Ordering::Equal => Ok(("--root".into(), desc)),
+        std::cmp::Ordering::Less => bail!("this branch only has {available} commits"),
+    }
+}
+
+/// Where to rebase from so `rev` is the oldest commit to edit (its parent, or `--root`),
+/// and a description like "from 1a2b3c4 Fix the thing".
+pub fn from_commit(repo: &gix::Repository, rev: &str) -> Result<(String, String)> {
+    let commit = repo.rev_parse_single(rev)?.object()?.peel_to_commit()?;
+    let subject = commit.message()?.summary().to_string();
+    let base = commit.parent_ids().next().map_or_else(|| "--root".into(), |p| p.to_string());
+    Ok((base, format!("from {rev} {subject}")))
 }

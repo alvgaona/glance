@@ -3,33 +3,32 @@
 use super::*;
 
 impl App {
-    /// `true` to quit.
-    pub(super) fn on_key(&mut self, k: KeyEvent) -> Result<bool> {
+    pub(super) fn on_key(&mut self, k: KeyEvent) -> Flow<(), Effect> {
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         if let Some((input, _)) = &mut self.input {
             match input.key(k) {
                 Some(InputEvent::Cancel) => self.input = None,
                 Some(InputEvent::Done(text)) => {
                     let (_, typing) = self.input.take().unwrap();
-                    self.typed(typing, text)?;
+                    return self.typed(typing, text);
                 }
                 None => {}
             }
-            return Ok(false);
+            return Flow::Stay;
         }
         if ctrl && k.code == KeyCode::Char('c') {
-            return Ok(true);
+            return Flow::Done(());
         }
         if self.confirm.is_some() {
             match k.code {
                 KeyCode::Enter | KeyCode::Char('y') => {
-                    let (_, ask) = self.confirm.take().unwrap();
-                    self.answer(ask)?;
+                    let (_, effect) = self.confirm.take().unwrap();
+                    return Flow::Run(effect);
                 }
                 KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('q') => self.confirm = None,
                 _ => {}
             }
-            return Ok(false);
+            return Flow::Stay;
         }
         if let Some(p) = &mut self.palette {
             match p.key(k) {
@@ -40,37 +39,37 @@ impl App {
                 }
                 None => {}
             }
-            return Ok(false);
+            return Flow::Stay;
         }
 
         if self.detail_scroll.key(k, self.detail_area.height) {
-            return Ok(false);
+            return Flow::Stay;
         }
         let cmd = match k.code {
             KeyCode::Char('p') if ctrl => {
                 self.palette = Some(Palette::new(commands()));
-                return Ok(false);
+                return Flow::Stay;
             }
             KeyCode::Char(':') => {
                 self.palette = Some(Palette::new(commands()));
-                return Ok(false);
+                return Flow::Stay;
             }
             KeyCode::Char('r') if ctrl => Cmd::Reload,
             KeyCode::Down | KeyCode::Char('j') => {
                 self.step(1);
-                return Ok(false);
+                return Flow::Stay;
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 self.step(-1);
-                return Ok(false);
+                return Flow::Stay;
             }
             KeyCode::Home | KeyCode::Char('g') => {
                 self.step(isize::MIN / 2);
-                return Ok(false);
+                return Flow::Stay;
             }
             KeyCode::End | KeyCode::Char('G') => {
                 self.step(isize::MAX / 2);
-                return Ok(false);
+                return Flow::Stay;
             }
             KeyCode::Char('f') | KeyCode::Enter => Cmd::Fetch,
             KeyCode::Char('F') => Cmd::FetchAll,
@@ -83,18 +82,18 @@ impl App {
             KeyCode::Char('y') => Cmd::Copy,
             KeyCode::Char('o') => Cmd::Open,
             KeyCode::Esc | KeyCode::Char('q') => Cmd::Quit,
-            _ => return Ok(false),
+            _ => return Flow::Stay,
         };
         self.run(cmd)
     }
 
-    fn run(&mut self, cmd: Cmd) -> Result<bool> {
+    fn run(&mut self, cmd: Cmd) -> Flow<(), Effect> {
         // Everything but these works on the remote under the cursor.
         let name = self.current().map(|r| r.name.clone());
         match (cmd, name) {
-            (Cmd::Quit, _) => return Ok(true),
-            (Cmd::Reload, _) => self.load(None)?,
-            (Cmd::FetchAll, _) => self.fetch(None),
+            (Cmd::Quit, _) => return Flow::Done(()),
+            (Cmd::Reload, _) => return Flow::Run(Effect::Reload),
+            (Cmd::FetchAll, _) => return Flow::Run(Effect::Fetch(None)),
             (Cmd::Add, _) => {
                 let input = Input::new("Add a remote to", &self.repo_name, "", "Next")
                     .placeholder("URL, e.g. git@github.com:me/repo.git")
@@ -102,7 +101,7 @@ impl App {
                 self.input = Some((input, Typing::AddUrl));
             }
             (_, None) => self.toast = Some(Toast::new("No remotes yet: a adds one", theme::ACCENT)),
-            (Cmd::Fetch, Some(n)) => self.fetch(Some(n)),
+            (Cmd::Fetch, Some(n)) => return Flow::Run(Effect::Fetch(Some(n))),
             (Cmd::Rename, Some(n)) => {
                 let r = self.current().unwrap();
                 let mut note = "Its remote branches move to <new>/….".to_string();
@@ -128,34 +127,16 @@ impl App {
                 self.input = Some((input, Typing::PushUrl { name: n }));
             }
             (Cmd::Remove, Some(_)) => self.ask_remove(),
-            (Cmd::SetHead, Some(n)) => {
-                let args = remote::set_head_args(&n);
-                self.start(format!("Asking {n} for its default branch"), JobKind::SetHead(n), args);
-            }
-            (Cmd::Copy, Some(n)) => {
-                let url = self.current().and_then(|r| r.url.clone());
-                self.toast = Some(match url {
-                    Some(u) => {
-                        crate::clipboard::copy(&u);
-                        Toast::new(format!("Copied {u}"), theme::ACCENT)
-                    }
-                    None => Toast::new(format!("{n} has no URL"), theme::YELLOW),
-                });
-            }
-            (Cmd::Open, Some(n)) => {
-                let page = self.current().and_then(|r| r.url.as_deref()).and_then(url::web);
-                self.toast = Some(match page {
-                    Some(page) => {
-                        if process::open(&page) {
-                            Toast::new(format!("Opened {page}"), theme::ACCENT)
-                        } else {
-                            Toast::new(page, theme::ACCENT)
-                        }
-                    }
-                    None => Toast::new(format!("{n} isn't on a web host"), theme::YELLOW),
-                });
-            }
+            (Cmd::SetHead, Some(n)) => return Flow::Run(Effect::SetHead(n)),
+            (Cmd::Copy, Some(n)) => match self.current().and_then(|r| r.url.clone()) {
+                Some(u) => return Flow::Run(Effect::Copy(u)),
+                None => self.toast = Some(Toast::new(format!("{n} has no URL"), theme::YELLOW)),
+            },
+            (Cmd::Open, Some(n)) => match self.current().and_then(|r| r.url.as_deref()).and_then(url::web) {
+                Some(page) => return Flow::Run(Effect::Open(page)),
+                None => self.toast = Some(Toast::new(format!("{n} isn't on a web host"), theme::YELLOW)),
+            },
         }
-        Ok(false)
+        Flow::Stay
     }
 }

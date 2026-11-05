@@ -64,9 +64,35 @@ enum Typing {
     },
 }
 
-/// What an open dialog will do on yes.
-enum Ask {
+/// What the screen does outside its own state; [`Screen::apply`] does it.
+enum Effect {
+    Reload,
+    /// One remote, or all of them, in the background.
+    Fetch(Option<String>),
+    /// Ask the remote for its default branch, in the background.
+    SetHead(String),
+    /// Add, then fetch it.
+    Add {
+        name: String,
+        url: String,
+    },
+    Rename {
+        old: String,
+        new: String,
+    },
+    SetUrl {
+        name: String,
+        url: String,
+    },
+    /// `None` pushes where it fetches from again.
+    SetPushUrl {
+        name: String,
+        url: Option<String>,
+    },
     Remove(String),
+    Copy(String),
+    /// A remote's web page, in the browser.
+    Open(String),
 }
 
 /// A git command talking to a remote, on a background thread.
@@ -98,7 +124,7 @@ struct App {
     job: Option<Job>,
     toast: Option<Toast>,
     palette: Option<Palette<Cmd>>,
-    confirm: Option<(Confirm, Ask)>,
+    confirm: Option<(Confirm, Effect)>,
     input: Option<(Input, Typing)>,
     repo_name: String,
 }
@@ -129,18 +155,67 @@ pub fn run(repo: gix::Repository) -> Result<()> {
 
 impl Screen for App {
     type Out = ();
-    type Effect = std::convert::Infallible;
+    type Effect = Effect;
     // Keep the "fetching…" note moving and pick up the result soon.
     const WAKE: Duration = Duration::from_millis(150);
 
     fn draw(&mut self, f: &mut Frame) {
         draw(f, self)
     }
-    fn apply(&mut self, e: Self::Effect) -> Result<Flow<Self::Out, Self::Effect>> {
-        match e {}
+    fn apply(&mut self, e: Effect) -> Result<Flow<(), Effect>> {
+        match e {
+            Effect::Reload => self.load(None)?,
+            Effect::Fetch(name) => self.fetch(name),
+            Effect::SetHead(name) => {
+                let args = remote::set_head_args(&name);
+                self.start(format!("Asking {name} for its default branch"), JobKind::SetHead(name), args);
+            }
+            Effect::Add { name, url } => {
+                if let Err(out) = remote::add(&name, &url) {
+                    self.toast = Some(Toast::new(first_lines(&out), theme::RED));
+                    return Ok(Flow::Stay);
+                }
+                self.load(Some(&name))?;
+                self.toast = Some(Toast::new(format!("Added {name}"), theme::GREEN));
+                return Ok(Flow::Run(Effect::Fetch(Some(name))));
+            }
+            Effect::Rename { old, new } => {
+                let ran = remote::rename(&old, &new);
+                self.toast = Some(Toast::ran(&ran, format!("Renamed {old} to {new}")));
+                if ran.is_ok() {
+                    self.load(Some(&new))?;
+                }
+            }
+            Effect::SetUrl { name, url } => {
+                let ran = remote::set_url(&name, &url);
+                self.toast = Some(Toast::ran(&ran, format!("{name} now fetches from {}", url::short(&url))));
+                self.load(None)?;
+            }
+            Effect::SetPushUrl { name, url } => {
+                let done = match &url {
+                    Some(u) => format!("{name} now pushes to {}", url::short(u)),
+                    None => format!("{name} pushes to its fetch URL again"),
+                };
+                self.toast = Some(Toast::ran(&remote::set_push_url(&name, url.as_deref()), done));
+                self.load(None)?;
+            }
+            Effect::Remove(name) => {
+                self.toast = Some(Toast::ran(&remote::remove(&name), format!("Removed {name}")));
+                self.load(None)?;
+            }
+            Effect::Copy(u) => {
+                crate::clipboard::copy(&u);
+                self.toast = Some(Toast::new(format!("Copied {u}"), theme::ACCENT));
+            }
+            Effect::Open(page) => {
+                let text = if process::open(&page) { format!("Opened {page}") } else { page };
+                self.toast = Some(Toast::new(text, theme::ACCENT));
+            }
+        }
+        Ok(Flow::Stay)
     }
-    fn key(&mut self, k: KeyEvent) -> Result<Flow<(), Self::Effect>> {
-        Ok(if self.on_key(k)? { Flow::Done(()) } else { Flow::Stay })
+    fn key(&mut self, k: KeyEvent) -> Result<Flow<(), Effect>> {
+        Ok(self.on_key(k))
     }
     fn mouse(&mut self, m: MouseEvent) {
         self.on_mouse(m)
@@ -260,16 +335,11 @@ impl App {
             (Ok(out), JobKind::Fetch(name)) => {
                 let f = Fetched::read(&out);
                 let who = name.unwrap_or_else(|| "all remotes".into());
-                let mut parts = Vec::new();
-                if f.new > 0 {
-                    parts.push(format!("{} new", f.new));
-                }
-                if f.updated > 0 {
-                    parts.push(format!("{} updated", f.updated));
-                }
-                if f.pruned > 0 {
-                    parts.push(format!("{} pruned", f.pruned));
-                }
+                let parts: Vec<String> = [(f.new, "new"), (f.updated, "updated"), (f.pruned, "pruned")]
+                    .into_iter()
+                    .filter(|(n, _)| *n > 0)
+                    .map(|(n, what)| format!("{n} {what}"))
+                    .collect();
                 let what =
                     if parts.is_empty() { ": nothing new".to_string() } else { format!(" · {}", parts.join(" · ")) };
                 Toast::new(format!("Fetched {who}{what}"), theme::GREEN)
@@ -286,75 +356,44 @@ impl App {
     }
 
     /// What the text field gave, for what it was opened for.
-    fn typed(&mut self, typing: Typing, text: String) -> Result<()> {
+    fn typed(&mut self, typing: Typing, text: String) -> Flow<(), Effect> {
         match typing {
+            Typing::AddUrl if text.is_empty() => {}
             Typing::AddUrl => {
-                if text.is_empty() {
-                    return Ok(());
-                }
                 let name = suggest_name(&self.remotes, &text);
                 let input = Input::new("Name the remote at", &url::short(&text), &name, "Add")
                     .placeholder("name, e.g. upstream")
                     .note("It's fetched right after.");
                 self.input = Some((input, Typing::AddName { url: text }));
             }
-            Typing::AddName { url } => {
-                if text.is_empty() {
-                    return Ok(());
-                }
-                if self.remotes.iter().any(|r| r.name == text) {
-                    self.toast = Some(Toast::new(format!("There's a remote called {text} already"), theme::YELLOW));
-                    return Ok(());
-                }
-                if let Err(out) = remote::add(&text, &url) {
-                    self.toast = Some(Toast::new(first_lines(&out), theme::RED));
-                    return Ok(());
-                }
-                self.load(Some(&text))?;
-                self.toast = Some(Toast::new(format!("Added {text}"), theme::GREEN));
-                self.fetch(Some(text));
+            Typing::AddName { .. } if text.is_empty() => {}
+            Typing::AddName { .. } if self.remotes.iter().any(|r| r.name == text) => {
+                self.toast = Some(Toast::new(format!("There's a remote called {text} already"), theme::YELLOW));
             }
-            Typing::Rename { old } => {
-                if text.is_empty() || text == old {
-                    return Ok(());
-                }
-                let ran = remote::rename(&old, &text);
-                self.toast = Some(Toast::ran(&ran, format!("Renamed {old} to {text}")));
-                if ran.is_ok() {
-                    self.load(Some(&text))?;
-                }
+            Typing::AddName { url } => return Flow::Run(Effect::Add { name: text, url }),
+            Typing::Rename { old } if text.is_empty() || text == old => {}
+            Typing::Rename { old } => return Flow::Run(Effect::Rename { old, new: text }),
+            Typing::Url { .. } if text.is_empty() => {
+                self.toast = Some(Toast::new("A remote needs a URL; d removes it", theme::YELLOW));
             }
             Typing::Url { name } => {
-                let was = self.remotes.iter().find(|r| r.name == name).and_then(|r| r.url.clone());
-                if text.is_empty() {
-                    self.toast = Some(Toast::new("A remote needs a URL; d removes it", theme::YELLOW));
-                    return Ok(());
+                let was = self.remotes.iter().find(|r| r.name == name).and_then(|r| r.url.as_ref());
+                if Some(&text) != was {
+                    return Flow::Run(Effect::SetUrl { name, url: text });
                 }
-                if Some(&text) == was.as_ref() {
-                    return Ok(());
-                }
-                let ran = remote::set_url(&name, &text);
-                self.toast = Some(Toast::ran(&ran, format!("{name} now fetches from {}", url::short(&text))));
-                self.load(None)?;
             }
             Typing::PushUrl { name } => {
                 let r = self.remotes.iter().find(|r| r.name == name);
                 let was = r.and_then(|r| r.push_url.clone());
                 let fetch = r.and_then(|r| r.url.clone());
                 // Empty, or the fetch URL again: push where it fetches from.
-                let new = Some(text).filter(|t| !t.is_empty() && Some(t) != fetch.as_ref());
-                if new == was {
-                    return Ok(());
+                let url = Some(text).filter(|t| !t.is_empty() && Some(t) != fetch.as_ref());
+                if url != was {
+                    return Flow::Run(Effect::SetPushUrl { name, url });
                 }
-                let done = match &new {
-                    Some(u) => format!("{name} now pushes to {}", url::short(u)),
-                    None => format!("{name} pushes to its fetch URL again"),
-                };
-                self.toast = Some(Toast::ran(&remote::set_push_url(&name, new.as_deref()), done));
-                self.load(None)?;
             }
         }
-        Ok(())
+        Flow::Stay
     }
 
     fn ask_remove(&mut self) {
@@ -370,9 +409,7 @@ impl App {
                 let who =
                     if n == 1 { "This local branch stops".into() } else { format!("These {n} local branches stop") };
                 body += &format!("{who} tracking it:\n");
-                for b in r.tracking.iter().take(6) {
-                    body += &format!("$ {b}\n");
-                }
+                body.extend(r.tracking.iter().take(6).map(|b| format!("$ {b}\n")));
                 if n > 6 {
                     body += &format!("and {} more\n", n - 6);
                 }
@@ -386,16 +423,7 @@ impl App {
             no: "Cancel".into(),
             danger: true,
         };
-        self.confirm = Some((confirm, Ask::Remove(r.name.clone())));
-    }
-
-    fn answer(&mut self, ask: Ask) -> Result<()> {
-        match ask {
-            Ask::Remove(name) => {
-                self.toast = Some(Toast::ran(&remote::remove(&name), format!("Removed {name}")));
-            }
-        }
-        self.load(None)
+        self.confirm = Some((confirm, Effect::Remove(r.name.clone())));
     }
 
     fn on_mouse(&mut self, m: MouseEvent) {

@@ -176,3 +176,16 @@ fn a_paste_only_types_into_an_open_field() {
     crate::tui::app::paste(&mut app, "fix\nday");
     assert_eq!(app.commit.as_ref().unwrap().message(), "fix day");
 }
+
+#[test]
+fn unstaging_a_rename_takes_back_both_halves() {
+    let s = scratch("add-rename");
+    s.git(&["mv", "b.txt", "c.txt"]);
+    let mut app = start(s.repo()).unwrap();
+    select(&mut app, "c.txt");
+    let Flow::Run(e) = key(&mut app, KeyCode::Char(' ')) else { panic!("space should unstage") };
+    app.apply(e).unwrap();
+    // b.txt is back in the index: nothing is staged, c.txt is new and untracked.
+    assert!(app.entries.iter().all(|e| e.group != Group::Staged));
+    assert_eq!(group_of(&app, "c.txt"), Group::Untracked);
+}

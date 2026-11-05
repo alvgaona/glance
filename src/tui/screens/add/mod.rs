@@ -53,10 +53,10 @@ enum Cmd {
 /// What the screen does outside its own state; [`Screen::apply`] does it.
 enum Effect {
     Reload,
-    /// A write to one whole file, then a toast with `msg`.
+    /// A write to whole files (a rename is two), then a toast with `msg`.
     File {
         op: FileOp,
-        path: String,
+        paths: Vec<String>,
         msg: String,
     },
     StageAll,
@@ -269,8 +269,8 @@ impl Screen for App {
     fn apply(&mut self, e: Effect) -> Result<Flow<(), Effect>> {
         match e {
             Effect::Reload => self.reload()?,
-            Effect::File { op, path, msg } => {
-                let paths = std::slice::from_ref(&path);
+            Effect::File { op, paths, msg } => {
+                let paths = paths.as_slice();
                 let r = match op {
                     FileOp::Add => stage::add(&self.repo, paths),
                     FileOp::Unstage => stage::unstage(&self.repo, paths),
@@ -402,10 +402,14 @@ impl App {
         let e = self.current()?;
         let path = e.path.clone();
         match e.group {
-            Group::Staged => Some(Effect::File { op: FileOp::Unstage, msg: format!("Unstaged {path}"), path }),
+            // A rename goes back as both halves: the old path's deletion too.
+            Group::Staged => {
+                let paths = [Some(path.clone()), e.from.clone()].into_iter().flatten().collect();
+                Some(Effect::File { op: FileOp::Unstage, msg: format!("Unstaged {path}"), paths })
+            }
             Group::Conflicts => self.resolve(),
             Group::Changes | Group::Untracked => {
-                Some(Effect::File { op: FileOp::Add, msg: format!("Staged {path}"), path })
+                Some(Effect::File { op: FileOp::Add, msg: format!("Staged {path}"), paths: vec![path] })
             }
         }
     }
@@ -431,7 +435,7 @@ impl App {
                     no: "Cancel".into(),
                     danger: true,
                 },
-                Effect::File { op: FileOp::DeleteUntracked, msg: format!("Deleted {path}"), path },
+                Effect::File { op: FileOp::DeleteUntracked, msg: format!("Deleted {path}"), paths: vec![path] },
             ),
             Group::Changes => {
                 let lines = |n: u32, what: &str| match n {
@@ -460,7 +464,11 @@ impl App {
                         no: "Cancel".into(),
                         danger: true,
                     },
-                    Effect::File { op: FileOp::Discard, msg: format!("Discarded changes to {path}"), path },
+                    Effect::File {
+                        op: FileOp::Discard,
+                        msg: format!("Discarded changes to {path}"),
+                        paths: vec![path],
+                    },
                 )
             }
         };

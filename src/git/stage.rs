@@ -38,20 +38,48 @@ pub fn contents(repo: &gix::Repository, path: &str, from: Option<&str>, side: Si
             (old, in_index(path))
         }
         Side::Unstaged => {
-            let disk = repo.workdir().map(|d| on_disk(&d.join(path))).unwrap_or_default();
+            let disk = Disk::new(repo).map(|mut d| d.read(path)).unwrap_or_default();
             (in_index(path), disk)
         }
     })
 }
 
-/// A file's bytes as git sees them: a symlink is its target, a missing file is empty.
-fn on_disk(p: &Path) -> Vec<u8> {
-    match std::fs::symlink_metadata(p) {
-        Ok(m) if m.file_type().is_symlink() => {
-            std::fs::read_link(p).map(|t| t.to_string_lossy().into_owned().into_bytes()).unwrap_or_default()
-        }
-        Ok(m) if m.is_file() => std::fs::read(p).unwrap_or_default(),
-        _ => Vec::new(),
+/// Reads working tree files as git would store them.
+pub struct Disk<'r> {
+    dir: std::path::PathBuf,
+    filters: gix::filter::Pipeline<'r>,
+    index: gix::worktree::IndexPersistedOrInMemory,
+}
+
+impl<'r> Disk<'r> {
+    /// `None` for a bare repository.
+    pub fn new(repo: &'r gix::Repository) -> Option<Self> {
+        let dir = repo.workdir()?.to_path_buf();
+        let (filters, index) = repo.filter_pipeline(None).ok()?;
+        Some(Disk { dir, filters, index })
+    }
+
+    /// `path`'s bytes as git sees them: a symlink is its target, a missing file is
+    /// empty, and a file goes through its filters (`eol=crlf`, LFS…), as `git add`
+    /// would put it in the index.
+    pub fn read(&mut self, path: &str) -> Vec<u8> {
+        use std::io::Read;
+        let p = self.dir.join(path);
+        let raw = match std::fs::symlink_metadata(&p) {
+            Ok(m) if m.file_type().is_symlink() => {
+                return std::fs::read_link(&p)
+                    .map(|t| t.to_string_lossy().into_owned().into_bytes())
+                    .unwrap_or_default();
+            }
+            Ok(m) if m.is_file() => std::fs::read(&p).unwrap_or_default(),
+            _ => return Vec::new(),
+        };
+        let mut out = Vec::new();
+        let converted = self
+            .filters
+            .convert_to_git(raw.as_slice(), Path::new(path), &self.index)
+            .is_ok_and(|mut c| c.read_to_end(&mut out).is_ok());
+        if converted { out } else { raw }
     }
 }
 
@@ -144,8 +172,20 @@ pub fn changes_anything(h: &Hunk) -> bool {
     h.lines.iter().any(|l| l.op != Op::Context)
 }
 
+/// Can `git apply` take this hunk as it is? A line without a newline must be the last
+/// line on its side, or git glues the next line onto it.
+fn ends_cleanly(h: &Hunk) -> bool {
+    [Op::Removed, Op::Added].into_iter().all(|side| {
+        let lines: Vec<_> = h.lines.iter().filter(|l| l.op == Op::Context || l.op == side).collect();
+        lines.iter().rev().skip(1).all(|l| l.bytes.ends_with(b"\n"))
+    })
+}
+
 /// Applies one hunk of `path` (taken from the side the action works on).
 pub fn apply_hunk(repo: &gix::Repository, path: &str, h: &Hunk, action: HunkAction) -> Ran {
+    if !ends_cleanly(h) {
+        return Err("Those lines touch the end of a line with no newline: take the whole hunk".into());
+    }
     let how: &[&str] = match action {
         HunkAction::Stage => &["--cached"],
         HunkAction::Unstage => &["--cached", "--reverse"],
@@ -424,6 +464,34 @@ mod tests {
 
         // Nothing picked: nothing to do.
         assert!(!changes_anything(&pick_lines(&h, &[], HunkAction::Stage)));
+    }
+
+    #[test]
+    fn a_last_line_without_newline_is_never_glued_to_the_next() {
+        let s = Scratch::new("nonewline");
+        s.commit("f.txt", "a\nb");
+        s.write("f.txt", "a\nb\nc\n");
+        // Only "c": "b" would stay without its newline, with "c" after it.
+        let h = hunk(&s, "f.txt", Side::Unstaged, 0);
+        let part = pick_lines(&h, &lines_of(&h, &["c"]), HunkAction::Stage);
+        assert!(apply_hunk(&s.repo(), "f.txt", &part, HunkAction::Stage).is_err());
+        assert_eq!(s.halves("f.txt").1, "a\nb");
+        // The whole hunk is fine.
+        s.run(|r| apply_hunk(r, "f.txt", &h, HunkAction::Stage));
+        assert_eq!(s.halves("f.txt").1, "a\nb\nc\n");
+    }
+
+    #[test]
+    fn crlf_files_diff_and_stage_as_git_stores_them() {
+        let s = Scratch::new("crlf");
+        s.write(".gitattributes", "*.bat text eol=crlf\n");
+        s.commit("x.bat", "a\r\nb\r\nc\r\n");
+        s.write("x.bat", "a\r\nB\r\nc\r\n");
+        // One line changed, not every line.
+        let h = hunk(&s, "x.bat", Side::Unstaged, 0);
+        assert_eq!(h.lines.iter().filter(|l| l.op != Op::Context).count(), 2);
+        s.run(|r| apply_hunk(r, "x.bat", &h, HunkAction::Stage));
+        assert_eq!(s.halves("x.bat").1, "a\nB\nc\n");
     }
 
     #[test]

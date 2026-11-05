@@ -100,7 +100,7 @@ impl App {
     pub(super) fn resolve(&mut self) -> Option<Effect> {
         let e = self.current()?;
         let path = e.path.clone();
-        let file = |op, msg: String| Some(Effect::File { op, path: path.clone(), msg });
+        let file = |op, msg: String| Some(Effect::File { op, paths: vec![path.clone()], msg });
         match e.conflict {
             Some(c) if !c.ours && !c.theirs => file(FileOp::Remove, format!("Removed {path}")),
             Some(c) if !c.in_content() => file(FileOp::Add, format!("Kept {path}")),
@@ -135,7 +135,8 @@ impl App {
             no: "Cancel".into(),
             danger: true,
         };
-        self.confirm = Some((confirm, Effect::File { op: FileOp::Remove, msg: format!("Deleted {path}"), path }));
+        self.confirm =
+            Some((confirm, Effect::File { op: FileOp::Remove, msg: format!("Deleted {path}"), paths: vec![path] }));
     }
 
     /// `e`: the file in the editor.

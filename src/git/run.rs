@@ -44,7 +44,9 @@ pub fn edit(repo: &gix::Repository, path: &str) -> Ran {
     let dir = repo.workdir();
     let editor = git_in(dir, &args(&["var", "GIT_EDITOR"]))?;
     let script = format!("{} \"$@\"", editor.trim());
-    ran(crate::process::run_on_terminal("sh", &args(&["-c", &script, "sh", path]), dir), "the editor")
+    // `./`: a file called `-x` is a file, not an option.
+    let path = format!("./{path}");
+    ran(crate::process::run_on_terminal("sh", &args(&["-c", &script, "sh", &path]), dir), "the editor")
 }
 
 /// For tests: runs `git args…` in `dir` as author "t <t@t>" and panics if it fails.

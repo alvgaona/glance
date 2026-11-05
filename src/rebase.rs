@@ -75,12 +75,11 @@ fn resolve(args: &[String]) -> Result<Option<(Vec<String>, Option<String>)>> {
     let with_rest = |base: String| [vec![base], rest.to_vec()].concat();
 
     match first {
-        None => match fork_point(&repo)? {
+        None => match fork_point(&repo)?.or(unpushed(&repo)?) {
             Some((base, desc)) => Ok(Some((vec![base.to_string()], Some(desc)))),
-            // On main itself, or nothing new on this branch: let the user choose.
-            None if crate::fzf::available() => pick(&repo, rest),
             None => anyhow::bail!(
-                "no commits of this branch to rebase; pass a number (gg rebase 5), a commit, or a branch"
+                "nothing to pick automatically: this branch has no commits of its own and nothing unpushed.\n\
+                 Try `gg rebase 5` (last 5 commits) or `gg rebase -p` (choose where to start)."
             ),
         },
         Some("-p" | "--pick") => pick(&repo, rest),
@@ -110,6 +109,10 @@ fn fork_point(repo: &gix::Repository) -> Result<Option<(gix::ObjectId, String)>>
     let Ok(head) = repo.head_id() else { return Ok(None) };
     let head = head.detach();
     let Some((main, _)) = core::branches::default_branch(repo) else { return Ok(None) };
+    // On main itself there's no fork; `unpushed` covers that case.
+    if repo.head_name()?.is_some_and(|n| n.shorten() == main.as_str()) {
+        return Ok(None);
+    }
 
     let mut best: Option<(usize, gix::ObjectId, String)> = None;
     for name in [format!("refs/heads/{main}"), format!("refs/remotes/origin/{main}")] {
@@ -129,12 +132,30 @@ fn fork_point(repo: &gix::Repository) -> Result<Option<(gix::ObjectId, String)>>
     }))
 }
 
+/// Commits not yet pushed to this branch's upstream, e.g. on main before a push.
+fn unpushed(repo: &gix::Repository) -> Result<Option<(gix::ObjectId, String)>> {
+    let (Some(name), Ok(head)) = (repo.head_name()?, repo.head_id()) else { return Ok(None) };
+    let Some(Ok(up)) = repo.branch_remote_tracking_ref_name(name.as_ref(), gix::remote::Direction::Fetch) else {
+        return Ok(None);
+    };
+    let Ok(mut up_ref) = repo.find_reference(up.as_ref()) else { return Ok(None) };
+    let head = head.detach();
+    let Ok(Some(base)) = repo.merge_base(head, up_ref.peel_to_id()?.detach()) else { return Ok(None) };
+    let base = base.detach();
+    let n = repo.rev_walk([head]).with_hidden([base]).all()?.count();
+    if n == 0 {
+        return Ok(None);
+    }
+    let s = if n == 1 { "" } else { "s" };
+    Ok(Some((base, format!("{n} unpushed commit{s} (not on {})", up.shorten()))))
+}
+
 /// fzf over this branch's history; the picked commit is the oldest one to edit.
 fn pick(repo: &gix::Repository, rest: &[String]) -> Result<Option<(Vec<String>, Option<String>)>> {
     let commits = core::log::read(repo, 5000, false)?;
     let lines = crate::render::log::lines(&commits, &crate::render::Paint { on: true });
-    let label = format!("{} · rebase from", core::repo_name(repo));
-    let Some(picked) = crate::fzf::pick_commit(&lines, &label, "edit this commit and everything newer")? else {
+    let label = format!("{} · rebase: choose the oldest commit to edit", core::repo_name(repo));
+    let Some(picked) = crate::fzf::pick_commit(&lines, &label, "rebase from here")? else {
         return Ok(None);
     };
     let commit = repo.rev_parse_single(picked.as_str())?.object()?.peel_to_commit()?;

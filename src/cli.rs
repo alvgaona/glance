@@ -64,7 +64,8 @@ pub enum Command {
 
     /// Interactive rebase with a visual todo editor.
     ///
-    ///   gg rebase          this branch's commits (since it split off main)
+    ///   gg rebase          this branch's commits (since it split off main),
+    ///                      or on main, the commits you haven't pushed yet
     ///   gg rebase 5        the last 5 commits
     ///   gg rebase -p       pick the oldest commit to edit, in fzf
     ///   gg rebase <ref>    anything else goes to `git rebase -i` as is

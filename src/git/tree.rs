@@ -1,24 +1,11 @@
-use anyhow::{Context, Result};
+//! Files that differ between two trees (a commit and its parent, a stash and its base).
+
+use anyhow::Result;
 use gix::bstr::ByteSlice;
 use gix::object::tree::diff::ChangeDetached;
 
 use super::diff::{self, Size};
-use super::log::{RefLabel, ref_labels};
 use super::status::ChangeKind;
-
-#[derive(Debug)]
-pub struct Shown {
-    pub id: String,
-    pub refs: Vec<RefLabel>,
-    pub author: String,
-    pub email: String,
-    /// Seconds since the Unix epoch.
-    pub time: i64,
-    pub subject: String,
-    pub body: String,
-    pub parents: Vec<String>,
-    pub files: Vec<FileStat>,
-}
 
 #[derive(Debug)]
 pub struct FileStat {
@@ -31,46 +18,14 @@ pub struct FileStat {
     pub new: Option<gix::ObjectId>,
 }
 
-/// Unified diff of one file of a shown commit.
+/// Unified diff of one changed file.
 pub fn file_patch(repo: &gix::Repository, f: &FileStat) -> Option<Vec<diff::PatchLine>> {
     let read = |id: Option<gix::ObjectId>| id.map(|id| diff::blob(repo, id)).unwrap_or_default();
     diff::patch(&read(f.old), &read(f.new), 3)
 }
 
-/// One commit and what it changed compared with its first parent.
-pub fn read(repo: &gix::Repository, rev: &str) -> Result<Shown> {
-    let id = repo.rev_parse_single(rev).with_context(|| format!("unknown revision `{rev}`"))?;
-    let commit = id.object()?.peel_to_commit().with_context(|| format!("`{rev}` is not a commit"))?;
-    let author = commit.author()?;
-    let message = commit.message()?;
-    let parents: Vec<gix::ObjectId> = commit.parent_ids().map(|p| p.detach()).collect();
-
-    let new_tree = commit.tree()?;
-    let old_tree = match parents.first() {
-        Some(p) => repo.find_commit(*p)?.tree()?,
-        None => repo.empty_tree(),
-    };
-    let files = tree_changes(repo, &old_tree, &new_tree)?;
-
-    Ok(Shown {
-        id: commit.id().shorten_or_id().to_string(),
-        refs: ref_labels(repo)?.remove(&commit.id).unwrap_or_default(),
-        author: author.name.to_str_lossy().into_owned(),
-        email: author.email.to_str_lossy().into_owned(),
-        time: commit.time()?.seconds,
-        subject: message.summary().to_str_lossy().into_owned(),
-        body: message.body().map(|b| b.to_str_lossy().trim().to_string()).unwrap_or_default(),
-        parents: parents.iter().map(|p| p.to_hex_with_len(id.shorten_or_id().hex_len()).to_string()).collect(),
-        files,
-    })
-}
-
 /// Files that differ between two trees, with line counts, sorted by path.
-pub fn tree_changes(
-    repo: &gix::Repository,
-    old_tree: &gix::Tree<'_>,
-    new_tree: &gix::Tree<'_>,
-) -> Result<Vec<FileStat>> {
+pub fn changes(repo: &gix::Repository, old_tree: &gix::Tree<'_>, new_tree: &gix::Tree<'_>) -> Result<Vec<FileStat>> {
     let changes = repo.diff_tree_to_tree(Some(old_tree), Some(new_tree), None)?;
     let mut files = Vec::new();
     for change in changes {

@@ -5,7 +5,7 @@
 
 use gix::ObjectId;
 
-use super::log::Commit;
+use crate::git::log::Commit;
 
 #[derive(Debug, Clone, Copy)]
 pub struct Cell {

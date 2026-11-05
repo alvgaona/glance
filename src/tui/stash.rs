@@ -19,8 +19,8 @@ use ratatui::{
 use super::stash_new::{Mode, Picked, Picker};
 use super::widgets::{self, Command, Confirm, Input, InputEvent, Palette, PaletteEvent, Toast};
 use super::{diffview, enter, first_lines, git, leave, theme};
-use crate::core::stash::{self, Stash};
-use crate::render::relative_time;
+use crate::fmt::{now, relative_time};
+use crate::git::stash::{self, Stash};
 
 #[derive(Clone)]
 enum Cmd {
@@ -108,9 +108,9 @@ pub fn run(repo: &gix::Repository) -> Result<()> {
         palette: None,
         confirm: None,
         input: None,
-        changes: Picker::new(&crate::core::status::read(repo, true)?),
+        changes: Picker::new(&crate::git::status::read(repo, true)?),
         changes_area: Rect::default(),
-        repo_name: crate::core::repo_name(repo),
+        repo_name: crate::git::repo_name(repo),
         branch: None,
         dirty: 0,
     };
@@ -173,7 +173,7 @@ impl App<'_> {
         self.cache.clear();
         let ids: BTreeSet<ObjectId> = self.list.iter().map(|s| s.oid).collect();
         self.marked.retain(|id| ids.contains(id));
-        let st = crate::core::status::read(self.repo, true)?;
+        let st = crate::git::status::read(self.repo, true)?;
         self.changes.update(&st);
         self.branch = st.branch;
         // A file both staged and changed again counts once.
@@ -414,7 +414,7 @@ impl App<'_> {
             Cmd::Copy => {
                 if let Some(s) = self.current() {
                     let id = s.oid.to_string();
-                    crate::fzf::copy(&id);
+                    crate::clipboard::copy(&id);
                     self.toast = Some(Toast::new(format!("Copied {}", &id[..7.min(id.len())]), theme::ACCENT));
                 }
             }
@@ -720,7 +720,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    let now = crate::core::now();
+    let now = now();
     let index_w = app.list.iter().map(|s| s.index.to_string().len()).max().unwrap_or(1);
     // Fixed columns on the right: branch, "+untracked", age.
     let branch_w =
@@ -813,7 +813,7 @@ fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn build_detail(repo: &gix::Repository, s: &Stash, branch: Option<&str>, width: usize) -> Vec<Line<'static>> {
-    let now = crate::core::now();
+    let now = now();
     let label = |t: &str| Span::styled(format!("{t:<10}"), theme::faint());
     let mut out: Vec<Line<'static>> =
         widgets::wrap(s.title(), width).into_iter().map(|l| Line::styled(l, theme::bold())).collect();
@@ -843,7 +843,7 @@ fn build_detail(repo: &gix::Repository, s: &Stash, branch: Option<&str>, width: 
     if let Ok(head) = repo.head_id() {
         let head = head.detach();
         if head != s.base {
-            let (ahead, behind) = crate::core::branches::ahead_behind(repo, head, s.base);
+            let (ahead, behind) = crate::git::branches::ahead_behind(repo, head, s.base);
             let note = match (ahead, behind) {
                 (a, 0) => format!("HEAD is {a} commit{} past it", if a == 1 { "" } else { "s" }),
                 _ => "HEAD is on a different line of history".to_string(),

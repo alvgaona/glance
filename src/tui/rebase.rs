@@ -15,11 +15,11 @@ use ratatui::{
 
 use super::widgets::{self, Command, Confirm, Palette, PaletteEvent, Toast};
 use super::{enter, leave, theme};
-use crate::core::diff::Size;
-use crate::core::show::{self, Shown};
-use crate::core::status::ChangeKind;
-use crate::core::todo::{self, Action, Line as Todo};
-use crate::render::relative_time;
+use crate::fmt::{now, relative_time};
+use crate::git::commit::{self, Details};
+use crate::git::diff::Size;
+use crate::git::status::ChangeKind;
+use crate::git::todo::{self, Action, Line as Todo};
 
 /// What the editor shows at the top.
 pub struct Header {
@@ -56,7 +56,7 @@ struct App {
     details: bool,
     header: Header,
     /// Commit details by todo hash; `None` if it couldn't be read.
-    info: HashMap<String, Option<Shown>>,
+    info: HashMap<String, Option<Details>>,
     toast: Option<Toast>,
     palette: Option<Palette<Cmd>>,
     confirm_abort: Option<Confirm>,
@@ -75,7 +75,7 @@ pub fn run(repo: &gix::Repository, mut lines: Vec<Todo>, header: Header, newest_
         })
         .take(500)
         .map(|h| {
-            let shown = show::read(repo, &h).ok();
+            let shown = commit::read(repo, &h).ok();
             (h, shown)
         })
         .collect();
@@ -487,14 +487,14 @@ fn draw_details(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }).block(block), area);
 }
 
-fn details(s: &Shown, action: Action, newest_first: bool) -> Vec<Line<'static>> {
+fn details(s: &Details, action: Action, newest_first: bool) -> Vec<Line<'static>> {
     let mut out = vec![
         Line::from(vec![
             Span::styled(s.id.clone(), Style::new().fg(theme::ACCENT)),
             Span::styled("  ·  ", theme::faint()),
             Span::styled(s.author.clone(), theme::muted()),
             Span::styled("  ·  ", theme::faint()),
-            Span::styled(relative_time(s.time, crate::core::now()), theme::muted()),
+            Span::styled(relative_time(s.time, now()), theme::muted()),
         ]),
         Line::raw(""),
         Line::styled(s.subject.clone(), theme::bold()),
@@ -571,7 +571,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(right), r);
 }
 
-fn totals(s: &Shown) -> (u32, u32) {
+fn totals(s: &Details) -> (u32, u32) {
     let (mut a, mut r) = (0, 0);
     for file in &s.files {
         if let Some(Size::Lines { added, removed }) = file.size {

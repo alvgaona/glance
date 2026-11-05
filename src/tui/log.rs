@@ -16,9 +16,9 @@ use ratatui::{
 
 use super::widgets::{self, Command, Palette, PaletteEvent, Toast};
 use super::{diffview, enter, leave, theme};
-use crate::core::log::{Commit, RefLabel};
-use crate::core::show::{self, Shown};
-use crate::render::relative_time;
+use crate::fmt::{now, relative_time};
+use crate::git::commit::{self, Details};
+use crate::git::log::{Commit, RefLabel};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -99,7 +99,7 @@ pub fn run(repo: &gix::Repository, opts: Options) -> Result<Option<String>> {
         palette: None,
         list_area: Rect::default(),
         detail_area: Rect::default(),
-        repo_name: crate::core::repo_name(repo),
+        repo_name: crate::git::repo_name(repo),
         branch: repo.head_name().ok().flatten().map(|n| n.shorten().to_string()).unwrap_or_else(|| "detached".into()),
         opts,
     };
@@ -132,7 +132,7 @@ pub fn run(repo: &gix::Repository, opts: Options) -> Result<Option<String>> {
 
 impl App<'_> {
     fn load(&mut self) -> Result<()> {
-        self.commits = crate::core::log::read(self.repo, self.opts.count, self.opts.all)?;
+        self.commits = crate::git::log::read(self.repo, self.opts.count, self.opts.all)?;
         self.rebuild();
         Ok(())
     }
@@ -331,7 +331,7 @@ impl App<'_> {
             Cmd::Copy => {
                 if let Some(c) = self.selected_commit() {
                     let id = c.id.clone();
-                    crate::fzf::copy(&id);
+                    crate::clipboard::copy(&id);
                     self.toast = Some(Toast::new(format!("Copied {id}"), theme::ACCENT));
                 }
             }
@@ -385,7 +385,7 @@ impl App<'_> {
             return Some(d.clone());
         }
         let oid = c.oid;
-        let lines = match show::read(self.repo, &oid.to_string()) {
+        let lines = match commit::read(self.repo, &oid.to_string()) {
             Ok(s) => detail_lines(self.repo, &s),
             Err(e) => vec![Line::styled(format!("Couldn't read this commit: {e}"), theme::muted())],
         };
@@ -493,7 +493,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    let now = crate::core::now();
+    let now = now();
     for (n, item) in app.visible.iter().enumerate().skip(app.scroll).take(height) {
         let r = Rect { y: inner.y + (n - app.scroll) as u16, height: 1, ..inner };
         // Only the commit row is highlighted, never its label.
@@ -577,14 +577,14 @@ fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(Paragraph::new(d.lines.clone()).scroll((app.detail_scroll, 0)).block(block), area);
 }
 
-fn detail_lines(repo: &gix::Repository, s: &Shown) -> Vec<Line<'static>> {
+fn detail_lines(repo: &gix::Repository, s: &Details) -> Vec<Line<'static>> {
     let mut out = vec![Line::from(vec![
         Span::styled(s.id.clone(), Style::new().fg(theme::ACCENT)),
         Span::styled("  ·  ", theme::faint()),
         Span::styled(s.author.clone(), theme::muted()),
         Span::styled(format!(" <{}>", s.email), theme::faint()),
         Span::styled("  ·  ", theme::faint()),
-        Span::styled(relative_time(s.time, crate::core::now()), theme::muted()),
+        Span::styled(relative_time(s.time, now()), theme::muted()),
     ])];
     if !s.refs.is_empty() {
         let mut spans = Vec::new();

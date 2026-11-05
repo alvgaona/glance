@@ -1,9 +1,12 @@
-//! `gg log -i`: commit picker in fzf, same look and keys as the `glog` shell function.
+//! Commit picker in fzf, for builds without the full-screen views.
+//! Same look and keys as the `glog` shell function.
 
 use std::io::Write;
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result, bail};
+
+use crate::process::which;
 
 /// Finds the first commit hash in the fzf line (works even if a graph prefix is added later).
 const HASH: &str = r#"h=$(grep -oE "[a-f0-9]{7,}" <<< {} | head -1); [ -z "$h" ] && exit 0"#;
@@ -88,20 +91,4 @@ pub fn pick_commit(lines: &[String], label: &str, enter: &str) -> Result<Option<
 fn first_hash(line: &str) -> Option<&str> {
     line.split(|c: char| !c.is_ascii_hexdigit())
         .find(|w| w.len() >= 7 && w.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
-}
-
-/// Puts `text` on the macOS clipboard. Silently does nothing elsewhere.
-pub fn copy(text: &str) {
-    if let Ok(mut child) = Command::new("pbcopy").stdin(Stdio::piped()).spawn() {
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(text.as_bytes());
-        }
-        let _ = child.wait();
-    }
-}
-
-pub fn which(bin: &str) -> bool {
-    std::env::var_os("PATH")
-        .map(|paths| std::env::split_paths(&paths).any(|dir| dir.join(bin).is_file()))
-        .unwrap_or(false)
 }

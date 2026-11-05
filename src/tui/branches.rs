@@ -19,9 +19,10 @@ use ratatui::{
 
 use super::widgets::{self, Command, Confirm, Input, InputEvent, Palette, PaletteEvent, Toast};
 use super::{enter, first_lines, git, leave, theme};
-use crate::core::branches::{self, Branch, Branches};
-use crate::core::github::{self, Pr};
-use crate::render::relative_time;
+use crate::fmt::paths::short as short_path;
+use crate::fmt::{now, relative_time};
+use crate::git::branches::{self, Branch, Branches};
+use crate::github::{self, Pr};
 
 /// Pull requests, loaded from gh in the background.
 enum Prs {
@@ -198,7 +199,7 @@ pub fn run(repo: &gix::Repository) -> Result<()> {
         rename: None,
         fetching: None,
         list_area: Rect::default(),
-        repo_name: crate::core::repo_name(repo),
+        repo_name: crate::git::repo_name(repo),
         last_deleted: String::new(),
         prs: Prs::Off,
         pr_of: HashMap::new(),
@@ -640,7 +641,7 @@ impl App<'_> {
             Cmd::Copy => {
                 if let Some(b) = self.current() {
                     let name = b.name.clone();
-                    crate::fzf::copy(&name);
+                    crate::clipboard::copy(&name);
                     self.toast = Some(Toast::new(format!("Copied {name}"), theme::ACCENT));
                 }
             }
@@ -946,29 +947,7 @@ impl App<'_> {
 
 /// Local vs. a remote copy, from (ahead, behind): "up to date", "2 to push", "1 to pull".
 fn sync_note((ahead, behind): (usize, usize)) -> String {
-    match (ahead, behind) {
-        (0, 0) => "up to date".into(),
-        (a, 0) => format!("{a} to push"),
-        (0, b) => format!("{b} to pull"),
-        (a, b) => format!("differs: {a} to push, {b} to pull"),
-    }
-}
-
-/// `/Users/me/git/x` as `~/git/x`; long paths keep their last two parts: `…/git/x`.
-fn short_path(p: &std::path::Path) -> String {
-    let s = p.display().to_string();
-    let s = match std::env::var("HOME") {
-        Ok(home) if !home.is_empty() && s.starts_with(&home) => format!("~{}", &s[home.len()..]),
-        _ => s,
-    };
-    if s.chars().count() <= 40 {
-        return s;
-    }
-    let parts: Vec<&str> = s.rsplitn(3, '/').collect();
-    match parts.as_slice() {
-        [last, parent, _] => format!("…/{parent}/{last}"),
-        _ => s,
-    }
+    crate::fmt::sync::words(ahead, behind)
 }
 
 // ---------------------------------------------------------------- drawing
@@ -1109,7 +1088,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    let now = crate::core::now();
+    let now = now();
     for (row, &i) in app.visible.iter().enumerate().skip(app.scroll).take(height) {
         let b = &app.data.list[i];
         let r = Rect { y: inner.y + (row - app.scroll) as u16, height: 1, ..inner };
@@ -1286,7 +1265,7 @@ fn build_detail(
     pr: Option<&Pr>,
     width: usize,
 ) -> Vec<Line<'static>> {
-    let now = crate::core::now();
+    let now = now();
     let label = |s: &str| Span::styled(format!("{s:<10}"), theme::faint());
     let mut badges = vec![Span::styled(
         b.name.clone(),

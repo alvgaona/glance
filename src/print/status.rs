@@ -3,8 +3,9 @@
 use owo_colors::OwoColorize;
 
 use super::{Paint, Tone};
-use crate::core::diff::Size;
-use crate::core::status::{ChangeKind, FileChange, Status};
+use crate::fmt::change_letter;
+use crate::git::diff::Size;
+use crate::git::status::{ChangeKind, FileChange, Status};
 
 /// Widest `■` bar for the biggest change.
 const BAR: usize = 10;
@@ -226,24 +227,13 @@ fn kind(k: ChangeKind) -> (&'static str, Tone) {
         ChangeKind::Renamed | ChangeKind::Copied => Tone::Purple,
         ChangeKind::TypeChange => Tone::Blue,
     };
-    (mark(k), tone)
-}
-
-pub fn mark(kind: ChangeKind) -> &'static str {
-    match kind {
-        ChangeKind::Added => "A",
-        ChangeKind::Modified => "M",
-        ChangeKind::Deleted => "D",
-        ChangeKind::Renamed => "R",
-        ChangeKind::Copied => "C",
-        ChangeKind::TypeChange => "T",
-    }
+    (change_letter(k), tone)
 }
 
 #[cfg(test)]
 mod tests {
     use super::bar;
-    use crate::render::Paint;
+    use crate::print::Paint;
 
     #[test]
     fn bars() {

@@ -1,10 +1,13 @@
+//! `gg br` when piped: one line per branch.
+
 use owo_colors::OwoColorize;
 
-use super::{Paint, relative_time};
-use crate::core::branches::Branches;
+use super::Paint;
+use crate::fmt::relative_time;
+use crate::git::branches::Branches;
 
 pub fn print(b: &Branches, p: &Paint) {
-    let now = crate::core::now();
+    let now = crate::fmt::now();
     let name_w = b.list.iter().map(|x| x.name.chars().count()).max().unwrap_or(0);
     let ages: Vec<String> = b.list.iter().map(|x| relative_time(x.time, now)).collect();
     let age_w = ages.iter().map(|a| a.len()).max().unwrap_or(0);
@@ -39,7 +42,7 @@ pub fn print(b: &Branches, p: &Paint) {
 }
 
 /// "↑2 ↓1", "gone", "=" or "" and its visible width.
-fn tracking(b: &crate::core::branches::Branch, p: &Paint) -> (String, usize) {
+fn tracking(b: &crate::git::branches::Branch, p: &Paint) -> (String, usize) {
     let Some(up) = &b.upstream else {
         return (String::new(), 0);
     };

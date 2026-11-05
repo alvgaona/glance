@@ -1,8 +1,13 @@
+//! `gg log` when piped: the commit graph and one line per commit.
+
+mod graph;
+
 use owo_colors::{OwoColorize, Style};
 
-use super::{Paint, relative_time};
-use crate::core::graph::{self, Cell, Row};
-use crate::core::log::{Commit, RefLabel};
+use super::Paint;
+use crate::fmt::relative_time;
+use crate::git::log::{Commit, RefLabel};
+use graph::{Cell, Row};
 
 pub fn print(commits: &[Commit], p: &Paint) {
     for line in lines(commits, p) {
@@ -13,7 +18,7 @@ pub fn print(commits: &[Commit], p: &Paint) {
 /// Graph plus one formatted line per commit. Commit lines contain the short id
 /// as their first hex word; connector lines have no id.
 pub fn lines(commits: &[Commit], p: &Paint) -> Vec<String> {
-    let now = crate::core::now();
+    let now = crate::fmt::now();
     let ages: Vec<String> = commits.iter().map(|c| relative_time(c.time, now)).collect();
     let age_w = ages.iter().map(|a| a.len()).max().unwrap_or(0);
     let author_w = commits.iter().map(|c| short_author(&c.author).len()).max().unwrap_or(0);

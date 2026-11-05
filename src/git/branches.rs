@@ -228,7 +228,7 @@ pub fn detail(repo: &gix::Repository, b: &Branch, default: Option<ObjectId>) -> 
 
     if d.unique_total > 0 {
         let tip = repo.find_commit(b.oid)?;
-        let files = super::show::tree_changes(repo, &base.tree()?, &tip.tree()?)?;
+        let files = super::tree::changes(repo, &base.tree()?, &tip.tree()?)?;
         d.files = files.len();
         for f in files {
             if let Some(super::diff::Size::Lines { added, removed }) = f.size {

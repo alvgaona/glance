@@ -1,10 +1,18 @@
 mod cli;
-mod core;
-// With the TUI, fzf only provides the clipboard helper; its picker is the no-TUI fallback.
+mod clipboard;
+mod cmd;
+mod fmt;
+// The commit picker when built without the full-screen views.
 #[cfg_attr(feature = "tui", allow(dead_code))]
 mod fzf;
-mod rebase;
-mod render;
+mod git;
+// Pull requests via gh, shown by the branch screen.
+#[cfg(feature = "tui")]
+mod github;
+mod print;
+// Collected output is only needed by the full-screen views (their git calls).
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
+mod process;
 #[cfg(feature = "tui")]
 mod tui;
 
@@ -15,89 +23,21 @@ use cli::{Cli, Command};
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let paint = render::Paint::detect(cli.color);
-
+    let paint = print::Paint::detect(cli.color);
     match cli.command {
-        Command::Status => {
-            let repo = core::open()?;
-            let status = core::status::read(&repo, true)?;
-            render::status::print(&status, &paint);
-        }
-        Command::Log { count, interactive, all } => {
-            let repo = core::open()?;
-            // Full screen in a terminal; the plain list when piped (or built without the TUI).
-            // `-i` forces it, so `$(gg log -i)` can pick a commit id.
-            let full_screen =
-                interactive || (cfg!(feature = "tui") && std::io::IsTerminal::is_terminal(&std::io::stdout()));
-            let count = count.unwrap_or(if full_screen { 5000 } else { 20 });
-            if full_screen {
-                return log_interactive(&repo, count, all);
-            }
-            let commits = core::log::read(&repo, count, all)?;
-            render::log::print(&commits, &paint);
-        }
-        Command::Branches => {
-            let repo = core::open()?;
-            // Interactive in a terminal; the plain list when piped (or built without the TUI).
-            #[cfg(feature = "tui")]
-            if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
-                return tui::branches::run(&repo);
-            }
-            render::branches::print(&core::branches::read(&repo, false)?, &paint);
-        }
-        Command::Stash => {
-            let repo = core::open()?;
-            #[cfg(feature = "tui")]
-            if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
-                return tui::stash::run(&repo);
-            }
-            render::stash::print(&core::stash::list(&repo)?, &paint);
-        }
-        Command::Worktrees { list } => {
-            let repo = core::open()?;
-            // Full screen whenever someone is at the keyboard: stdout is usually
-            // captured here (`cd "$(gg wt)"`), so it can't be the test.
-            #[cfg(feature = "tui")]
-            if !list && std::io::IsTerminal::is_terminal(&std::io::stdin()) {
-                if let Some(path) = tui::worktree::run(&repo)? {
-                    println!("{}", path.display());
-                }
-                return Ok(());
-            }
-            let _ = list;
-            render::worktree::print(&core::worktree::list(&repo)?, &paint);
-        }
-        Command::Repos { dir } => {
-            render::repos::print(&core::repos::read(&dir)?, &paint);
-        }
+        Command::Status => cmd::status::run(&paint),
+        Command::Log { count, interactive, all } => cmd::log::run(count, interactive, all, &paint),
+        Command::Branches => cmd::branches::run(&paint),
+        Command::Stash => cmd::stash::run(&paint),
+        Command::Worktrees { list } => cmd::worktree::run(list, &paint),
+        Command::Repos { dir } => cmd::repos::run(&dir, &paint),
         Command::Rebase { args } => {
-            let code = rebase::run(&args)?;
+            let code = cmd::rebase::run(&args)?;
             if code != 0 {
                 std::process::exit(code);
             }
+            Ok(())
         }
-        Command::RebaseEditor { file, keep_on_quit } => {
-            rebase::edit(&file, keep_on_quit)?;
-        }
+        Command::RebaseEditor { file, keep_on_quit } => cmd::rebase::edit(&file, keep_on_quit),
     }
-    Ok(())
-}
-
-/// Full-screen log; Enter copies the commit id and prints it (so `$(gg log -i)` works).
-/// Without the `tui` feature, falls back to fzf.
-fn log_interactive(repo: &gix::Repository, count: usize, all: bool) -> Result<()> {
-    #[cfg(feature = "tui")]
-    let picked = tui::log::run(repo, tui::log::Options { mode: tui::log::Mode::Browse, all, count })?;
-    #[cfg(not(feature = "tui"))]
-    let picked = {
-        anyhow::ensure!(fzf::available(), "`gg log -i` needs fzf installed");
-        let commits = core::log::read(repo, count, all)?;
-        let lines = render::log::lines(&commits, &render::Paint { on: true, rgb: false });
-        fzf::pick_commit(&lines, &core::repo_name(repo), "copy")?
-    };
-    if let Some(id) = picked {
-        fzf::copy(&id);
-        println!("{id}");
-    }
-    Ok(())
 }

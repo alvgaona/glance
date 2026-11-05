@@ -7,7 +7,7 @@ use anyhow::Result;
 use gix::ObjectId;
 use gix::bstr::ByteSlice;
 
-use super::show::{FileStat, tree_changes};
+use super::tree::{self, FileStat};
 
 #[derive(Debug, Clone)]
 pub struct Stash {
@@ -103,9 +103,9 @@ pub fn list(repo: &gix::Repository) -> Result<Vec<Stash>> {
 pub fn files(repo: &gix::Repository, s: &Stash) -> Result<(Vec<FileStat>, Vec<FileStat>)> {
     let tree = repo.find_commit(s.oid)?.tree()?;
     let base = repo.find_commit(s.base)?.tree()?;
-    let tracked = tree_changes(repo, &base, &tree)?;
+    let tracked = tree::changes(repo, &base, &tree)?;
     let untracked = match s.untracked {
-        Some(u) => tree_changes(repo, &repo.empty_tree(), &repo.find_commit(u)?.tree()?)?,
+        Some(u) => tree::changes(repo, &repo.empty_tree(), &repo.find_commit(u)?.tree()?)?,
         None => Vec::new(),
     };
     Ok((tracked, untracked))

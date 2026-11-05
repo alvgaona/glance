@@ -9,7 +9,7 @@ use gix::ObjectId;
 use gix::bstr::BStr;
 use serde::Deserialize;
 
-use super::branches::Branch;
+use crate::git::branches::Branch;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum State {
@@ -84,7 +84,7 @@ pub fn available(repo: &gix::Repository) -> bool {
             .and_then(|r| r.url(gix::remote::Direction::Fetch).map(|u| u.to_bstring().to_string()))
             .is_some_and(|u| u.contains("github.com"))
     });
-    on_github && crate::fzf::which("gh")
+    on_github && crate::process::which("gh")
 }
 
 /// The last 100 PRs (any state), with CI checks for the open ones. Runs both `gh` calls at once.
@@ -246,7 +246,7 @@ mod tests {
             merged: false,
             copies: copies
                 .iter()
-                .map(|(r, b, o)| crate::core::branches::Copy { remote: (*r).into(), branch: (*b).into(), oid: oid(*o) })
+                .map(|(r, b, o)| crate::git::branches::Copy { remote: (*r).into(), branch: (*b).into(), oid: oid(*o) })
                 .collect(),
             worktree: None,
         }

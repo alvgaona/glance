@@ -11,7 +11,6 @@ pub mod widgets;
 pub mod worktree;
 
 use std::io::{IsTerminal, Write};
-use std::process::{Command, Stdio};
 
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
@@ -58,11 +57,8 @@ pub(crate) fn leave() {
 /// Runs git, returning whether it worked and its output (stderr first; that's where git talks).
 /// Prompts for credentials still reach the terminal: ssh and git ask on /dev/tty.
 pub(crate) fn git(args: &[String]) -> (bool, String) {
-    match Command::new("git").args(args).stdin(Stdio::inherit()).output() {
-        Ok(out) => {
-            let text = format!("{}{}", String::from_utf8_lossy(&out.stderr), String::from_utf8_lossy(&out.stdout));
-            (out.status.success(), text.trim().to_string())
-        }
+    match crate::process::run("git", args, None) {
+        Ok(out) => (out.ok, out.text()),
         Err(e) => (false, format!("could not run git: {e}")),
     }
 }

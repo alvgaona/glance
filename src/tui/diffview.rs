@@ -6,9 +6,9 @@ use ratatui::{
 };
 
 use super::theme;
-use crate::core::diff::{PatchLine, Size};
-use crate::core::show::{self, FileStat};
-use crate::core::status::ChangeKind;
+use crate::git::diff::{PatchLine, Size};
+use crate::git::status::ChangeKind;
+use crate::git::tree::{self, FileStat};
 
 /// Stop drawing diffs after this many lines; huge commits would make the panel slow.
 const MAX_DIFF_LINES: usize = 4000;
@@ -77,7 +77,7 @@ pub fn patches(repo: &gix::Repository, files: &[FileStat]) -> Vec<Line<'static>>
             out.push(Line::styled("   diff not shown: too many changes", theme::faint()));
             continue;
         }
-        let Some(lines) = show::file_patch(repo, f) else {
+        let Some(lines) = tree::file_patch(repo, f) else {
             out.push(Line::styled("   binary or very large file", theme::faint()));
             continue;
         };

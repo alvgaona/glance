@@ -1,19 +1,18 @@
-//! Reads data from the repository. Never prints anything.
+//! Everything that reads or writes the repository. Never prints or draws.
 
 // Remotes, deletes and details are only used by the interactive view.
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub mod branches;
-// Patches are drawn only by the interactive log.
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
+pub mod commit;
+// Patches are drawn only by the interactive views.
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub mod diff;
-// Pull requests via gh, shown by the interactive branch view.
-#[cfg(feature = "tui")]
-pub mod github;
-pub mod graph;
 pub mod log;
-pub mod repos;
+// The editor's settings are only read with the full-screen views.
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
-pub mod show;
+pub mod rebase;
+pub mod repos;
 // Files and details are only shown by the interactive view.
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub mod stash;
@@ -21,6 +20,9 @@ pub mod status;
 // Only the TUI rebase editor edits the todo list.
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub mod todo;
+// Per-file details and patches are only shown by the interactive views.
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
+pub mod tree;
 // Adding worktrees and their state are only used by the interactive view.
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub mod worktree;
@@ -41,9 +43,4 @@ pub fn repo_name(repo: &gix::Repository) -> String {
         .and_then(|d| d.canonicalize().ok())
         .and_then(|d| d.file_name().map(|n| n.to_string_lossy().into_owned()))
         .unwrap_or_else(|| "repo".into())
-}
-
-/// Seconds since the Unix epoch, right now.
-pub fn now() -> i64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
 }

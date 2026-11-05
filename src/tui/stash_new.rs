@@ -12,8 +12,9 @@ use ratatui::{
 };
 
 use super::{theme, widgets};
-use crate::core::diff::Size;
-use crate::core::status::{ChangeKind, Status};
+use crate::fmt::change_letter;
+use crate::git::diff::Size;
+use crate::git::status::{ChangeKind, Status};
 
 const STAGED_ONLY_ALL: &str = "This mode takes every file: git can't pick single files here. Press e to pick.";
 
@@ -447,7 +448,7 @@ impl Picker {
         let bg = if selected { theme::ELEMENT } else { theme::PANEL };
         let st = |s: Style| s.bg(bg);
         let letter = |k: Option<ChangeKind>, color: Color| match k {
-            Some(k) => Span::styled(crate::render::status::mark(k).to_string(), st(Style::new().fg(color))),
+            Some(k) => Span::styled(change_letter(k).to_string(), st(Style::new().fg(color))),
             None => Span::styled(" ", st(Style::new())),
         };
         let mut spans = vec![Span::styled(if selected { "┃ " } else { "  " }, st(Style::new().fg(theme::ACCENT)))];

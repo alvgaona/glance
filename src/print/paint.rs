@@ -1,11 +1,4 @@
-//! Turns data from `core` into printed text.
-
-pub mod branches;
-pub mod log;
-pub mod repos;
-pub mod stash;
-pub mod status;
-pub mod worktree;
+//! Colours for printed output: the full-screen theme in 24-bit, or the nearest basic colours.
 
 use std::io::IsTerminal;
 
@@ -132,19 +125,5 @@ impl Paint {
     /// Current branch name.
     pub fn head(&self) -> Style {
         self.pick(Style::new().bold().cyan())
-    }
-}
-
-/// "3m ago", "2h ago", "5d ago", "4w ago", "7mo ago", "2y ago".
-pub fn relative_time(then: i64, now: i64) -> String {
-    let s = (now - then).max(0);
-    match s {
-        0..60 => "now".into(),
-        60..3600 => format!("{}m ago", s / 60),
-        3600..86400 => format!("{}h ago", s / 3600),
-        86400..604800 => format!("{}d ago", s / 86400),
-        604800..2_592_000 => format!("{}w ago", s / 604800),
-        2_592_000..31_536_000 => format!("{}mo ago", s / 2_592_000),
-        _ => format!("{}y ago", s / 31_536_000),
     }
 }

@@ -20,10 +20,11 @@ use ratatui::{
 
 use super::widgets::{self, Command, Confirm, Input, InputEvent, Palette, PaletteEvent, Toast};
 use super::{diffview, enter, first_lines, git, leave, theme};
-use crate::core::diff::Size;
-use crate::core::status::{FileChange, Status};
-use crate::core::worktree::{self, Worktree};
-use crate::render::relative_time;
+use crate::fmt::paths::tilde;
+use crate::fmt::{now, relative_time};
+use crate::git::diff::Size;
+use crate::git::status::{FileChange, Status};
+use crate::git::worktree::{self, Worktree};
 
 #[derive(Clone)]
 enum Cmd {
@@ -113,7 +114,7 @@ pub fn run(repo: &gix::Repository) -> Result<Option<PathBuf>> {
         palette: None,
         confirm: None,
         input: None,
-        repo_name: crate::core::repo_name(repo),
+        repo_name: crate::git::repo_name(repo),
         captured: !std::io::stdout().is_terminal(),
     };
     app.reload(None)?;
@@ -159,25 +160,6 @@ fn commands() -> Vec<Command<Cmd>> {
     ]
 }
 
-/// `/Users/me/git/app` -> `~/git/app`.
-fn tilde(p: &Path) -> String {
-    let s = p.display().to_string();
-    match std::env::var("HOME") {
-        Ok(home) if !home.is_empty() && s.starts_with(&home) => format!("~{}", &s[home.len()..]),
-        _ => s,
-    }
-}
-
-/// The name in the list: just the folder when it sits next to the main worktree
-/// (`app-feat`), else the whole path.
-fn short_path(p: &Path, main: Option<&Path>) -> String {
-    let beside = main.is_some_and(|m| m == p || m.parent() == p.parent());
-    match p.file_name() {
-        Some(name) if beside => name.to_string_lossy().into_owned(),
-        _ => tilde(p),
-    }
-}
-
 fn same_dir(a: &Path, b: &Path) -> bool {
     match (a.canonicalize(), b.canonicalize()) {
         (Ok(a), Ok(b)) => a == b,
@@ -192,7 +174,7 @@ fn load_states(paths: Vec<PathBuf>) -> Receiver<(PathBuf, Load)> {
         let tx = tx.clone();
         std::thread::spawn(move || {
             let load = match gix::open(&path) {
-                Ok(repo) => match crate::core::status::read(&repo, true) {
+                Ok(repo) => match crate::git::status::read(&repo, true) {
                     Ok(st) => Load::Ready(Box::new(st)),
                     Err(e) => Load::Failed(e.to_string()),
                 },
@@ -259,7 +241,7 @@ impl App<'_> {
 
     /// How a worktree is named in messages: like the list does.
     fn name(&self, p: &Path) -> String {
-        short_path(p, self.main().as_deref())
+        crate::fmt::paths::beside(p, self.main().as_deref())
     }
 
     fn step(&mut self, n: isize) {
@@ -375,7 +357,7 @@ impl App<'_> {
                         let path = r.wt.path.clone();
                         // Printed on the way out; in a plain terminal it's copied too.
                         if !self.captured {
-                            crate::fzf::copy(&path.display().to_string());
+                            crate::clipboard::copy(&path.display().to_string());
                         }
                         return Ok(Some(Some(path)));
                     }
@@ -383,7 +365,7 @@ impl App<'_> {
             }
             Cmd::Copy => {
                 if let Some(r) = self.current() {
-                    crate::fzf::copy(&r.wt.path.display().to_string());
+                    crate::clipboard::copy(&r.wt.path.display().to_string());
                     self.toast = Some(Toast::new(format!("Copied {}", tilde(&r.wt.path)), theme::ACCENT));
                 }
             }
@@ -666,17 +648,7 @@ fn state_text(r: &Row) -> Span<'static> {
 fn sync_text(r: &Row) -> String {
     let Load::Ready(st) = &r.load else { return String::new() };
     let Some(u) = &st.upstream else { return String::new() };
-    let mut s = String::new();
-    if u.ahead > 0 {
-        s += &format!("↑{}", u.ahead);
-    }
-    if u.behind > 0 {
-        if !s.is_empty() {
-            s.push(' ');
-        }
-        s += &format!("↓{}", u.behind);
-    }
-    s
+    crate::fmt::sync::arrows(u.ahead, u.behind)
 }
 
 fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
@@ -692,9 +664,8 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
         app.scroll = app.selected + 1 - height;
     }
 
-    let now = crate::core::now();
-    let main = app.rows.iter().find(|r| r.wt.main).map(|r| r.wt.path.clone());
-    let paths: Vec<String> = app.rows.iter().map(|r| short_path(&r.wt.path, main.as_deref())).collect();
+    let now = now();
+    let paths: Vec<String> = app.rows.iter().map(|r| app.name(&r.wt.path)).collect();
     let path_w = paths.iter().map(|p| p.chars().count()).max().unwrap_or(0).min(inner.width as usize / 2);
     let branch_w = app.rows.iter().map(|r| r.label().chars().count()).max().unwrap_or(0);
     let state_w = app.rows.iter().map(|r| state_text(r).content.chars().count()).max().unwrap_or(0);
@@ -768,7 +739,7 @@ fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn build_detail(r: &Row, width: usize) -> Vec<Line<'static>> {
-    let now = crate::core::now();
+    let now = now();
     let label = |t: &str| Span::styled(format!("{t:<10}"), theme::faint());
     let title = match &r.wt.branch {
         Some(b) => b.clone(),

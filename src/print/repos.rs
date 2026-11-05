@@ -1,14 +1,17 @@
+//! `gg repos`: every repo in a folder, one line each.
+
 use owo_colors::OwoColorize;
 
-use super::{Paint, relative_time};
-use crate::core::repos::Repo;
+use super::Paint;
+use crate::fmt::relative_time;
+use crate::git::repos::Repo;
 
 pub fn print(repos: &[Repo], p: &Paint) {
     if repos.is_empty() {
         println!("{}", "no git repos in this folder".style(p.dim()));
         return;
     }
-    let now = crate::core::now();
+    let now = crate::fmt::now();
     let name_w = repos.iter().map(|r| r.name.chars().count()).max().unwrap_or(0);
     let branch = |r: &Repo| match &r.state {
         Ok(s) => s.status.branch.clone().unwrap_or_else(|| "detached".into()),

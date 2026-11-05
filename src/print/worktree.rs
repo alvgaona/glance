@@ -3,7 +3,7 @@
 use owo_colors::OwoColorize;
 
 use super::{Paint, Tone};
-use crate::core::worktree::Worktree;
+use crate::git::worktree::Worktree;
 
 pub fn print(list: &[Worktree], p: &Paint) {
     let paths: Vec<String> = list.iter().map(|w| w.path.display().to_string()).collect();

@@ -172,7 +172,7 @@ impl Screen for App<'_> {
             Effect::Drop(list) => self.drop_stashes(list)?,
             Effect::Branch { stash, name } => {
                 let done = format!("On new branch {name}, with {} applied", stash.name());
-                self.toast = Some(Toast::ran(&stash::branch(&stash, &name), done));
+                self.toast = Some(Toast::ran(&stash::branch(self.repo, &stash, &name), done));
                 self.reload(None)?;
             }
             Effect::Push { picked, message } => {
@@ -298,7 +298,7 @@ impl App<'_> {
 
     /// `git stash apply` or `git stash pop`.
     fn apply_stash(&mut self, s: &Stash, pop: bool) -> Result<()> {
-        self.toast = Some(match stash::apply(s, pop) {
+        self.toast = Some(match stash::apply(self.repo, s, pop) {
             Ok(_) => {
                 let done = if pop { "Popped" } else { "Applied" };
                 Toast::new(format!("{done} {}: {}", s.name(), s.title()), theme::GREEN)
@@ -350,7 +350,7 @@ impl App<'_> {
     /// Drops newest index last, so the indexes of the others don't shift under us.
     fn drop_stashes(&mut self, mut list: Vec<Stash>) -> Result<()> {
         list.sort_by_key(|s| std::cmp::Reverse(s.index));
-        let failed: Vec<String> = list.iter().filter_map(|s| stash::drop(s).err()).collect();
+        let failed: Vec<String> = list.iter().filter_map(|s| stash::drop(self.repo, s).err()).collect();
         self.marked.clear();
         self.toast = Some(match (failed.first(), list.as_slice()) {
             (Some(err), _) => Toast::new(format!("{} failed: {}", failed.len(), first_lines(err)), theme::RED),

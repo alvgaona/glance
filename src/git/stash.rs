@@ -162,18 +162,29 @@ impl Push {
     }
 }
 
-/// `git stash apply` (or `pop`, which also drops it when it applies cleanly).
-pub fn apply(s: &Stash, pop: bool) -> Ran {
-    run::git(&run::args(&["stash", if pop { "pop" } else { "apply" }, &s.name()]))
+/// `stash@{n}`, if that's still this stash. A `git stash` elsewhere since the list was
+/// read shifts every number, and the write would hit the stash next to it.
+fn still_there(repo: &gix::Repository, s: &Stash) -> Ran {
+    let now = run::git_in(repo.workdir(), &run::args(&["rev-parse", "--verify", "-q", &s.name()])).unwrap_or_default();
+    if ObjectId::from_hex(now.trim().as_bytes()).ok() == Some(s.oid) {
+        Ok(s.name())
+    } else {
+        Err(format!("The stashes changed since the list was read; {} is another one now", s.name()))
+    }
 }
 
-pub fn drop(s: &Stash) -> Ran {
-    run::git(&run::args(&["stash", "drop", &s.name()]))
+/// `git stash apply` (or `pop`, which also drops it when it applies cleanly).
+pub fn apply(repo: &gix::Repository, s: &Stash, pop: bool) -> Ran {
+    run::git_in(repo.workdir(), &run::args(&["stash", if pop { "pop" } else { "apply" }, &still_there(repo, s)?]))
+}
+
+pub fn drop(repo: &gix::Repository, s: &Stash) -> Ran {
+    run::git_in(repo.workdir(), &run::args(&["stash", "drop", &still_there(repo, s)?]))
 }
 
 /// `git stash branch`: a new branch at the stash's base, with the stash applied and dropped.
-pub fn branch(s: &Stash, name: &str) -> Ran {
-    run::git(&run::args(&["stash", "branch", name, &s.name()]))
+pub fn branch(repo: &gix::Repository, s: &Stash, name: &str) -> Ran {
+    run::git_in(repo.workdir(), &run::args(&["stash", "branch", name, &still_there(repo, s)?]))
 }
 
 #[cfg(test)]
@@ -217,5 +228,23 @@ mod tests {
         assert_eq!(stash("On main: a: b").title(), "a: b");
         assert_eq!(stash("something else").title(), "something else");
         assert!(stash("WIP on main: e6f5685 Local work").is_wip());
+    }
+
+    #[test]
+    fn writes_refuse_a_stash_that_moved() {
+        let s = crate::git::run::Scratch::new("stash-moved");
+        s.commit("a.txt", "one\n");
+        s.write("a.txt", "x\n");
+        s.git(&["stash", "-q"]);
+        let repo = s.repo();
+        let x = list(&repo).unwrap().remove(0);
+        // Another stash on top: stash@{0} is that one now.
+        s.write("a.txt", "y\n");
+        s.git(&["stash", "-q"]);
+        assert!(drop(&repo, &x).is_err());
+        assert_eq!(list(&s.repo()).unwrap().len(), 2);
+        // Read again, it's stash@{1}, and dropping it works.
+        let x = list(&s.repo()).unwrap().remove(1);
+        assert!(drop(&s.repo(), &x).is_ok());
     }
 }

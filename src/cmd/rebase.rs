@@ -108,7 +108,7 @@ fn resolve(args: &[String]) -> Result<Option<(Vec<String>, Option<String>)>> {
 fn pick(repo: &gix::Repository, rest: &[String]) -> Result<Option<(Vec<String>, Option<String>)>> {
     #[cfg(feature = "tui")]
     let picked = {
-        use crate::tui::log::{Mode, Options, run};
+        use crate::tui::screens::log::{Mode, Options, run};
         run(repo, Options { mode: Mode::Pick, all: false, count: 5000 })?
     };
     #[cfg(not(feature = "tui"))]
@@ -144,7 +144,7 @@ pub fn edit(file: &Path, keep_on_quit: bool) -> Result<()> {
 
     #[cfg(feature = "tui")]
     {
-        use crate::tui::rebase::{Header, Outcome, run};
+        use crate::tui::screens::rebase::{Header, Outcome, run};
         match run(&repo, lines, Header { branch, detail }, rebase::newest_first(&repo))? {
             Outcome::Apply(new) => std::fs::write(file, todo::render(&new))?,
             Outcome::Quit if keep_on_quit => {} // leave the file as git wrote it

@@ -1,6 +1,8 @@
 //! `gg stash`: your changes on the left, stashes on the right. Stash what you pick, or
 //! apply, pop, drop and branch off a stash. Writes go through git (`git stash …`).
 
+mod changes;
+
 use std::collections::{BTreeSet, HashMap};
 use std::rc::Rc;
 
@@ -15,12 +17,14 @@ use ratatui::{
     widgets::{Block, Padding, Paragraph},
 };
 
-use super::app::{self, Flow, Screen};
-use super::kit::{self, Command, Confirm, Input, InputEvent, Palette, PaletteEvent, Scroll, Toast, footer, list};
-use super::stash_new::{Mode, Picked, Picker};
-use super::{diffview, first_lines, theme};
+use changes::{Mode, Picked, Picker};
+
 use crate::fmt::{now, relative_time};
 use crate::git::stash::{self, Stash};
+use crate::tui::app::{self, Flow, Screen};
+use crate::tui::kit::{self, Command, Confirm, Input, InputEvent, Palette, PaletteEvent, Scroll, Toast, footer, list};
+use crate::tui::panels::diff;
+use crate::tui::{first_lines, theme};
 
 #[derive(Clone)]
 enum Cmd {
@@ -806,13 +810,13 @@ fn build_detail(repo: &gix::Repository, s: &Stash, branch: Option<&str>, width: 
     match stash::files(repo, s) {
         Ok((tracked, untracked)) => {
             out.push(Line::raw(""));
-            out.extend(diffview::file_list(&tracked, None));
+            out.extend(diff::file_list(&tracked, None));
             if !untracked.is_empty() {
                 out.push(Line::raw(""));
-                out.extend(diffview::file_list(&untracked, Some("untracked")));
+                out.extend(diff::file_list(&untracked, Some("untracked")));
             }
-            out.extend(diffview::patches(repo, &tracked));
-            out.extend(diffview::patches(repo, &untracked));
+            out.extend(diff::patches(repo, &tracked));
+            out.extend(diff::patches(repo, &untracked));
         }
         Err(e) => out.push(Line::styled(format!("couldn't read the stash: {e}"), Style::new().fg(theme::RED))),
     }

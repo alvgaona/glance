@@ -13,12 +13,13 @@ use ratatui::{
     widgets::{Block, Padding, Paragraph},
 };
 
-use super::app::{self, Flow, Screen};
-use super::kit::{self, Command, Palette, PaletteEvent, Scroll, Toast, footer, list};
-use super::{diffview, theme};
 use crate::fmt::{now, relative_time};
 use crate::git::commit::{self, Details};
 use crate::git::log::{Commit, RefLabel};
+use crate::tui::app::{self, Flow, Screen};
+use crate::tui::kit::{self, Command, Palette, PaletteEvent, Scroll, Toast, footer, list};
+use crate::tui::panels::diff;
+use crate::tui::theme;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -569,8 +570,8 @@ fn detail_lines(repo: &gix::Repository, s: &Details) -> Vec<Line<'static>> {
     }
 
     out.push(Line::raw(""));
-    out.extend(diffview::file_list(&s.files, None));
-    out.extend(diffview::patches(repo, &s.files));
+    out.extend(diff::file_list(&s.files, None));
+    out.extend(diff::patches(repo, &s.files));
     out
 }
 

@@ -18,14 +18,15 @@ use ratatui::{
     widgets::{Block, Padding, Paragraph},
 };
 
-use super::app::{self, Flow, Screen};
-use super::kit::{self, Command, Confirm, Input, InputEvent, Palette, PaletteEvent, Scroll, Toast, footer, list};
-use super::{diffview, first_lines, theme};
 use crate::fmt::paths::tilde;
 use crate::fmt::{now, relative_time};
 use crate::git::diff::Size;
 use crate::git::status::{FileChange, Status};
 use crate::git::worktree::{self, Source, Worktree};
+use crate::tui::app::{self, Flow, Screen};
+use crate::tui::kit::{self, Command, Confirm, Input, InputEvent, Palette, PaletteEvent, Scroll, Toast, footer, list};
+use crate::tui::panels::diff;
+use crate::tui::{first_lines, theme};
 
 #[derive(Clone)]
 enum Cmd {
@@ -783,7 +784,7 @@ fn files(out: &mut Vec<Line<'static>>, title: &str, list: &[FileChange]) {
         Span::styled(format!("−{tr}"), Style::new().fg(theme::RED)),
     ]));
     for f in list {
-        let (mark, color) = diffview::kind_mark(f.kind);
+        let (mark, color) = diff::kind_mark(f.kind);
         let mut spans = vec![
             Span::styled(format!("{mark}  "), Style::new().fg(color)),
             Span::styled(f.path.clone(), theme::text()),

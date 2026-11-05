@@ -12,14 +12,14 @@ use ratatui::{
     widgets::{Block, Padding, Paragraph, Wrap},
 };
 
-use super::app::{self, Flow, Screen};
-use super::kit::{self, Command, Confirm, Palette, PaletteEvent, Toast, footer, list};
-use super::theme;
 use crate::fmt::{now, relative_time};
 use crate::git::commit::{self, Details};
 use crate::git::diff::Size;
 use crate::git::status::ChangeKind;
 use crate::git::todo::{self, Action, Line as Todo};
+use crate::tui::app::{self, Flow, Screen};
+use crate::tui::kit::{self, Command, Confirm, Palette, PaletteEvent, Toast, footer, list};
+use crate::tui::theme;
 
 /// What the editor shows at the top.
 pub struct Header {

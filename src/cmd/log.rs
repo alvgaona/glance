@@ -25,8 +25,8 @@ pub fn run(count: Option<usize>, interactive: bool, all: bool, paint: &Paint) ->
 fn pick(repo: &gix::Repository, count: usize, all: bool) -> Result<Option<String>> {
     #[cfg(feature = "tui")]
     {
-        use crate::tui::log::{Mode, Options};
-        crate::tui::log::run(repo, Options { mode: Mode::Browse, all, count })
+        use crate::tui::screens::log::{Mode, Options};
+        crate::tui::screens::log::run(repo, Options { mode: Mode::Browse, all, count })
     }
     #[cfg(not(feature = "tui"))]
     {

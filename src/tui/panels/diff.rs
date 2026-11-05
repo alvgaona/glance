@@ -5,10 +5,10 @@ use ratatui::{
     text::{Line, Span},
 };
 
-use super::theme;
 use crate::git::diff::{PatchLine, Size};
 use crate::git::status::ChangeKind;
 use crate::git::tree::{self, FileStat};
+use crate::tui::theme;
 
 /// Stop drawing diffs after this many lines; huge commits would make the panel slow.
 const MAX_DIFF_LINES: usize = 4000;

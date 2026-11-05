@@ -9,7 +9,7 @@ pub fn run(paint: &Paint) -> Result<()> {
     let repo = git::open()?;
     #[cfg(feature = "tui")]
     if super::screen_for_stdout() {
-        return crate::tui::branches::run(&repo);
+        return crate::tui::screens::branches::run(&repo);
     }
     print::branches::print(&git::branches::read(&repo, false)?, paint);
     Ok(())

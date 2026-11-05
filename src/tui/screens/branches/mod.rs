@@ -16,13 +16,13 @@ use ratatui::{
     widgets::{Block, Padding, Paragraph, Wrap},
 };
 
-use super::app::{self, Flow, Screen};
-use super::kit::{self, Command, Confirm, Input, InputEvent, Palette, PaletteEvent, Scroll, Toast, footer, list};
-use super::{first_lines, theme};
 use crate::fmt::paths::short as short_path;
 use crate::fmt::{now, relative_time};
 use crate::git::branches::{self, Branch, Branches};
 use crate::github::{self, Pr};
+use crate::tui::app::{self, Flow, Screen};
+use crate::tui::kit::{self, Command, Confirm, Input, InputEvent, Palette, PaletteEvent, Scroll, Toast, footer, list};
+use crate::tui::{first_lines, theme};
 
 /// Pull requests, loaded from gh in the background.
 enum Prs {

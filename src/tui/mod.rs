@@ -1,16 +1,14 @@
 //! Full-screen views built on ratatui. Only started by interactive commands.
+//!
+//! `app` and `term` run a screen, `kit` holds generic widgets, `panels` the git-aware
+//! pieces several screens share, `screens` one module per command.
 
 mod app;
-pub mod branches;
-mod diffview;
 mod kit;
-pub mod log;
-pub mod rebase;
-pub mod stash;
-mod stash_new;
+mod panels;
+pub mod screens;
 mod term;
 pub mod theme;
-pub mod worktree;
 
 /// First two non-empty lines of git's output, for a toast.
 pub(crate) fn first_lines(s: &str) -> String {

@@ -11,12 +11,12 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use super::{kit, theme};
 use crate::fmt::change_letter;
 use crate::git::diff::Size;
 pub use crate::git::stash::Mode;
 use crate::git::stash::Push;
 use crate::git::status::{ChangeKind, Status};
+use crate::tui::{kit, theme};
 
 const STAGED_ONLY_ALL: &str = "This mode takes every file: git can't pick single files here. Press e to pick.";
 

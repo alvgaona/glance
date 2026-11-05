@@ -10,32 +10,44 @@ use ratatui::Frame;
 use super::kit::Toast;
 use super::term::{enter, leave};
 
-/// What a screen wants after a key.
-pub(crate) enum Flow<T> {
+/// What a screen wants after a key or an effect.
+pub(crate) enum Flow<T, E> {
     Stay,
     /// Close the screen with this answer.
     Done(T),
+    /// Do this side effect (in [`Screen::apply`]) before drawing again.
+    Run(E),
     /// Give the terminal back for a moment (for commands that may prompt), then
     /// call [`Screen::outside`] and come back.
     Outside,
 }
 
-impl<T> From<Option<T>> for Flow<T> {
+impl<T, E> From<Option<T>> for Flow<T, E> {
     fn from(o: Option<T>) -> Self {
         o.map_or(Flow::Stay, Flow::Done)
     }
 }
 
+/// A full screen. Keys change its state only; everything that touches the world (git,
+/// other programs, the clipboard) comes back as an effect, which [`Screen::apply`] does.
 pub(crate) trait Screen {
     type Out;
+    /// What this screen does outside its own state.
+    type Effect;
 
     /// How long to wait for input before drawing again (background work shows up then).
     const WAKE: Duration = Duration::from_millis(200);
 
     fn draw(&mut self, f: &mut Frame);
-    fn key(&mut self, k: KeyEvent) -> Result<Flow<Self::Out>>;
+    fn key(&mut self, k: KeyEvent) -> Result<Flow<Self::Out, Self::Effect>>;
     fn mouse(&mut self, _m: MouseEvent) {}
-    /// Background results to pick up before each draw.
+    /// The one place a screen touches the world. May ask for another effect.
+    fn apply(&mut self, e: Self::Effect) -> Result<Flow<Self::Out, Self::Effect>>;
+    /// True when `e` needs the normal terminal: git may prompt, or an editor opens.
+    fn in_terminal(_e: &Self::Effect) -> bool {
+        false
+    }
+    /// Background results and lazy loads, before each draw.
     fn tick(&mut self) -> Result<()> {
         Ok(())
     }
@@ -58,7 +70,7 @@ pub(crate) fn run<S: Screen>(screen: &mut S) -> Result<S::Out> {
             if !event::poll(S::WAKE)? {
                 continue;
             }
-            let flow = match event::read()? {
+            let mut flow = match event::read()? {
                 Event::Key(k) if k.kind == KeyEventKind::Press => screen.key(k)?,
                 Event::Mouse(m) => {
                     screen.mouse(m);
@@ -66,15 +78,27 @@ pub(crate) fn run<S: Screen>(screen: &mut S) -> Result<S::Out> {
                 }
                 _ => Flow::Stay,
             };
-            match flow {
-                Flow::Stay => {}
-                Flow::Done(out) => return Ok(out),
-                Flow::Outside => {
-                    leave();
-                    let done = screen.outside();
-                    terminal = enter();
-                    done?;
-                }
+            // Effects may ask for more effects (a write, then a reload).
+            loop {
+                flow = match flow {
+                    Flow::Stay => break,
+                    Flow::Done(out) => return Ok(out),
+                    Flow::Run(e) if S::in_terminal(&e) => {
+                        leave();
+                        let next = screen.apply(e);
+                        // Back to the full screen before any error goes up.
+                        terminal = enter();
+                        next?
+                    }
+                    Flow::Run(e) => screen.apply(e)?,
+                    Flow::Outside => {
+                        leave();
+                        let done = screen.outside();
+                        terminal = enter();
+                        done?;
+                        Flow::Stay
+                    }
+                };
             }
         }
     })();

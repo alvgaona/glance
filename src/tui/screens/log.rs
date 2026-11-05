@@ -52,11 +52,6 @@ enum Item {
     Commit(usize),
 }
 
-/// Rendered details of one commit, cached by id.
-struct Detail {
-    lines: Vec<Line<'static>>,
-}
-
 struct App<'r> {
     repo: &'r gix::Repository,
     opts: Options,
@@ -70,7 +65,8 @@ struct App<'r> {
     searching: bool,
     details: bool,
     detail_scroll: Scroll,
-    cache: HashMap<gix::ObjectId, Rc<Detail>>,
+    /// Rendered details by commit id, filled in `tick`.
+    cache: HashMap<gix::ObjectId, Rc<Vec<Line<'static>>>>,
     toast: Option<Toast>,
     palette: Option<Palette<Cmd>>,
     list_area: Rect,
@@ -79,8 +75,9 @@ struct App<'r> {
     branch: String,
 }
 
-enum Outcome {
-    Done(Option<String>),
+enum Effect {
+    Copy(String),
+    ToggleAll,
 }
 
 /// Returns the chosen commit's short id, or `None` if the user quit.
@@ -111,12 +108,34 @@ pub fn run(repo: &gix::Repository, opts: Options) -> Result<Option<String>> {
 
 impl Screen for App<'_> {
     type Out = Option<String>;
+    type Effect = Effect;
 
     fn draw(&mut self, f: &mut Frame) {
         draw(f, self)
     }
-    fn key(&mut self, k: KeyEvent) -> Result<Flow<Self::Out>> {
-        Ok(self.on_key(k)?.map(|Outcome::Done(id)| id).into())
+    fn apply(&mut self, e: Effect) -> Result<Flow<Self::Out, Effect>> {
+        match e {
+            Effect::Copy(id) => {
+                crate::clipboard::copy(&id);
+                self.toast = Some(Toast::new(format!("Copied {id}"), theme::ACCENT));
+            }
+            Effect::ToggleAll => {
+                self.opts.all = !self.opts.all;
+                self.load()?;
+                let what = if self.opts.all { "All branches".to_string() } else { format!("Only {}", self.branch) };
+                self.toast = Some(Toast::new(what, theme::ACCENT));
+            }
+        }
+        Ok(Flow::Stay)
+    }
+    fn key(&mut self, k: KeyEvent) -> Result<Flow<Self::Out, Effect>> {
+        Ok(self.on_key(k))
+    }
+    fn tick(&mut self) -> Result<()> {
+        if self.details {
+            self.load_detail();
+        }
+        Ok(())
     }
     fn mouse(&mut self, m: MouseEvent) {
         self.on_mouse(m)
@@ -137,16 +156,10 @@ impl App<'_> {
     fn rebuild(&mut self) {
         let keep = self.selected_commit().map(|c| c.oid);
         let q = self.query.to_lowercase();
-        self.visible.clear();
-        for (i, c) in self.commits.iter().enumerate() {
-            if !q.is_empty() && !matches(c, &q) {
-                continue;
-            }
-            if !c.refs.is_empty() {
-                self.visible.push(Item::Label(i));
-            }
-            self.visible.push(Item::Commit(i));
-        }
+        self.visible = (self.commits.iter().enumerate())
+            .filter(|(_, c)| q.is_empty() || matches(c, &q))
+            .flat_map(|(i, c)| (!c.refs.is_empty()).then_some(Item::Label(i)).into_iter().chain([Item::Commit(i)]))
+            .collect();
         let first = self.visible.iter().position(|it| matches!(it, Item::Commit(_)));
         self.selected = keep
             .and_then(|oid| {
@@ -206,10 +219,10 @@ impl App<'_> {
         c
     }
 
-    fn on_key(&mut self, k: KeyEvent) -> Result<Option<Outcome>> {
+    fn on_key(&mut self, k: KeyEvent) -> Flow<Option<String>, Effect> {
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         if ctrl && k.code == KeyCode::Char('c') {
-            return Ok(Some(Outcome::Done(None)));
+            return Flow::Done(None);
         }
         if let Some(p) = &mut self.palette {
             match p.key(k) {
@@ -220,7 +233,7 @@ impl App<'_> {
                 }
                 None => {}
             }
-            return Ok(None);
+            return Flow::Stay;
         }
 
         if self.searching {
@@ -243,44 +256,44 @@ impl App<'_> {
                 }
                 _ => {}
             }
-            return Ok(None);
+            return Flow::Stay;
         }
 
         if self.detail_scroll.key(k, self.detail_area.height) {
-            return Ok(None);
+            return Flow::Stay;
         }
         let cmd = match k.code {
             KeyCode::Char('p') if ctrl => {
                 self.palette = Some(Palette::new(self.commands()));
-                return Ok(None);
+                return Flow::Stay;
             }
             KeyCode::Char(':') => {
                 self.palette = Some(Palette::new(self.commands()));
-                return Ok(None);
+                return Flow::Stay;
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 self.step(1);
-                return Ok(None);
+                return Flow::Stay;
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 self.step(-1);
-                return Ok(None);
+                return Flow::Stay;
             }
             KeyCode::PageDown => {
                 self.step(15);
-                return Ok(None);
+                return Flow::Stay;
             }
             KeyCode::PageUp => {
                 self.step(-15);
-                return Ok(None);
+                return Flow::Stay;
             }
             KeyCode::Home | KeyCode::Char('g') => {
                 self.step(-(self.visible.len() as isize));
-                return Ok(None);
+                return Flow::Stay;
             }
             KeyCode::End | KeyCode::Char('G') => {
                 self.step(self.visible.len() as isize);
-                return Ok(None);
+                return Flow::Stay;
             }
             KeyCode::Char('/') => Cmd::Search,
             KeyCode::Char('y') if self.opts.mode == Mode::Browse => Cmd::Copy,
@@ -290,37 +303,28 @@ impl App<'_> {
             KeyCode::Esc if !self.query.is_empty() => {
                 self.query.clear();
                 self.rebuild();
-                return Ok(None);
+                return Flow::Stay;
             }
             KeyCode::Esc | KeyCode::Char('q') => Cmd::Quit,
-            _ => return Ok(None),
+            _ => return Flow::Stay,
         };
         self.run(cmd)
     }
 
-    fn run(&mut self, cmd: Cmd) -> Result<Option<Outcome>> {
+    fn run(&mut self, cmd: Cmd) -> Flow<Option<String>, Effect> {
         match cmd {
             Cmd::Search => self.searching = true,
             Cmd::Copy => {
                 if let Some(c) = self.selected_commit() {
-                    let id = c.id.clone();
-                    crate::clipboard::copy(&id);
-                    self.toast = Some(Toast::new(format!("Copied {id}"), theme::ACCENT));
+                    return Flow::Run(Effect::Copy(c.id.clone()));
                 }
             }
-            Cmd::ToggleAll => {
-                self.opts.all = !self.opts.all;
-                self.load()?;
-                let what = if self.opts.all { "All branches".to_string() } else { format!("Only {}", self.branch) };
-                self.toast = Some(Toast::new(what, theme::ACCENT));
-            }
+            Cmd::ToggleAll => return Flow::Run(Effect::ToggleAll),
             Cmd::Details => self.details = !self.details,
-            Cmd::Choose => {
-                return Ok(Some(Outcome::Done(self.selected_commit().map(|c| c.id.clone()))));
-            }
-            Cmd::Quit => return Ok(Some(Outcome::Done(None))),
+            Cmd::Choose => return Flow::Done(self.selected_commit().map(|c| c.id.clone())),
+            Cmd::Quit => return Flow::Done(None),
         }
-        Ok(None)
+        Flow::Stay
     }
 
     fn on_mouse(&mut self, m: MouseEvent) {
@@ -348,19 +352,21 @@ impl App<'_> {
         }
     }
 
-    fn detail(&mut self) -> Option<Rc<Detail>> {
-        let c = self.selected_commit()?;
-        if let Some(d) = self.cache.get(&c.oid) {
-            return Some(d.clone());
+    /// Reads the selected commit's details into the cache, unless they're there.
+    fn load_detail(&mut self) {
+        let Some(oid) = self.selected_commit().map(|c| c.oid) else { return };
+        if self.cache.contains_key(&oid) {
+            return;
         }
-        let oid = c.oid;
         let lines = match commit::read(self.repo, &oid.to_string()) {
             Ok(s) => detail_lines(self.repo, &s),
             Err(e) => vec![Line::styled(format!("Couldn't read this commit: {e}"), theme::muted())],
         };
-        let d = Rc::new(Detail { lines });
-        self.cache.insert(oid, d.clone());
-        Some(d)
+        self.cache.insert(oid, Rc::new(lines));
+    }
+
+    fn detail(&self) -> Option<Rc<Vec<Line<'static>>>> {
+        self.cache.get(&self.selected_commit()?.oid).cloned()
     }
 }
 
@@ -536,8 +542,8 @@ fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
         f.render_widget(block, area);
         return;
     };
-    app.detail_scroll.fit(d.lines.len(), inner_h);
-    f.render_widget(Paragraph::new(d.lines.clone()).scroll((app.detail_scroll.top(), 0)).block(block), area);
+    app.detail_scroll.fit(d.len(), inner_h);
+    f.render_widget(Paragraph::new(d.to_vec()).scroll((app.detail_scroll.top(), 0)).block(block), area);
     app.detail_scroll.draw_more(f, area);
 }
 
@@ -551,13 +557,8 @@ fn detail_lines(repo: &gix::Repository, s: &Details) -> Vec<Line<'static>> {
         Span::styled(relative_time(s.time, now()), theme::muted()),
     ])];
     if !s.refs.is_empty() {
-        let mut spans = Vec::new();
-        for r in &s.refs {
-            spans.push(ref_pill(r));
-            spans.push(Span::raw(" "));
-        }
         out.push(Line::raw(""));
-        out.push(Line::from(spans));
+        out.push(Line::from(s.refs.iter().flat_map(|r| [ref_pill(r), Span::raw(" ")]).collect::<Vec<_>>()));
     }
     if s.parents.len() > 1 {
         out.push(Line::styled(format!("merge of {}", s.parents.join(" + ")), theme::faint()));

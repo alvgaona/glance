@@ -132,11 +132,15 @@ pub fn run(repo: &gix::Repository) -> Result<()> {
 
 impl Screen for App<'_> {
     type Out = ();
+    type Effect = std::convert::Infallible;
 
     fn draw(&mut self, f: &mut Frame) {
         draw(f, self)
     }
-    fn key(&mut self, k: KeyEvent) -> Result<Flow<()>> {
+    fn apply(&mut self, e: Self::Effect) -> Result<Flow<Self::Out, Self::Effect>> {
+        match e {}
+    }
+    fn key(&mut self, k: KeyEvent) -> Result<Flow<(), Self::Effect>> {
         Ok(if self.on_key(k)? { Flow::Done(()) } else { Flow::Stay })
     }
     fn mouse(&mut self, m: MouseEvent) {

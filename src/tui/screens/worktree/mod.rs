@@ -132,13 +132,17 @@ pub fn run(repo: &gix::Repository) -> Result<Option<PathBuf>> {
 
 impl Screen for App<'_> {
     type Out = Option<PathBuf>;
+    type Effect = std::convert::Infallible;
     // Folder states arrive one by one; show them soon.
     const WAKE: Duration = Duration::from_millis(150);
 
     fn draw(&mut self, f: &mut Frame) {
         draw(f, self)
     }
-    fn key(&mut self, k: KeyEvent) -> Result<Flow<Self::Out>> {
+    fn apply(&mut self, e: Self::Effect) -> Result<Flow<Self::Out, Self::Effect>> {
+        match e {}
+    }
+    fn key(&mut self, k: KeyEvent) -> Result<Flow<Self::Out, Self::Effect>> {
         Ok(self.on_key(k)?.into())
     }
     fn mouse(&mut self, m: MouseEvent) {

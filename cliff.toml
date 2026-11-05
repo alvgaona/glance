@@ -42,4 +42,6 @@ commit_parsers = [
   { message = "^(chore|style|revert)", group = "<!-- 7 -->Other" },
 ]
 tag_pattern = "v[0-9].*"
+# A stable release lists everything since the last stable one.
+ignore_tags = "-rc"
 sort_commits = "newest"

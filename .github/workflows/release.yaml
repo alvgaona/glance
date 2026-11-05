@@ -69,17 +69,20 @@ jobs:
         with:
           fetch-depth: 0
       - uses: orhun/git-cliff-action@v4
-        id: notes
         with:
           config: cliff.toml
-          args: --latest --strip header
+          args: --strip header
+        env:
+          OUTPUT: changelog.md
+      # The newest section, without its version heading.
+      - run: awk '/^## /{n++; next} n==1' changelog.md > notes.md
       - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
       - uses: softprops/action-gh-release@v3
         with:
-          body: ${{ steps.notes.outputs.content }}
+          body_path: notes.md
           files: dist/*
           prerelease: ${{ contains(github.ref_name, '-') }}
 

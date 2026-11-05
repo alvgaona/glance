@@ -37,6 +37,7 @@ pub(super) fn draw(f: &mut Frame, app: &mut App) {
     if let Some((c, _)) = &app.confirm {
         c.draw(f, full);
     }
+    app.draw_commit(f, full);
     if let Some(t) = &app.toast {
         t.draw(f, full);
     }
@@ -208,6 +209,7 @@ fn draw_footer(f: &mut Frame, app: &mut App, area: Rect) {
         vec![
             ("space", toggle),
             ("enter", "hunks"),
+            ("c", "commit"),
             ("a", "stage all"),
             ("u", "unstage all"),
             ("d", "discard"),

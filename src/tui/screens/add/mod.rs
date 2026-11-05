@@ -2,10 +2,12 @@
 //! with the diff of the one under the cursor. Stage, unstage and discard whole files.
 //! Writes go through `git::stage`.
 
+mod commit;
 mod draw;
 mod hunks;
 mod keys;
 
+use commit::{CommitBox, Pending};
 use draw::draw;
 use hunks::View;
 
@@ -31,6 +33,8 @@ use crate::tui::{first_lines, theme};
 enum Cmd {
     Toggle,
     Hunks,
+    Commit,
+    Amend,
     StageAll,
     UnstageAll,
     Discard,
@@ -151,6 +155,11 @@ struct App {
     toast: Option<Toast>,
     palette: Option<Palette<Cmd>>,
     confirm: Option<(Confirm, Ask)>,
+    /// The open commit box, and what was typed in it last time it closed.
+    commit: Option<CommitBox>,
+    draft: Option<String>,
+    /// A commit to run once the screen steps aside.
+    pending: Option<Pending>,
     repo_name: String,
 }
 
@@ -172,6 +181,9 @@ pub fn run(repo: gix::Repository) -> Result<()> {
         toast: None,
         palette: None,
         confirm: None,
+        commit: None,
+        draft: None,
+        pending: None,
     };
     app.reload()?;
     // Start on the first file not staged yet: that's usually the next thing to look at.
@@ -186,7 +198,13 @@ impl Screen for App {
         draw(f, self)
     }
     fn key(&mut self, k: KeyEvent) -> Result<Flow<()>> {
-        Ok(if self.on_key(k)? { Flow::Done(()) } else { Flow::Stay })
+        Ok(if self.on_key(k)? {
+            Flow::Done(())
+        } else if self.pending.is_some() {
+            Flow::Outside
+        } else {
+            Flow::Stay
+        })
     }
     fn mouse(&mut self, m: MouseEvent) {
         self.on_mouse(m)
@@ -194,12 +212,17 @@ impl Screen for App {
     fn toast(&mut self) -> &mut Option<Toast> {
         &mut self.toast
     }
+    fn outside(&mut self) -> Result<()> {
+        self.commit_outside()
+    }
 }
 
 fn commands() -> Vec<Command<Cmd>> {
     vec![
         Command { label: "Stage or unstage file", keys: "space", action: Cmd::Toggle },
         Command { label: "Stage hunk by hunk", keys: "enter", action: Cmd::Hunks },
+        Command { label: "Commit what's staged", keys: "c", action: Cmd::Commit },
+        Command { label: "Amend the last commit", keys: "C", action: Cmd::Amend },
         Command { label: "Stage everything", keys: "a", action: Cmd::StageAll },
         Command { label: "Unstage everything", keys: "u", action: Cmd::UnstageAll },
         Command { label: "Discard changes to file", keys: "d", action: Cmd::Discard },
@@ -385,7 +408,7 @@ impl App {
     }
 
     fn on_mouse(&mut self, m: MouseEvent) {
-        if self.palette.is_some() || self.confirm.is_some() {
+        if self.palette.is_some() || self.confirm.is_some() || self.commit.is_some() {
             return;
         }
         let in_details = list::inside(self.detail_area, &m);

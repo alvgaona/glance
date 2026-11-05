@@ -48,6 +48,22 @@ pub fn run_with_input(bin: &str, args: &[String], dir: Option<&Path>, input: &[u
     })
 }
 
+/// Runs `bin args…` in `dir` on the terminal (an editor or a passphrase prompt can use
+/// it), collecting only stderr, where git explains what went wrong.
+pub fn run_on_terminal(bin: &str, args: &[String], dir: Option<&Path>) -> std::io::Result<Output> {
+    let mut cmd = Command::new(bin);
+    cmd.args(args).stdin(Stdio::inherit()).stdout(Stdio::inherit()).stderr(Stdio::piped());
+    if let Some(d) = dir {
+        cmd.current_dir(d);
+    }
+    let out = cmd.spawn()?.wait_with_output()?;
+    Ok(Output {
+        ok: out.status.success(),
+        stdout: String::new(),
+        stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+    })
+}
+
 /// Runs `bin args…` in `dir` (or here), waits, and collects its output.
 /// stdin is inherited so ssh and git can still ask on the terminal.
 pub fn run(bin: &str, args: &[String], dir: Option<&Path>) -> std::io::Result<Output> {

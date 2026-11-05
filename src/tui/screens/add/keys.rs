@@ -9,6 +9,10 @@ impl App {
         if ctrl && k.code == KeyCode::Char('c') {
             return Ok(true);
         }
+        if self.commit.is_some() {
+            self.commit_key(k)?;
+            return Ok(false);
+        }
         if self.confirm.is_some() {
             match k.code {
                 KeyCode::Enter | KeyCode::Char('y') => {
@@ -50,6 +54,8 @@ impl App {
                 KeyCode::Char('p') if ctrl => self.palette = Some(Palette::new(commands())),
                 KeyCode::Char(':') => self.palette = Some(Palette::new(commands())),
                 KeyCode::Char('y') => return self.run(Cmd::Copy),
+                KeyCode::Char('c') => self.open_commit(false),
+                KeyCode::Char('C') => self.open_commit(true),
                 _ => {}
             }
             return Ok(false);
@@ -86,6 +92,8 @@ impl App {
             KeyCode::Char('u') => Cmd::UnstageAll,
             KeyCode::Char('d') => Cmd::Discard,
             KeyCode::Char('y') => Cmd::Copy,
+            KeyCode::Char('c') => Cmd::Commit,
+            KeyCode::Char('C') => Cmd::Amend,
             KeyCode::Esc | KeyCode::Char('q') => Cmd::Quit,
             _ => return Ok(false),
         };
@@ -98,6 +106,8 @@ impl App {
             Cmd::Reload => self.reload()?,
             Cmd::Toggle => self.toggle()?,
             Cmd::Hunks => self.enter_hunks(),
+            Cmd::Commit => self.open_commit(false),
+            Cmd::Amend => self.open_commit(true),
             Cmd::Discard => self.ask_discard(),
             Cmd::StageAll => {
                 let n = self.entries.iter().filter(|e| e.group != Group::Staged).count();

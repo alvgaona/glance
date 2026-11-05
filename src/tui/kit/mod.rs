@@ -9,6 +9,7 @@ pub mod list;
 mod palette;
 mod scroll;
 mod text;
+mod textarea;
 mod toast;
 
 pub use dialog::Confirm;
@@ -17,4 +18,5 @@ pub use layout::{centered, panel};
 pub use palette::{Command, Palette, PaletteEvent};
 pub use scroll::Scroll;
 pub use text::{pill, truncate, wrap};
+pub use textarea::TextArea;
 pub use toast::Toast;

@@ -3,33 +3,35 @@
 use super::*;
 
 impl App<'_> {
-    /// Returns `Some` to quit, with the folder picked (if any).
-    pub(super) fn on_key(&mut self, k: KeyEvent) -> Result<Option<Option<PathBuf>>> {
+    pub(super) fn on_key(&mut self, k: KeyEvent) -> Flow<Option<PathBuf>, Effect> {
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         if let Some(input) = &mut self.input {
             match input.key(k) {
                 Some(InputEvent::Cancel) => self.input = None,
                 Some(InputEvent::Done(text)) => {
                     self.input = None;
-                    self.create(text.trim())?;
+                    let branch = text.trim();
+                    if !branch.is_empty() {
+                        return Flow::Run(Effect::Create(branch.to_string()));
+                    }
                 }
                 None => {}
             }
-            return Ok(None);
+            return Flow::Stay;
         }
         if ctrl && k.code == KeyCode::Char('c') {
-            return Ok(Some(None));
+            return Flow::Done(None);
         }
         if self.confirm.is_some() {
             match k.code {
                 KeyCode::Enter | KeyCode::Char('y') => {
-                    let (_, ask) = self.confirm.take().unwrap();
-                    self.answer(ask)?;
+                    let (_, effect) = self.confirm.take().unwrap();
+                    return Flow::Run(effect);
                 }
                 KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('q') => self.confirm = None,
                 _ => {}
             }
-            return Ok(None);
+            return Flow::Stay;
         }
         if let Some(p) = &mut self.palette {
             match p.key(k) {
@@ -40,36 +42,36 @@ impl App<'_> {
                 }
                 None => {}
             }
-            return Ok(None);
+            return Flow::Stay;
         }
 
         if self.detail_scroll.key(k, self.detail_area.height) {
-            return Ok(None);
+            return Flow::Stay;
         }
         let cmd = match k.code {
             KeyCode::Char('p') if ctrl => {
                 self.palette = Some(Palette::new(commands()));
-                return Ok(None);
+                return Flow::Stay;
             }
             KeyCode::Char(':') => {
                 self.palette = Some(Palette::new(commands()));
-                return Ok(None);
+                return Flow::Stay;
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 self.step(1);
-                return Ok(None);
+                return Flow::Stay;
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 self.step(-1);
-                return Ok(None);
+                return Flow::Stay;
             }
             KeyCode::Home | KeyCode::Char('g') => {
                 self.step(isize::MIN / 2);
-                return Ok(None);
+                return Flow::Stay;
             }
             KeyCode::End | KeyCode::Char('G') => {
                 self.step(isize::MAX / 2);
-                return Ok(None);
+                return Flow::Stay;
             }
             KeyCode::Enter => Cmd::Go,
             KeyCode::Char('n') => Cmd::New,
@@ -79,39 +81,33 @@ impl App<'_> {
             KeyCode::Char('y') => Cmd::Copy,
             KeyCode::Char('r') => Cmd::Reload,
             KeyCode::Esc | KeyCode::Char('q') => Cmd::Quit,
-            _ => return Ok(None),
+            _ => return Flow::Stay,
         };
         self.run(cmd)
     }
 
-    fn run(&mut self, cmd: Cmd) -> Result<Option<Option<PathBuf>>> {
+    fn run(&mut self, cmd: Cmd) -> Flow<Option<PathBuf>, Effect> {
         match cmd {
-            Cmd::Quit => return Ok(Some(None)),
-            Cmd::Reload => self.reload(None)?,
+            Cmd::Quit => return Flow::Done(None),
+            Cmd::Reload => return Flow::Run(Effect::Reload),
             Cmd::Go => {
                 if let Some(r) = self.current() {
                     if matches!(r.load, Load::None) && !r.wt.bare {
                         self.toast = Some(Toast::new("Its folder is gone: p prunes it", theme::YELLOW));
                     } else {
-                        let path = r.wt.path.clone();
-                        // Printed on the way out; in a plain terminal it's copied too.
-                        if !self.captured {
-                            crate::clipboard::copy(&path.display().to_string());
-                        }
-                        return Ok(Some(Some(path)));
+                        return Flow::Run(Effect::Go(r.wt.path.clone()));
                     }
                 }
             }
             Cmd::Copy => {
                 if let Some(r) = self.current() {
-                    crate::clipboard::copy(&r.wt.path.display().to_string());
-                    self.toast = Some(Toast::new(format!("Copied {}", tilde(&r.wt.path)), theme::ACCENT));
+                    return Flow::Run(Effect::Copy(r.wt.path.clone()));
                 }
             }
             Cmd::New => {
                 let main = self.main().unwrap_or_default();
                 let name = main.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                let head = self.repo.head_id().map(|h| h.shorten_or_id().to_string()).unwrap_or_default();
+                let head = &self.head;
                 self.input = Some(
                     Input::new("New worktree", &self.repo_name, "", "Create")
                         .placeholder("branch name")
@@ -124,14 +120,10 @@ impl App<'_> {
             Cmd::Prune => self.ask_prune(),
             Cmd::Lock => {
                 if let Some(r) = self.current() {
-                    let on = r.wt.locked.is_none();
-                    let done = if on { "Locked" } else { "Unlocked" };
-                    let ran = worktree::lock(&r.wt.path, on);
-                    self.toast = Some(Toast::ran(&ran, format!("{done} {}", self.name(&r.wt.path))));
-                    self.reload(None)?;
+                    return Flow::Run(Effect::Lock { path: r.wt.path.clone(), on: r.wt.locked.is_none() });
                 }
             }
         }
-        Ok(None)
+        Flow::Stay
     }
 }

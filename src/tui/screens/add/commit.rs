@@ -11,13 +11,8 @@ pub(super) struct CommitBox {
     body: TextArea,
     on_body: bool,
     amend: bool,
-}
-
-/// A commit that runs with the terminal: signing may prompt, or the editor opens.
-pub(super) struct Pending {
-    message: String,
-    amend: bool,
-    edit: bool,
+    /// HEAD's short id, for the amend title.
+    head: String,
 }
 
 /// Past these, a summary gets long (git's own tools cut at 50 and 72).
@@ -25,7 +20,7 @@ const SUMMARY_SOFT: usize = 50;
 const SUMMARY_HARD: usize = 72;
 
 impl CommitBox {
-    fn new(message: &str, amend: bool) -> Self {
+    fn new(message: &str, amend: bool, head: String) -> Self {
         let (summary, body) = message.split_once('\n').unwrap_or((message, ""));
         CommitBox {
             summary: TextArea::new(summary.trim(), false),
@@ -33,6 +28,7 @@ impl CommitBox {
             // A prepared description is likelier to need the edit.
             on_body: false,
             amend,
+            head,
         }
     }
 
@@ -45,18 +41,22 @@ impl CommitBox {
 }
 
 impl App {
-    /// `c` (or `C` to amend): opens the box with the draft, git's merge message, or
-    /// HEAD's message.
-    pub(super) fn open_commit(&mut self, amend: bool) {
+    /// `c` (or `C` to amend): opens the box, unless there's nothing to commit.
+    pub(super) fn open_commit(&mut self, amend: bool) -> Option<Effect> {
         let staged = self.entries.iter().any(|e| e.group == Group::Staged);
         if !amend && !staged {
             self.toast = Some(Toast::new("Nothing staged yet: space stages a file", theme::YELLOW));
-            return;
+            return None;
         }
         if self.entries.iter().any(|e| e.group == Group::Conflicts) {
             self.toast = Some(Toast::new("Resolve the conflicts first", theme::YELLOW));
-            return;
+            return None;
         }
+        Some(Effect::OpenCommit { amend })
+    }
+
+    /// The box with the draft, git's merge message, or HEAD's message.
+    pub(super) fn open_commit_box(&mut self, amend: bool) {
         let message = if amend {
             match commit::last_message(&self.repo) {
                 Some(m) => m,
@@ -68,11 +68,12 @@ impl App {
         } else {
             self.draft.clone().or_else(|| commit::prepared_message(&self.repo)).unwrap_or_default()
         };
-        self.commit = Some(CommitBox::new(&message, amend));
+        let head = self.repo.head_id().map(|h| h.shorten_or_id().to_string()).unwrap_or_default();
+        self.commit = Some(CommitBox::new(&message, amend, head));
     }
 
-    pub(super) fn commit_key(&mut self, k: KeyEvent) -> Result<()> {
-        let Some(b) = &mut self.commit else { return Ok(()) };
+    pub(super) fn commit_key(&mut self, k: KeyEvent) -> Option<Effect> {
+        let b = self.commit.as_mut()?;
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         let alt = k.modifiers.contains(KeyModifiers::ALT);
         match k.code {
@@ -85,51 +86,49 @@ impl App {
             }
             KeyCode::Tab | KeyCode::BackTab => b.on_body = !b.on_body,
             KeyCode::Down if !b.on_body => b.on_body = true,
-            KeyCode::Enter if !b.on_body && !ctrl && !alt => self.submit(false)?,
-            KeyCode::Enter if alt || ctrl => self.submit(false)?,
-            KeyCode::Char('s') if ctrl => self.submit(false)?,
-            KeyCode::Char('o') if ctrl => self.submit(true)?,
+            KeyCode::Enter if !b.on_body && !ctrl && !alt => return self.submit(false),
+            KeyCode::Enter if alt || ctrl => return self.submit(false),
+            KeyCode::Char('s') if ctrl => return self.submit(false),
+            KeyCode::Char('o') if ctrl => return self.submit(true),
             _ => {
                 let field = if b.on_body { &mut b.body } else { &mut b.summary };
                 field.key(k);
             }
         }
-        Ok(())
+        None
     }
 
-    /// Commits now, or (with `edit`, or when commits are signed) once the screen has
-    /// stepped aside.
-    fn submit(&mut self, edit: bool) -> Result<()> {
-        let Some(b) = &self.commit else { return Ok(()) };
+    /// The commit to run, once there's a summary (or the editor will ask for one).
+    fn submit(&mut self, edit: bool) -> Option<Effect> {
+        let b = self.commit.as_ref()?;
         if !edit && b.summary.is_empty() {
             self.toast = Some(Toast::new("Write a summary first (or ctrl+o for your editor)", theme::YELLOW));
-            return Ok(());
+            return None;
         }
-        let (message, amend) = (b.message(), b.amend);
+        Some(Effect::Commit { message: b.message(), amend: b.amend, edit })
+    }
+
+    /// Commits now, or (with `edit`, or when commits are signed) on the terminal.
+    pub(super) fn commit_now(&mut self, message: String, amend: bool, edit: bool) -> Result<Flow<(), Effect>> {
         if edit || commit::signs(&self.repo) {
             self.draft = (!amend).then(|| message.clone());
             self.commit = None;
-            self.pending = Some(Pending { message, amend, edit });
-            return Ok(());
+            return Ok(Flow::Run(Effect::CommitOnTerminal { message, amend, edit }));
         }
         match commit::create(&self.repo, &message, amend) {
             Ok(_) => {
                 self.commit = None;
-                self.committed(amend)
+                self.committed(amend)?;
             }
             // The box stays open with the message, so a hook's complaint can be fixed.
-            Err(out) => {
-                self.toast = Some(Toast::new(first_lines(&out), theme::RED));
-                Ok(())
-            }
+            Err(out) => self.toast = Some(Toast::new(first_lines(&out), theme::RED)),
         }
+        Ok(Flow::Stay)
     }
 
-    /// Runs a pending commit on the terminal (from `Screen::outside`).
-    pub(super) fn commit_outside(&mut self) -> Result<()> {
-        let Some(p) = self.pending.take() else { return Ok(()) };
-        let Err(out) = commit::create_on_terminal(&self.repo, &p.message, p.amend, p.edit) else {
-            return self.committed(p.amend);
+    pub(super) fn commit_on_terminal(&mut self, message: &str, amend: bool, edit: bool) -> Result<()> {
+        let Err(out) = commit::create_on_terminal(&self.repo, message, amend, edit) else {
+            return self.committed(amend);
         };
         let why = if out.is_empty() { "The commit was cancelled".to_string() } else { first_lines(&out) };
         self.toast = Some(Toast::new(why, theme::RED));
@@ -165,7 +164,6 @@ impl App {
         // HEAD is on its upstream already: amending it means a force push.
         let pushed =
             self.st.upstream.as_ref().filter(|u| u.ahead == 0 && !u.name.ends_with("(gone)")).map(|u| u.name.clone());
-        let head = self.repo.head_id().map(|h| h.shorten_or_id().to_string()).unwrap_or_default();
         let Some(b) = &mut self.commit else { return };
 
         let body_rows = full.height.saturating_sub(16).clamp(2, 8);
@@ -196,7 +194,7 @@ impl App {
         let mut at = areas.iter().copied();
         let mut next = || at.next().unwrap_or_default();
 
-        let title = if b.amend { format!("Amend {head}") } else { "Commit".to_string() };
+        let title = if b.amend { format!("Amend {}", b.head) } else { "Commit".to_string() };
         let mut spans = vec![Span::styled(title, theme::bold())];
         if let Some(br) = &branch {
             spans.push(Span::styled(format!(" on {br}"), theme::muted()));

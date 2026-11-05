@@ -300,8 +300,8 @@ impl Screen for App<'_> {
     fn in_terminal(e: &Effect) -> bool {
         matches!(e, Effect::InTerminal(_))
     }
-    fn key(&mut self, k: KeyEvent) -> Result<Flow<(), Effect>> {
-        Ok(self.on_key(k))
+    fn key(&mut self, k: KeyEvent) -> Flow<(), Effect> {
+        self.on_key(k)
     }
     fn mouse(&mut self, m: MouseEvent) {
         self.on_mouse(m)

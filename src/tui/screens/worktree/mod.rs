@@ -187,8 +187,8 @@ impl Screen for App<'_> {
         }
         Ok(Flow::Stay)
     }
-    fn key(&mut self, k: KeyEvent) -> Result<Flow<Self::Out, Effect>> {
-        Ok(self.on_key(k))
+    fn key(&mut self, k: KeyEvent) -> Flow<Self::Out, Effect> {
+        self.on_key(k)
     }
     fn mouse(&mut self, m: MouseEvent) {
         self.on_mouse(m)

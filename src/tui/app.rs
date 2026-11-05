@@ -17,9 +17,6 @@ pub(crate) enum Flow<T, E> {
     Done(T),
     /// Do this side effect (in [`Screen::apply`]) before drawing again.
     Run(E),
-    /// Give the terminal back for a moment (for commands that may prompt), then
-    /// call [`Screen::outside`] and come back.
-    Outside,
 }
 
 impl<T, E> From<Option<T>> for Flow<T, E> {
@@ -39,7 +36,7 @@ pub(crate) trait Screen {
     const WAKE: Duration = Duration::from_millis(200);
 
     fn draw(&mut self, f: &mut Frame);
-    fn key(&mut self, k: KeyEvent) -> Result<Flow<Self::Out, Self::Effect>>;
+    fn key(&mut self, k: KeyEvent) -> Flow<Self::Out, Self::Effect>;
     fn mouse(&mut self, _m: MouseEvent) {}
     /// The one place a screen touches the world. May ask for another effect.
     fn apply(&mut self, e: Self::Effect) -> Result<Flow<Self::Out, Self::Effect>>;
@@ -52,10 +49,6 @@ pub(crate) trait Screen {
         Ok(())
     }
     fn toast(&mut self) -> &mut Option<Toast>;
-    /// Runs on the normal screen after [`Flow::Outside`].
-    fn outside(&mut self) -> Result<()> {
-        Ok(())
-    }
 }
 
 pub(crate) fn run<S: Screen>(screen: &mut S) -> Result<S::Out> {
@@ -71,7 +64,7 @@ pub(crate) fn run<S: Screen>(screen: &mut S) -> Result<S::Out> {
                 continue;
             }
             let mut flow = match event::read()? {
-                Event::Key(k) if k.kind == KeyEventKind::Press => screen.key(k)?,
+                Event::Key(k) if k.kind == KeyEventKind::Press => screen.key(k),
                 Event::Mouse(m) => {
                     screen.mouse(m);
                     Flow::Stay
@@ -91,13 +84,6 @@ pub(crate) fn run<S: Screen>(screen: &mut S) -> Result<S::Out> {
                         next?
                     }
                     Flow::Run(e) => screen.apply(e)?,
-                    Flow::Outside => {
-                        leave();
-                        let done = screen.outside();
-                        terminal = enter();
-                        done?;
-                        Flow::Stay
-                    }
                 };
             }
         }

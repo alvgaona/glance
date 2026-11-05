@@ -111,8 +111,8 @@ impl Screen for App {
     fn apply(&mut self, e: Self::Effect) -> Result<Flow<Self::Out, Self::Effect>> {
         match e {}
     }
-    fn key(&mut self, k: KeyEvent) -> Result<Flow<Outcome, Self::Effect>> {
-        Ok(self.on_key(k).into())
+    fn key(&mut self, k: KeyEvent) -> Flow<Outcome, Self::Effect> {
+        self.on_key(k).into()
     }
     fn mouse(&mut self, m: MouseEvent) {
         self.on_mouse(m)

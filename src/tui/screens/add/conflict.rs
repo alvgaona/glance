@@ -97,37 +97,25 @@ fn colored(text: &str) -> Vec<Line<'static>> {
 impl App {
     /// Space on a conflict: keep the file (or remove it if both sides deleted it); a
     /// file with markers still in it asks first.
-    pub(super) fn resolve(&mut self) -> Result<()> {
-        let Some(e) = self.current() else { return Ok(()) };
-        let (path, c) = (e.path.clone(), e.conflict);
-        let paths = [path.clone()];
-        match c {
-            Some(c) if !c.ours && !c.theirs => {
-                let r = stage::remove(&self.repo, &paths);
-                self.done(r, format!("Removed {path}"))
+    pub(super) fn resolve(&mut self) -> Option<Effect> {
+        let e = self.current()?;
+        let path = e.path.clone();
+        let file = |op, msg: String| Some(Effect::File { op, path: path.clone(), msg });
+        match e.conflict {
+            Some(c) if !c.ours && !c.theirs => file(FileOp::Remove, format!("Removed {path}")),
+            Some(c) if !c.in_content() => file(FileOp::Add, format!("Kept {path}")),
+            _ if e.markers => {
+                let confirm = Confirm {
+                    title: format!("Mark {path} resolved?"),
+                    body: "It still has conflict markers (<<<<<<<).\nStaged as it is, they'd be committed too.".into(),
+                    yes: "Stage anyway".into(),
+                    no: "Cancel".into(),
+                    danger: true,
+                };
+                self.confirm = file(FileOp::Add, format!("Marked {path} resolved")).map(|e| (confirm, e));
+                None
             }
-            Some(c) if !c.in_content() => {
-                let r = stage::add(&self.repo, &paths);
-                self.done(r, format!("Kept {path}"))
-            }
-            _ if has_markers(&self.repo, &path) => {
-                self.confirm = Some((
-                    Confirm {
-                        title: format!("Mark {path} resolved?"),
-                        body: "It still has conflict markers (<<<<<<<).\nStaged as it is, they'd be committed too."
-                            .into(),
-                        yes: "Stage anyway".into(),
-                        no: "Cancel".into(),
-                        danger: true,
-                    },
-                    Ask::Resolve(path),
-                ));
-                Ok(())
-            }
-            _ => {
-                let r = stage::add(&self.repo, &paths);
-                self.done(r, format!("Marked {path} resolved"))
-            }
+            _ => file(FileOp::Add, format!("Marked {path} resolved")),
         }
     }
 
@@ -147,35 +135,40 @@ impl App {
             no: "Cancel".into(),
             danger: true,
         };
-        self.confirm = Some((confirm, Ask::Remove(path)));
+        self.confirm = Some((confirm, Effect::File { op: FileOp::Remove, msg: format!("Deleted {path}"), path }));
     }
 
-    /// `e`: the file in the editor, once the screen has stepped aside.
-    pub(super) fn ask_edit(&mut self) {
-        let Some(e) = self.current() else { return };
-        let on_disk = self.repo.workdir().is_some_and(|d| d.join(&e.path).is_file());
-        if !on_disk {
-            let why = if e.is_folder() { "That's a folder" } else { "It's not in the working tree" };
-            self.toast = Some(Toast::new(why, theme::YELLOW));
-            return;
+    /// `e`: the file in the editor.
+    pub(super) fn ask_edit(&self) -> Option<Effect> {
+        self.current().map(|e| Effect::Edit(e.path.clone()))
+    }
+
+    /// Opens the editor on the terminal, if the file is there.
+    pub(super) fn edit(&mut self, path: String) -> Flow<(), Effect> {
+        let on_disk = self.repo.workdir().is_some_and(|d| d.join(&path).is_file());
+        if on_disk {
+            return Flow::Run(Effect::EditOnTerminal(path));
         }
-        self.editing = Some(e.path.clone());
+        let why = if path.ends_with('/') { "That's a folder" } else { "It's not in the working tree" };
+        self.toast = Some(Toast::new(why, theme::YELLOW));
+        Flow::Stay
     }
 
-    /// Runs the editor (from `Screen::outside`), then shows the file as it is now.
-    pub(super) fn edit_outside(&mut self) -> Result<()> {
-        let Some(path) = self.editing.take() else { return Ok(()) };
-        let ran = crate::git::run::edit(&self.repo, &path);
-        let place = self.place();
-        match place {
+    /// Runs the editor, then shows the file as it is now.
+    pub(super) fn edit_on_terminal(&mut self, path: &str) -> Result<()> {
+        let ran = crate::git::run::edit(&self.repo, path);
+        match self.place() {
             Some((g, pos)) => self.reload_at(g, pos)?,
             None => self.reload()?,
         }
         self.focus = Focus::Files;
-        let conflict = self.current().filter(|e| e.path == path).and_then(|e| e.conflict);
+        let resolved = self
+            .current()
+            .filter(|e| e.path == path)
+            .is_some_and(|e| e.conflict.is_some_and(|c| c.in_content()) && !e.markers);
         self.toast = Some(if let Err(out) = ran {
             Toast::new(if out.is_empty() { "The editor failed".into() } else { first_lines(&out) }, theme::RED)
-        } else if conflict.is_some_and(|c| c.in_content()) && !has_markers(&self.repo, &path) {
+        } else if resolved {
             Toast::new("No markers left: space marks it resolved", theme::GREEN)
         } else {
             Toast::new(format!("Edited {path}"), theme::ACCENT)

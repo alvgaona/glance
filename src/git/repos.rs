@@ -16,22 +16,32 @@ pub struct RepoState {
     pub last_commit: Option<i64>,
 }
 
-/// Every git repo directly inside `dir`, sorted by name. Each is read on its own thread.
+/// Every git repo directly inside `dir`, sorted by name, read a few at a time in parallel.
 pub fn read(dir: &Path) -> Result<Vec<Repo>> {
     let mut paths: Vec<PathBuf> =
         std::fs::read_dir(dir)?.filter_map(|e| e.ok()).map(|e| e.path()).filter(|p| p.join(".git").exists()).collect();
     paths.sort();
 
-    let repos = std::thread::scope(|scope| {
-        let handles: Vec<_> = paths.iter().map(|path| scope.spawn(move || read_one(path))).collect();
-        handles
-            .into_iter()
-            .zip(&paths)
-            .map(|(h, path)| {
-                h.join().unwrap_or_else(|_| Repo { name: file_name(path), state: Err("crashed while reading".into()) })
+    // A few at a time: a folder of 500 repos shouldn't read 500 indexes at once.
+    let n = std::thread::available_parallelism().map_or(4, |n| n.get());
+    let repos = paths
+        .chunks(n)
+        .flat_map(|chunk| {
+            std::thread::scope(|scope| {
+                let handles: Vec<_> = chunk.iter().map(|path| scope.spawn(move || read_one(path))).collect();
+                handles
+                    .into_iter()
+                    .zip(chunk)
+                    .map(|(h, path)| {
+                        h.join().unwrap_or_else(|_| Repo {
+                            name: file_name(path),
+                            state: Err("crashed while reading".into()),
+                        })
+                    })
+                    .collect::<Vec<_>>()
             })
-            .collect()
-    });
+        })
+        .collect();
     Ok(repos)
 }
 

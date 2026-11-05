@@ -98,7 +98,7 @@ pub fn problem(lines: &[Line]) -> Option<String> {
     })?;
     first
         .melds()
-        .then(|| format!("the first commit can't be '{}': there's nothing above it to meld into", first.word()))
+        .then(|| format!("the oldest commit can't be '{}': there's no older commit to fold it into", first.word()))
 }
 
 pub fn read_file(path: &std::path::Path) -> Result<Vec<Line>> {

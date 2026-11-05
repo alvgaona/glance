@@ -27,6 +27,8 @@ struct App {
     info: HashMap<String, Option<Shown>>,
     message: Option<(String, Color)>,
     confirm_quit: bool,
+    /// `lines` and `original` are kept in display order; git wants oldest first.
+    newest_first: bool,
 }
 
 pub enum Outcome {
@@ -34,7 +36,11 @@ pub enum Outcome {
     Quit,
 }
 
-pub fn run(repo: &gix::Repository, lines: Vec<Todo>, header: String) -> Result<Outcome> {
+/// `lines` come in git's order (oldest first); the result is in git's order too.
+pub fn run(repo: &gix::Repository, mut lines: Vec<Todo>, header: String, newest_first: bool) -> Result<Outcome> {
+    if newest_first {
+        lines.reverse();
+    }
     // Commit details up front: rebases are short, and it keeps the UI simple.
     let info = lines
         .iter()
@@ -58,6 +64,7 @@ pub fn run(repo: &gix::Repository, lines: Vec<Todo>, header: String) -> Result<O
         info,
         message: None,
         confirm_quit: false,
+        newest_first,
     };
 
     let mut terminal = ratatui::init();
@@ -124,6 +131,12 @@ impl App {
                 self.message = Some(("Back to the original list.".into(), Color::DarkGray));
             }
             KeyCode::Tab => self.preview = !self.preview,
+            KeyCode::Char('o') => {
+                self.newest_first = !self.newest_first;
+                self.lines.reverse();
+                self.original.reverse();
+                self.state.select(Some(last - i));
+            }
 
             KeyCode::Char(c) => {
                 if let Some(a) = Action::ALL.into_iter().find(|a| a.key() == c)
@@ -147,11 +160,15 @@ impl App {
     }
 
     fn apply(&mut self) -> Option<Outcome> {
-        if let Some(p) = todo::problem(&self.lines) {
+        let mut lines = self.lines.clone();
+        if self.newest_first {
+            lines.reverse();
+        }
+        if let Some(p) = todo::problem(&lines) {
             self.message = Some((format!("Can't apply: {p}."), Color::Red));
             return None;
         }
-        Some(Outcome::Apply(self.lines.clone()))
+        Some(Outcome::Apply(lines))
     }
 }
 
@@ -159,9 +176,11 @@ fn draw(f: &mut Frame, app: &mut App) {
     let [header, body, footer] = Layout::vertical([Constraint::Length(1), Constraint::Min(3), Constraint::Length(1)]).areas(f.area());
 
     let changed = if app.lines != app.original { " · modified" } else { "" };
+    let order = if app.newest_first { " · newest first" } else { " · oldest first" };
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(format!(" {}", app.header), Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(order, Style::new().fg(Color::DarkGray)),
             Span::styled(changed, Style::new().fg(Color::Yellow)),
         ])),
         header,
@@ -185,7 +204,7 @@ fn draw(f: &mut Frame, app: &mut App) {
     let footer_line = match &app.message {
         Some((m, color)) => Line::styled(format!(" {m}"), Style::new().fg(*color)),
         None => Line::styled(
-            " j/k move · J/K reorder · p r e s f d action · u undo all · tab preview · w apply · q abort",
+            " j/k move · J/K reorder · p r e s f d action · u undo all · o order · tab preview · w apply · q abort",
             Style::new().fg(Color::DarkGray),
         ),
     };
@@ -202,6 +221,8 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
         })
         .collect();
     let size_w = sizes.iter().map(|s| s.chars().count()).max().unwrap_or(0);
+    // Squash/fixup fold into the older commit: above when oldest-first, below when newest-first.
+    let meld_mark = if app.newest_first { "↓ " } else { "↳ " };
 
     let items: Vec<ListItem> = app
         .lines
@@ -223,7 +244,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                     Span::raw(if minus.is_empty() { "" } else { " " }),
                     Span::styled(minus.to_string(), Style::new().fg(Color::Red)),
                     Span::raw(format!("{pad}  ")),
-                    Span::styled(if action.melds() { "↳ " } else { "" }, Style::new().fg(Color::Magenta)),
+                    Span::styled(if action.melds() { meld_mark } else { "" }, Style::new().fg(Color::Magenta)),
                     Span::styled(subject.clone(), subject_style),
                 ]))
             }

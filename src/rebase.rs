@@ -58,7 +58,7 @@ pub fn edit(file: &Path, keep_on_quit: bool) -> Result<()> {
     #[cfg(feature = "tui")]
     {
         use crate::tui::rebase::{Outcome, run};
-        match run(&repo, lines, header)? {
+        match run(&repo, lines, header, newest_first(&repo))? {
             Outcome::Apply(new) => std::fs::write(file, todo::render(&new))?,
             Outcome::Quit if keep_on_quit => {} // leave the file as git wrote it
             // An empty todo list makes git abort the rebase and leave the branch untouched.
@@ -74,6 +74,13 @@ pub fn edit(file: &Path, keep_on_quit: bool) -> Result<()> {
         let _ = (lines, header, keep_on_quit);
         anyhow::bail!("the rebase editor needs gg built with the `tui` feature")
     }
+}
+
+/// `git config gg.rebaseOrder oldest` shows git's order; anything else (or unset) shows newest first.
+#[cfg(feature = "tui")]
+fn newest_first(repo: &gix::Repository) -> bool {
+    let order = repo.config_snapshot().string("gg.rebaseOrder");
+    !order.is_some_and(|o| o.eq_ignore_ascii_case(b"oldest"))
 }
 
 /// "Rebase feat/x onto 1a2b3c4 · 5 commits"

@@ -51,6 +51,22 @@ Each module has one job, and the boundaries are kept on purpose:
   `tui/screens/<name>/` the screens, split into `mod.rs`, `keys.rs` and `draw.rs`.
   All screens run on the one event loop in `tui/app.rs`.
 
+Side effects live at the edges; everything else is plain data in and out:
+
+- **Only `process.rs` starts programs.** clippy bans `Command::new` elsewhere.
+- **Writes return `Ran`** (`Result<String, String>`, git's output or its error), so a
+  screen shows it with `Toast::ran`.
+- **Screens: keys change state, `apply` touches the world.** A key handler never does
+  I/O; it returns `Flow::Run(effect)`, and the screen's one `apply` runs it (git,
+  clipboard, browser). Effects that need the terminal (git may prompt, an editor opens)
+  say so in `in_terminal`. Lazy loads and background results go in `tick`; `draw` only
+  reads state. A confirm dialog stores the effect it confirms.
+- **No hidden shared state.** clippy bans `RefCell`, `Cell`, `Mutex` and `RwLock`;
+  background work sends its result over a channel.
+- **Iterator chains over loop-and-push**, except where a loop keeps running state,
+  exits early or uses `?`.
+- Printers build `lines()` and `print` writes them, so output is testable.
+
 The screens follow one style: full screen, borderless panels, a footer with the main
 keys, `ctrl+p` (or `:`) for every command, toasts for results, a dialog before
 anything that can't be undone.

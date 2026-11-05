@@ -15,7 +15,7 @@ use ratatui::{
 };
 
 use super::widgets::{self, Command, Palette, PaletteEvent, Toast};
-use super::{diffview, theme};
+use super::{diffview, enter, leave, theme};
 use crate::core::log::{Commit, RefLabel};
 use crate::core::show::{self, Shown};
 use crate::render::relative_time;
@@ -105,8 +105,7 @@ pub fn run(repo: &gix::Repository, opts: Options) -> Result<Option<String>> {
     };
     app.load()?;
 
-    let mut terminal = ratatui::init();
-    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture);
+    let mut terminal = enter();
     let result = (|| -> Result<Option<String>> {
         loop {
             if app.toast.as_ref().is_some_and(Toast::expired) {
@@ -127,8 +126,7 @@ pub fn run(repo: &gix::Repository, opts: Options) -> Result<Option<String>> {
             }
         }
     })();
-    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
-    ratatui::restore();
+    leave();
     result
 }
 

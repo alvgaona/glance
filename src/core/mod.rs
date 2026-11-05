@@ -21,6 +21,9 @@ pub mod status;
 // Only the TUI rebase editor edits the todo list.
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub mod todo;
+// Adding worktrees and their state are only used by the interactive view.
+#[cfg_attr(not(feature = "tui"), allow(dead_code))]
+pub mod worktree;
 
 use anyhow::{Context, Result};
 

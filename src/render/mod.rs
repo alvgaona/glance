@@ -5,6 +5,7 @@ pub mod log;
 pub mod repos;
 pub mod stash;
 pub mod status;
+pub mod worktree;
 
 use std::io::IsTerminal;
 

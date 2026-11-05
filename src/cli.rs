@@ -49,6 +49,18 @@ pub enum Command {
     #[command(visible_alias = "sh")]
     Stash,
 
+    /// Worktrees: see them all, add, remove, prune, lock.
+    ///
+    ///   gg wt               full screen; enter prints the picked folder,
+    ///                       so `cd "$(gg wt)"` jumps there
+    ///   gg wt -l            one line per worktree
+    #[command(visible_alias = "wt")]
+    Worktrees {
+        /// Print the list instead of opening the full screen.
+        #[arg(short, long)]
+        list: bool,
+    },
+
     /// Every repo in a folder, at a glance.
     Repos {
         /// Folder holding the repos.

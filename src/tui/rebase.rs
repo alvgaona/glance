@@ -13,8 +13,8 @@ use ratatui::{
     widgets::{Block, Padding, Paragraph, Wrap},
 };
 
-use super::theme;
 use super::widgets::{self, Command, Confirm, Palette, PaletteEvent, Toast};
+use super::{enter, leave, theme};
 use crate::core::diff::Size;
 use crate::core::show::{self, Shown};
 use crate::core::status::ChangeKind;
@@ -98,8 +98,7 @@ pub fn run(repo: &gix::Repository, mut lines: Vec<Todo>, header: Header, newest_
         list_area: Rect::default(),
     };
 
-    let mut terminal = ratatui::init();
-    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture);
+    let mut terminal = enter();
     let result = (|| -> Result<Outcome> {
         loop {
             if app.toast.as_ref().is_some_and(Toast::expired) {
@@ -121,8 +120,7 @@ pub fn run(repo: &gix::Repository, mut lines: Vec<Todo>, header: Header, newest_
             }
         }
     })();
-    let _ = crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture);
-    ratatui::restore();
+    leave();
     result
 }
 

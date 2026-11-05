@@ -53,6 +53,20 @@ fn main() -> Result<()> {
             }
             render::stash::print(&core::stash::list(&repo)?, &paint);
         }
+        Command::Worktrees { list } => {
+            let repo = core::open()?;
+            // Full screen whenever someone is at the keyboard: stdout is usually
+            // captured here (`cd "$(gg wt)"`), so it can't be the test.
+            #[cfg(feature = "tui")]
+            if !list && std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+                if let Some(path) = tui::worktree::run(&repo)? {
+                    println!("{}", path.display());
+                }
+                return Ok(());
+            }
+            let _ = list;
+            render::worktree::print(&core::worktree::list(&repo)?, &paint);
+        }
         Command::Repos { dir } => {
             render::repos::print(&core::repos::read(&dir)?, &paint);
         }

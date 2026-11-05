@@ -125,7 +125,7 @@ fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
                 let bar = if app.focus == Focus::Files { theme::ACCENT } else { theme::FAINT };
                 let mut spans =
                     vec![if selected { Span::styled("┃ ", Style::new().fg(bar)) } else { Span::raw("  ") }];
-                spans.extend(changes::row(&e.item()).spans);
+                spans.extend(e.item().row().spans);
                 if e.group == Group::Conflicts {
                     spans.push(Span::styled(format!("  {}", super::conflict::what(e.conflict)), theme::faint()));
                 }

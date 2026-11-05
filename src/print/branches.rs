@@ -7,6 +7,10 @@ use crate::fmt::relative_time;
 use crate::git::branches::Branches;
 
 pub fn print(b: &Branches, p: &Paint) {
+    lines(b, p).iter().for_each(|l| println!("{l}"));
+}
+
+pub fn lines(b: &Branches, p: &Paint) -> Vec<String> {
     let now = crate::fmt::now();
     let name_w = b.list.iter().map(|x| x.name.chars().count()).max().unwrap_or(0);
     let ages: Vec<String> = b.list.iter().map(|x| relative_time(x.time, now)).collect();
@@ -14,7 +18,7 @@ pub fn print(b: &Branches, p: &Paint) {
     let tracks: Vec<(String, usize)> = b.list.iter().map(|x| tracking(x, p)).collect();
     let track_w = tracks.iter().map(|(_, w)| *w).max().unwrap_or(0);
 
-    for ((br, age), (track, tw)) in b.list.iter().zip(&ages).zip(&tracks) {
+    let rows = b.list.iter().zip(&ages).zip(&tracks).map(|((br, age), (track, tw))| {
         let marker = if br.current { "*".style(p.head()).to_string() } else { " ".into() };
         let name_pad = " ".repeat(name_w - br.name.chars().count());
         let name = if br.current {
@@ -25,20 +29,21 @@ pub fn print(b: &Branches, p: &Paint) {
             br.name.clone()
         };
         let merged = if br.merged { "merged".style(p.dim()).to_string() } else { "      ".into() };
-        println!(
+        format!(
             "{marker} {name}{name_pad}  {:>age_w$}  {track}{}  {merged}  {} {}",
             age.style(p.dim()),
             " ".repeat(track_w - tw),
             br.id.style(p.yellow()),
             br.summary.style(p.dim()),
-        );
-    }
-    if let Some((def, _)) = &b.default {
-        let n = b.list.iter().filter(|x| x.merged).count();
-        if n > 0 {
-            println!("\n{}", format!("{n} merged into {def}").style(p.dim()));
-        }
-    }
+        )
+    });
+    let merged = b.list.iter().filter(|x| x.merged).count();
+    let footer = b
+        .default
+        .as_ref()
+        .filter(|_| merged > 0)
+        .map(|(def, _)| format!("\n{}", format!("{merged} merged into {def}").style(p.dim())));
+    rows.chain(footer).collect()
 }
 
 /// "↑2 ↓1", "gone", "=" or "" and its visible width.

@@ -43,13 +43,15 @@ pub fn list(repo: &gix::Repository) -> Result<Vec<Remote>> {
     };
 
     // Which remote each local branch tracks.
-    let mut upstreams: Vec<(String, String)> = Vec::new();
-    for r in repo.references()?.local_branches()?.flatten() {
-        let b = r.name().shorten().to_string();
-        if let Some(remote) = get("branch", &b, "remote") {
-            upstreams.push((remote, b));
-        }
-    }
+    let upstreams: Vec<(String, String)> = repo
+        .references()?
+        .local_branches()?
+        .flatten()
+        .filter_map(|r| {
+            let b = r.name().shorten().to_string();
+            get("branch", &b, "remote").map(|remote| (remote, b))
+        })
+        .collect();
 
     // Remote branches, each given to the longest remote name that prefixes it.
     let mut by_remote: Vec<Vec<RemoteBranch>> = names.iter().map(|_| Vec::new()).collect();
@@ -83,28 +85,26 @@ pub fn list(repo: &gix::Repository) -> Result<Vec<Remote>> {
     }
 
     let fetch_head = fetch_head(repo);
-    let mut out = Vec::new();
-    for (i, name) in names.iter().enumerate() {
-        let url = get("remote", name, "url");
-        let push_url = get("remote", name, "pushurl").filter(|p| Some(p) != url.as_ref());
-        let mut branches = std::mem::take(&mut by_remote[i]);
+    let remotes = names.into_iter().zip(by_remote).zip(heads).map(|((name, mut branches), head)| {
+        let url = get("remote", &name, "url");
+        let push_url = get("remote", &name, "pushurl").filter(|p| Some(p) != url.as_ref());
         branches.sort_by_key(|b| std::cmp::Reverse(b.time));
         let from_fetch_head = match (&fetch_head, &url) {
             (Some((time, text)), Some(u)) if mentions(text, u) => Some(*time),
             _ => None,
         };
-        let from_logs = newest_file(&repo.common_dir().join("logs/refs/remotes").join(name));
-        out.push(Remote {
+        let from_logs = newest_file(&repo.common_dir().join("logs/refs/remotes").join(&name));
+        Remote {
             fetched: from_fetch_head.max(from_logs),
-            tracking: upstreams.iter().filter(|(r, _)| r == name).map(|(_, b)| b.clone()).collect(),
-            head: heads[i].take(),
-            name: name.clone(),
+            tracking: upstreams.iter().filter(|(r, _)| *r == name).map(|(_, b)| b.clone()).collect(),
+            head,
+            name,
             url,
             push_url,
             branches,
-        });
-    }
-    Ok(out)
+        }
+    });
+    Ok(remotes.collect())
 }
 
 /// FETCH_HEAD's time and text. It names the URL of every remote the last fetch read.
@@ -146,13 +146,12 @@ fn mtime(p: &Path) -> Option<i64> {
 
 /// The newest file under `dir`: when any of the remote's branches last moved.
 fn newest_file(dir: &Path) -> Option<i64> {
-    let mut newest = None;
-    for e in std::fs::read_dir(dir).ok()?.flatten() {
-        let p = e.path();
-        let t = if p.is_dir() { newest_file(&p) } else { mtime(&p) };
-        newest = newest.max(t);
-    }
-    newest
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter_map(|p| if p.is_dir() { newest_file(&p) } else { mtime(&p) })
+        .max()
 }
 
 pub fn add(name: &str, url: &str) -> Ran {

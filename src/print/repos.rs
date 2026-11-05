@@ -7,9 +7,12 @@ use crate::fmt::relative_time;
 use crate::git::repos::Repo;
 
 pub fn print(repos: &[Repo], p: &Paint) {
+    lines(repos, p).iter().for_each(|l| println!("{l}"));
+}
+
+pub fn lines(repos: &[Repo], p: &Paint) -> Vec<String> {
     if repos.is_empty() {
-        println!("{}", "no git repos in this folder".style(p.dim()));
-        return;
+        return vec!["no git repos in this folder".style(p.dim()).to_string()];
     }
     let now = crate::fmt::now();
     let name_w = repos.iter().map(|r| r.name.chars().count()).max().unwrap_or(0);
@@ -20,12 +23,13 @@ pub fn print(repos: &[Repo], p: &Paint) {
     let branch_w = repos.iter().map(|r| branch(r).chars().count()).max().unwrap_or(0);
 
     let (mut dirty, mut unpushed) = (0, 0);
+    let mut out = Vec::new();
     for r in repos {
         let name_pad = " ".repeat(name_w - r.name.chars().count());
         let s = match &r.state {
             Ok(s) => s,
             Err(e) => {
-                println!("{}{name_pad}  {}", r.name.style(p.red()), e.style(p.red()));
+                out.push(format!("{}{name_pad}  {}", r.name.style(p.red()), e.style(p.red())));
                 continue;
             }
         };
@@ -78,14 +82,15 @@ pub fn print(repos: &[Repo], p: &Paint) {
         }
         let notes = if notes.is_empty() { "clean".style(p.dim()).to_string() } else { notes.join("  ") };
 
-        println!(
+        out.push(format!(
             "{}{name_pad}  {b_shown}{b_pad}  {:>7}  {notes}",
             r.name.style(p.pick(owo_colors::Style::new().bold())),
             age.style(p.dim())
-        );
+        ));
     }
-    println!(
+    out.push(format!(
         "\n{}",
         format!("{} repos · {dirty} with changes · {unpushed} with unpushed commits", repos.len()).style(p.dim())
-    );
+    ));
+    out
 }

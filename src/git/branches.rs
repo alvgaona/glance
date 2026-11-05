@@ -85,27 +85,21 @@ fn other_worktrees(repo: &gix::Repository) -> std::collections::HashMap<String, 
     use std::path::{Path, PathBuf};
     // The branch a worktree's git dir holds: its HEAD, or the branch under a rebase.
     let held = |git_dir: &Path| -> Vec<String> {
-        let mut out = Vec::new();
-        for file in ["HEAD", "rebase-merge/head-name", "rebase-apply/head-name"] {
-            if let Ok(s) = std::fs::read_to_string(git_dir.join(file)) {
+        ["HEAD", "rebase-merge/head-name", "rebase-apply/head-name"]
+            .iter()
+            .filter_map(|file| std::fs::read_to_string(git_dir.join(file)).ok())
+            .filter_map(|s| {
                 let s = s.trim();
-                let s = s.strip_prefix("ref: ").unwrap_or(s);
-                if let Some(b) = s.strip_prefix("refs/heads/") {
-                    out.push(b.to_string());
-                }
-            }
-        }
-        out
+                s.strip_prefix("ref: ").unwrap_or(s).strip_prefix("refs/heads/").map(str::to_owned)
+            })
+            .collect()
     };
-    let mut map = std::collections::HashMap::new();
-    let mut dirs: Vec<(PathBuf, PathBuf)> = Vec::new();
-    if let Ok(list) = repo.worktrees() {
-        for wt in list {
-            if let Ok(base) = wt.base() {
-                dirs.push((wt.git_dir().to_path_buf(), base));
-            }
-        }
-    }
+    let mut dirs: Vec<(PathBuf, PathBuf)> = repo
+        .worktrees()
+        .into_iter()
+        .flatten()
+        .filter_map(|wt| Some((wt.git_dir().to_path_buf(), wt.base().ok()?)))
+        .collect();
     let common = repo.common_dir();
     if repo.git_dir() != common
         && let Some(base) = common.parent()
@@ -113,15 +107,10 @@ fn other_worktrees(repo: &gix::Repository) -> std::collections::HashMap<String, 
         dirs.push((common.to_path_buf(), base.to_path_buf()));
     }
     let here = repo.git_dir().canonicalize().ok();
-    for (git_dir, base) in dirs {
-        if git_dir.canonicalize().ok() == here {
-            continue;
-        }
-        for b in held(&git_dir) {
-            map.insert(b, base.clone());
-        }
-    }
-    map
+    dirs.into_iter()
+        .filter(|(git_dir, _)| git_dir.canonicalize().ok() != here)
+        .flat_map(|(git_dir, base)| held(&git_dir).into_iter().map(move |b| (b, base.clone())))
+        .collect()
 }
 
 /// How far `a` is ahead of and behind `b`.
@@ -266,14 +255,10 @@ pub fn default_branch(repo: &gix::Repository) -> Option<(String, ObjectId)> {
         .and_then(|r| r.target().try_name().map(|n| n.shorten().to_string()))
         .and_then(|n| n.strip_prefix("origin/").map(str::to_owned));
     let candidates = from_remote.into_iter().chain(["main".to_string(), "master".to_string()]);
-    for name in candidates {
-        if let Ok(mut r) = repo.find_reference(format!("refs/heads/{name}").as_str())
-            && let Ok(id) = r.peel_to_id()
-        {
-            return Some((name, id.detach()));
-        }
-    }
-    None
+    candidates.into_iter().find_map(|name| {
+        let id = repo.find_reference(format!("refs/heads/{name}").as_str()).ok()?.peel_to_id().ok()?.detach();
+        Some((name, id))
+    })
 }
 
 // ---------------------------------------------------------------- writes

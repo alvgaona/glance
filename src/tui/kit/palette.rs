@@ -4,7 +4,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Modifier, Style},
+    style::Style,
     text::{Line, Span},
     widgets::{Clear, Paragraph},
 };
@@ -40,13 +40,9 @@ impl<T: Clone> Palette<T> {
         (0..self.commands.len())
             .filter(|&i| {
                 // Letters of the query in order, anywhere in the label ("fxp" finds "fixup").
-                let mut want = q.iter().peekable();
-                for c in self.commands[i].label.to_lowercase().chars() {
-                    if want.peek() == Some(&&c) {
-                        want.next();
-                    }
-                }
-                want.peek().is_none()
+                let label = self.commands[i].label.to_lowercase();
+                let mut label = label.chars();
+                q.iter().all(|c| label.any(|l| l == *c))
             })
             .collect()
     }
@@ -133,8 +129,7 @@ impl<T: Clone> Palette<T> {
                 l,
             );
             f.render_widget(
-                Paragraph::new(Span::styled(cmd.keys, Style::new().fg(key_fg).bg(bg).add_modifier(Modifier::empty())))
-                    .style(Style::new().bg(bg)),
+                Paragraph::new(Span::styled(cmd.keys, Style::new().fg(key_fg).bg(bg))).style(Style::new().bg(bg)),
                 rgt,
             );
         }

@@ -13,15 +13,13 @@ use crate::tui::theme;
 
 /// "key label" pairs, key bright and label muted: `ctrl+p commands   w apply`.
 pub fn hints(pairs: &[(&str, &str)]) -> Line<'static> {
-    let mut spans = Vec::new();
-    for (i, (key, label)) in pairs.iter().enumerate() {
-        if i > 0 {
-            spans.push(Span::raw("   "));
-        }
-        spans.push(Span::styled(key.to_string(), theme::text()));
-        spans.push(Span::styled(format!(" {label}"), theme::muted()));
-    }
-    Line::from(spans)
+    let pairs: Vec<[Span<'static>; 2]> = pairs
+        .iter()
+        .map(|(key, label)| {
+            [Span::styled(key.to_string(), theme::text()), Span::styled(format!(" {label}"), theme::muted())]
+        })
+        .collect();
+    Line::from(pairs.join(&Span::raw("   ")))
 }
 
 /// The search being typed (or kept): `/ query▏   3 of 40`.

@@ -26,12 +26,10 @@ impl Confirm {
     pub fn draw(&self, f: &mut Frame, area: Rect) {
         let yes_color = if self.danger { theme::RED } else { theme::ACCENT };
         let mut text = vec![Line::styled(self.title.clone(), theme::bold()), Line::raw("")];
-        for l in self.body.lines() {
-            text.push(match l.strip_prefix("$ ") {
-                Some(cmd) => Line::styled(format!("  {cmd}"), Style::new().fg(theme::ACCENT)),
-                None => Line::styled(l.to_string(), theme::muted()),
-            });
-        }
+        text.extend(self.body.lines().map(|l| match l.strip_prefix("$ ") {
+            Some(cmd) => Line::styled(format!("  {cmd}"), Style::new().fg(theme::ACCENT)),
+            None => Line::styled(l.to_string(), theme::muted()),
+        }));
         text.push(Line::raw(""));
         text.push(Line::from(vec![
             pill(&format!("enter  {}", self.yes), yes_color, theme::BG),

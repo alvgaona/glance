@@ -20,7 +20,8 @@ jobs:
       - id: v
         run: |
           version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+          # v0.1.0, or a pre-release of it: v0.1.0-rc.1.
+          if [ "v$version" != "${GITHUB_REF_NAME%%-*}" ]; then
             echo "::error::tag $GITHUB_REF_NAME doesn't match Cargo.toml version $version"
             exit 1
           fi

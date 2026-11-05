@@ -6,7 +6,7 @@ use ratatui::{
     Frame,
     layout::Rect,
     style::{Color, Style},
-    text::Span,
+    text::Text,
     widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap},
 };
 
@@ -29,20 +29,20 @@ impl Toast {
 
     /// Top-right corner, with a coloured bar on the left.
     pub fn draw(&self, f: &mut Frame, area: Rect) {
-        let width = (self.text.chars().count() as u16 + 6).min(area.width.saturating_sub(4)).max(10);
-        let lines = self.text.chars().count() as u16 / width.saturating_sub(6).max(1) + 1;
-        let r = Rect { x: area.right().saturating_sub(width + 2), y: area.y + 1, width, height: lines + 2 }
-            .intersection(area);
-        f.render_widget(Clear, r);
+        let longest = self.text.lines().map(|l| l.chars().count()).max().unwrap_or(0) as u16;
+        let width = (longest + 5).min(area.width.saturating_sub(4)).max(10);
         let bar = Block::new()
             .style(Style::new().bg(theme::ELEMENT))
             .borders(Borders::LEFT)
             .border_set(ratatui::symbols::border::THICK)
             .border_style(Style::new().fg(self.color).bg(theme::ELEMENT))
             .padding(Padding::new(1, 1, 1, 1));
-        f.render_widget(
-            Paragraph::new(Span::styled(self.text.clone(), theme::text())).wrap(Wrap { trim: true }).block(bar),
-            r,
-        );
+        // `Text`, not `Span`: a message of several lines (git's errors) keeps its breaks.
+        let p = Paragraph::new(Text::styled(self.text.clone(), theme::text())).wrap(Wrap { trim: true }).block(bar);
+        // The bar and the side padding take 3 columns.
+        let height = p.line_count(width.saturating_sub(3)) as u16;
+        let r = Rect { x: area.right().saturating_sub(width + 2), y: area.y + 1, width, height }.intersection(area);
+        f.render_widget(Clear, r);
+        f.render_widget(p, r);
     }
 }

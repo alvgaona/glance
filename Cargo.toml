@@ -1,0 +1,27 @@
+[package]
+name = "glance"
+version = "0.1.0"
+edition = "2024"
+description = "A nicer view of git status, log and friends"
+
+[[bin]]
+name = "gg"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.7", features = ["derive"] }
+crossterm = { version = "0.29.0", optional = true }
+gix = { version = "0.90.0", default-features = false, features = ["status", "revision", "sha1"] }
+owo-colors = "4.4.0"
+ratatui = { version = "0.30.2", optional = true }
+
+[features]
+default = ["tui"]
+# Full-screen interactive views (log -i, rebase editor). Only started by interactive commands.
+tui = ["dep:ratatui", "dep:crossterm"]
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

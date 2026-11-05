@@ -151,9 +151,11 @@ fn summarize(list: Vec<RawCheck>) -> Checks {
     c
 }
 
-/// `alvgaona` from `https://github.com/alvgaona/x.git` or `git@github.com:alvgaona/x`.
+/// `alvgaona` from `https://github.com/alvgaona/x.git` or `git@github.com:alvgaona/x`,
+/// also through an ssh host alias like `github.com-work`.
 fn owner_of(url: &str) -> Option<String> {
     let rest = url.split("github.com").nth(1)?;
+    let rest = &rest[rest.find([':', '/'])?..];
     let owner = rest.trim_start_matches([':', '/']).split('/').next()?;
     (!owner.is_empty()).then(|| owner.to_lowercase())
 }
@@ -211,6 +213,7 @@ mod tests {
         assert_eq!(owner_of("git@github.com:Aerostack2/x").as_deref(), Some("aerostack2"));
         assert_eq!(owner_of("ssh://git@github.com/a/b").as_deref(), Some("a"));
         assert_eq!(owner_of("https://gitlab.com/a/b"), None);
+        assert_eq!(owner_of("git@github.com-work:alvgaona/x").as_deref(), Some("alvgaona"));
     }
 
     fn oid(n: u8) -> ObjectId {

@@ -304,11 +304,16 @@ impl App {
         self.detail_scroll.reset();
     }
 
+    /// Tells what's still running in the background.
+    pub(super) fn busy(&mut self) {
+        let what = self.job.as_ref().map(|j| j.what.to_lowercase()).unwrap_or_default();
+        self.toast = Some(Toast::new(format!("Still busy: {what}…"), theme::YELLOW));
+    }
+
     /// Runs a git command that talks to a remote on its own thread; `poll_job` reports it.
     fn start(&mut self, what: String, kind: JobKind, args: Vec<String>) {
-        if let Some(j) = &self.job {
-            self.toast = Some(Toast::new(format!("Still busy: {}…", j.what.to_lowercase()), theme::YELLOW));
-            return;
+        if self.job.is_some() {
+            return self.busy();
         }
         let job = remote::no_prompt(&self.repo, args);
         let (tx, rx) = mpsc::channel();
@@ -470,6 +475,23 @@ mod tests {
             tracking: Vec::new(),
             fetched: None,
         }
+    }
+
+    #[test]
+    fn no_remove_while_a_fetch_runs() {
+        use crate::tui::app::press;
+        let s = crate::git::run::Scratch::new("remote-busy");
+        s.git(&["remote", "add", "origin", "/nowhere"]);
+        let mut app = start(s.repo()).unwrap();
+        let (_tx, rx) = mpsc::channel();
+        app.job = Some(Job { what: "Fetching origin".into(), kind: JobKind::Fetch(None), rx });
+        app.key(press(KeyCode::Char('d')));
+        assert!(app.confirm.is_none());
+        assert_eq!(app.toast.as_ref().unwrap().text(), "Still busy: fetching origin…");
+        // Once it's done, d asks as usual.
+        app.job = None;
+        app.key(press(KeyCode::Char('d')));
+        assert!(app.confirm.is_some());
     }
 
     #[test]

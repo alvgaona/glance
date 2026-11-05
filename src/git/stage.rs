@@ -107,10 +107,10 @@ pub fn hunk_patch(path: &str, h: &Hunk) -> Vec<u8> {
     // An empty side starts at the line before it: `-0,0` for a new file.
     let old_start = if old_len == 0 { h.old_start - 1 } else { h.old_start };
     let new_start = if new_len == 0 { h.new_start - 1 } else { h.new_start };
-    let mut out = format!(
-        "diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -{old_start},{old_len} +{new_start},{new_len} @@\n"
-    )
-    .into_bytes();
+    let (a, b) = (quoted(&format!("a/{path}")), quoted(&format!("b/{path}")));
+    let mut out =
+        format!("diff --git {a} {b}\n--- {a}\n+++ {b}\n@@ -{old_start},{old_len} +{new_start},{new_len} @@\n")
+            .into_bytes();
     for l in &h.lines {
         out.push(match l.op {
             Op::Context => b' ',
@@ -170,6 +170,26 @@ pub fn pick_lines(h: &Hunk, picked: &[usize], action: HunkAction) -> Hunk {
 /// Does the hunk still change anything?
 pub fn changes_anything(h: &Hunk) -> bool {
     h.lines.iter().any(|l| l.op != Op::Context)
+}
+
+/// A path for a patch header, quoted the way git quotes it when it has a tab, a
+/// newline, `"` or `\`: unquoted, `git apply` would cut the name at the tab.
+fn quoted(path: &str) -> String {
+    if !path.chars().any(|c| c == '"' || c == '\\' || c.is_control()) {
+        return path.to_string();
+    }
+    let inner: String = path
+        .chars()
+        .map(|c| match c {
+            '"' => "\\\"".to_string(),
+            '\\' => "\\\\".to_string(),
+            '\t' => "\\t".to_string(),
+            '\n' => "\\n".to_string(),
+            c if c.is_control() => format!("\\{:03o}", c as u32),
+            c => c.to_string(),
+        })
+        .collect();
+    format!("\"{inner}\"")
 }
 
 /// Can `git apply` take this hunk as it is? A line without a newline must be the last
@@ -479,6 +499,17 @@ mod tests {
         // The whole hunk is fine.
         s.run(|r| apply_hunk(r, "f.txt", &h, HunkAction::Stage));
         assert_eq!(s.halves("f.txt").1, "a\nb\nc\n");
+    }
+
+    #[test]
+    fn a_tab_in_the_name_is_quoted_in_the_patch() {
+        let s = Scratch::new("tabname");
+        s.commit("tab\tx.txt", "1\n");
+        s.write("tab\tx.txt", "2\n");
+        let h = hunk(&s, "tab\tx.txt", Side::Unstaged, 0);
+        s.run(|r| apply_hunk(r, "tab\tx.txt", &h, HunkAction::Stage));
+        assert_eq!(s.halves("tab\tx.txt").1, "2\n");
+        assert_eq!(quoted("a/x\"y"), "\"a/x\\\"y\"");
     }
 
     #[test]

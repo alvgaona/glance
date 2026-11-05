@@ -94,6 +94,8 @@ impl App {
             }
             (_, None) => self.toast = Some(Toast::new("No remotes yet: a adds one", theme::ACCENT)),
             (Cmd::Fetch, Some(n)) => return Flow::Run(Effect::Fetch(Some(n))),
+            // A fetch still running would write the remote's refs back after they're gone.
+            (Cmd::Rename | Cmd::Remove, Some(_)) if self.job.is_some() => self.busy(),
             (Cmd::Rename, Some(n)) => {
                 let r = self.current().unwrap();
                 let mut note = "Its remote branches move to <new>/….".to_string();

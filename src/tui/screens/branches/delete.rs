@@ -26,11 +26,12 @@ impl App<'_> {
             return;
         }
         let main = self.default_name().unwrap_or("main").to_string();
-        let only_here = |b: &Branch| branches::only_here(self.repo, b);
+        // Commits no other branch has, per branch: one history walk each.
+        let only_here: Vec<usize> = list.iter().map(|b| branches::only_here(self.repo, b)).collect();
 
         let (title, body) = if list.len() == 1 {
             let b = &list[0];
-            let n = only_here(b);
+            let n = only_here[0];
             let mut body = if n == 0 && b.merged {
                 format!("It's merged into {main}, so no work is lost.")
             } else if let Some(pr) = self.merged_by_pr(b) {
@@ -53,8 +54,7 @@ impl App<'_> {
         } else {
             let mut body = String::new();
             let mut unmerged = 0;
-            for b in list.iter().take(10) {
-                let n = only_here(b);
+            for (b, &n) in list.iter().zip(&only_here).take(10) {
                 let note = if n == 0 {
                     if b.merged { "merged" } else { "safe" }.to_string()
                 } else if let Some(pr) = self.merged_by_pr(b) {
@@ -87,7 +87,7 @@ impl App<'_> {
             let names: Vec<String> = keep.iter().map(|b| format!("{} ({})", b.name, why(b))).collect();
             body += &format!("\nSkipping {}.", names.join(", "));
         }
-        let danger = list.iter().any(|b| only_here(b) > 0 && self.merged_by_pr(b).is_none());
+        let danger = list.iter().zip(&only_here).any(|(b, &n)| n > 0 && self.merged_by_pr(b).is_none());
         self.confirm =
             Some((Confirm { title, body, yes: "Delete".into(), no: "Cancel".into(), danger }, Pending::Local(list)));
     }
@@ -101,19 +101,17 @@ impl App<'_> {
     pub(super) fn ask_delete_remote(&mut self) {
         let main = self.default_name().map(str::to_string);
         let picked = self.targets();
-        let mut items: Vec<PickItem> = Vec::new();
-        for b in &picked {
-            for (remote, branch) in b.remote_targets() {
-                if Some(&branch) == main.as_ref() {
-                    continue;
-                }
+        let items: Vec<PickItem> = (picked.iter())
+            .flat_map(|b| b.remote_targets().into_iter().map(move |target| (b, target)))
+            .filter(|(_, (_, branch))| Some(branch) != main.as_ref())
+            .map(|(b, (remote, branch))| {
                 let note = match b.copies.iter().find(|c| c.remote == remote && c.branch == branch) {
                     Some(c) => sync_note(branches::ahead_behind(self.repo, b.oid, c.oid)),
                     None => String::new(),
                 };
-                items.push(PickItem { remote, branch, note, on: true });
-            }
-        }
+                PickItem { remote, branch, note, on: true }
+            })
+            .collect();
         if items.is_empty() {
             self.toast = Some(Toast::new("Not on any remote", theme::YELLOW));
             return;

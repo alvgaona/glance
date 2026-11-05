@@ -139,9 +139,26 @@ impl RemotePick {
     }
 }
 
-/// What the event loop has to do after a key press.
+/// What the screen does outside its own state; [`Screen::apply`] does it.
 enum Effect {
-    Quit,
+    ToggleRemotes,
+    Rename {
+        from: String,
+        to: String,
+    },
+    Checkout(String),
+    /// `git fetch --all --prune` in the background.
+    Fetch,
+    ReloadPrs,
+    OpenPr {
+        url: String,
+        number: u64,
+    },
+    Copy(String),
+    /// Ask before deleting the marked branches (or the current one); building the
+    /// question reads their history.
+    AskDeleteLocal,
+    AskDeleteRemote,
     /// Leave the full screen, run these `git` commands (they may ask for credentials), come back.
     InTerminal(Vec<Vec<String>>),
 }
@@ -159,8 +176,10 @@ struct App<'r> {
     query: String,
     searching: bool,
     details: bool,
-    /// Details by (branch, tip, panel width): text is wrapped to the width.
+    /// Details by (branch, tip, panel width): text is wrapped to the width. Filled in `tick`.
     cache: HashMap<(String, gix::ObjectId, u16), Rc<Vec<Line<'static>>>>,
+    /// The details panel's width at the last draw.
+    detail_width: u16,
     detail_scroll: Scroll,
     /// Which branch `detail_scroll` belongs to; another one starts at the top.
     detail_for: String,
@@ -177,8 +196,6 @@ struct App<'r> {
     repo_name: String,
     /// What the last single delete removed, for its toast.
     last_deleted: String,
-    /// Commands waiting to run on the normal screen (see `Effect::InTerminal`).
-    outside: Vec<Vec<String>>,
     prs: Prs,
     /// Branch name -> index into the ready PR list.
     pr_of: HashMap<String, usize>,
@@ -199,6 +216,7 @@ pub fn run(repo: &gix::Repository) -> Result<()> {
         searching: false,
         details: true,
         cache: HashMap::new(),
+        detail_width: 0,
         detail_scroll: Scroll::default(),
         detail_for: String::new(),
         detail_area: Rect::default(),
@@ -211,7 +229,6 @@ pub fn run(repo: &gix::Repository) -> Result<()> {
         list_area: Rect::default(),
         repo_name: crate::git::repo_name(repo),
         last_deleted: String::new(),
-        outside: Vec::new(),
         prs: Prs::Off,
         pr_of: HashMap::new(),
         owners: github::remote_owners(repo),
@@ -228,38 +245,78 @@ pub fn run(repo: &gix::Repository) -> Result<()> {
 
 impl Screen for App<'_> {
     type Out = ();
-    type Effect = std::convert::Infallible;
+    type Effect = Effect;
 
     fn draw(&mut self, f: &mut Frame) {
         draw(f, self)
     }
-    fn apply(&mut self, e: Self::Effect) -> Result<Flow<(), Self::Effect>> {
-        match e {}
-    }
-    fn key(&mut self, k: KeyEvent) -> Result<Flow<(), Self::Effect>> {
-        Ok(match self.on_key(k)? {
-            None => Flow::Stay,
-            Some(Effect::Quit) => Flow::Done(()),
-            Some(Effect::InTerminal(cmds)) => {
-                self.outside = cmds;
-                Flow::Outside
+    fn apply(&mut self, e: Effect) -> Result<Flow<(), Effect>> {
+        match e {
+            Effect::ToggleRemotes => {
+                self.remotes = !self.remotes;
+                self.reload()?;
+                let msg = if self.remotes { "Showing remote branches" } else { "Local branches only" };
+                self.toast = Some(Toast::new(msg, theme::ACCENT));
             }
-        })
+            Effect::Rename { from, to } => {
+                let ran = branches::rename(&from, &to);
+                self.toast = Some(Toast::ran(&ran, format!("Renamed {from} → {to}")));
+                if ran.is_ok() {
+                    if self.marked.remove(&from) {
+                        self.marked.insert(to.clone());
+                    }
+                    self.reload_selecting(Some(to))?;
+                }
+            }
+            Effect::Checkout(target) => {
+                self.toast = Some(Toast::ran(&branches::switch(&target), format!("Switched to {target}")));
+                self.reload()?;
+            }
+            Effect::Fetch => self.fetch(),
+            Effect::ReloadPrs => {
+                self.load_prs();
+                if matches!(self.prs, Prs::Loading(_)) {
+                    self.toast = Some(Toast::new("Reloading pull requests…", theme::ACCENT));
+                }
+            }
+            Effect::OpenPr { url, number } => {
+                let msg = if process::open(&url) { format!("Opened #{number}") } else { url };
+                self.toast = Some(Toast::new(msg, theme::ACCENT));
+            }
+            Effect::Copy(name) => {
+                crate::clipboard::copy(&name);
+                self.toast = Some(Toast::new(format!("Copied {name}"), theme::ACCENT));
+            }
+            Effect::AskDeleteLocal => self.ask_delete_local(),
+            Effect::AskDeleteRemote => self.ask_delete_remote(),
+            Effect::InTerminal(cmds) => {
+                let results: Vec<Ran> = cmds.iter().map(|a| crate::git::run::git(a)).collect();
+                self.report(&results);
+                self.reload()?;
+            }
+        }
+        Ok(Flow::Stay)
+    }
+    fn in_terminal(e: &Effect) -> bool {
+        matches!(e, Effect::InTerminal(_))
+    }
+    fn key(&mut self, k: KeyEvent) -> Result<Flow<(), Effect>> {
+        Ok(self.on_key(k))
     }
     fn mouse(&mut self, m: MouseEvent) {
         self.on_mouse(m)
     }
     fn tick(&mut self) -> Result<()> {
         self.poll_prs();
-        self.poll_fetch()
+        self.poll_fetch()?;
+        // Zero until the first draw has measured the panel.
+        if self.details && self.detail_width > 0 {
+            self.load_detail(self.detail_width);
+        }
+        Ok(())
     }
     fn toast(&mut self) -> &mut Option<Toast> {
         &mut self.toast
-    }
-    fn outside(&mut self) -> Result<()> {
-        let results: Vec<_> = std::mem::take(&mut self.outside).iter().map(|a| crate::git::run::git(a)).collect();
-        self.report(&results);
-        self.reload()
     }
 }
 
@@ -393,17 +450,20 @@ impl App<'_> {
         }
     }
 
-    fn detail_lines(&mut self, width: u16) -> Option<Rc<Vec<Line<'static>>>> {
-        let b = self.current()?.clone();
+    /// Reads the current branch's details into the cache, unless they're there.
+    fn load_detail(&mut self, width: u16) {
+        let Some(b) = self.current().cloned() else { return };
         let key = (b.name.clone(), b.oid, width);
-        if let Some(d) = self.cache.get(&key) {
-            return Some(d.clone());
+        if !self.cache.contains_key(&key) {
+            let default = self.data.default.as_ref();
+            let lines = build_detail(self.repo, &b, default, self.protected(&b), self.pr(&b), width as usize);
+            self.cache.insert(key, Rc::new(lines));
         }
-        let default = self.data.default.clone();
-        let lines =
-            Rc::new(build_detail(self.repo, &b, default.as_ref(), self.protected(&b), self.pr(&b), width as usize));
-        self.cache.insert(key, lines.clone());
-        Some(lines)
+    }
+
+    fn detail(&self, width: u16) -> Option<Rc<Vec<Line<'static>>>> {
+        let b = self.current()?;
+        self.cache.get(&(b.name.clone(), b.oid, width)).cloned()
     }
 }
 

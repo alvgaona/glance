@@ -15,7 +15,8 @@ pub fn available() -> bool {
 }
 
 /// Shows `lines` in fzf. Returns the picked commit id, or `None` if the user quit.
-pub fn pick_commit(lines: &[String], label: &str) -> Result<Option<String>> {
+/// `enter` says what Enter does, for the key hints.
+pub fn pick_commit(lines: &[String], label: &str, enter: &str) -> Result<Option<String>> {
     let (unified, split) = if which("delta") {
         (
             format!("{HASH}; {SHOW} | delta --no-gitconfig --line-numbers --paging=never --width=$FZF_PREVIEW_COLUMNS"),
@@ -43,7 +44,7 @@ pub fn pick_commit(lines: &[String], label: &str) -> Result<Option<String>> {
             &format!("--preview={unified}"),
             "--preview-window=right,60%,border-left,<140(down,60%,border-top)",
             "--preview-label= diff ",
-            "--header=enter copy · ctrl-s side-by-side · ctrl-u unified · ctrl-/ hide preview",
+            &format!("--header=enter {enter} · ctrl-s side-by-side · ctrl-u unified · ctrl-/ hide preview"),
             &format!("--bind=ctrl-s:change-preview-label( side-by-side )+change-preview:{split}"),
             &format!("--bind=ctrl-u:change-preview-label( diff )+change-preview:{unified}"),
             "--bind=ctrl-/:toggle-preview",

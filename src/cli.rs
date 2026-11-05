@@ -62,9 +62,14 @@ pub enum Command {
         dir: std::path::PathBuf,
     },
 
-    /// Interactive rebase with a visual todo editor. Arguments go to `git rebase -i`
-    /// (e.g. `gg rebase main`, `gg rebase HEAD~5`, `gg rebase --continue`).
-    #[command(visible_alias = "rb")]
+    /// Interactive rebase with a visual todo editor.
+    ///
+    ///   gg rebase          this branch's commits (since it split off main)
+    ///   gg rebase 5        the last 5 commits
+    ///   gg rebase -p       pick the oldest commit to edit, in fzf
+    ///   gg rebase <ref>    anything else goes to `git rebase -i` as is
+    ///   gg rebase --continue | --skip | --abort | --edit-todo
+    #[command(visible_alias = "rb", verbatim_doc_comment)]
     Rebase {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,

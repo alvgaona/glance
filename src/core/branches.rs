@@ -61,7 +61,7 @@ pub fn read(repo: &gix::Repository) -> Result<Branches> {
 }
 
 /// Name and tip of the branch others are merged into.
-fn default_branch(repo: &gix::Repository) -> Option<(String, gix::ObjectId)> {
+pub fn default_branch(repo: &gix::Repository) -> Option<(String, gix::ObjectId)> {
     // origin/HEAD -> origin/main -> local "main".
     let from_remote = repo
         .find_reference("refs/remotes/origin/HEAD")

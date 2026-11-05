@@ -20,6 +20,15 @@ pub fn open() -> Result<gix::Repository> {
     Ok(repo)
 }
 
+/// Folder name of the working tree, e.g. "aerostack2".
+pub fn repo_name(repo: &gix::Repository) -> String {
+    // The path can be relative ("."), which has no name until resolved.
+    repo.workdir()
+        .and_then(|d| d.canonicalize().ok())
+        .and_then(|d| d.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| "repo".into())
+}
+
 /// Seconds since the Unix epoch, right now.
 pub fn now() -> i64 {
     std::time::SystemTime::now()

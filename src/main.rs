@@ -64,12 +64,8 @@ fn main() -> Result<()> {
 fn log_interactive(repo: &gix::Repository, commits: &[core::log::Commit]) -> Result<()> {
     if fzf::available() {
         let lines = render::log::lines(commits, &render::Paint { on: true });
-        let label = repo
-            .workdir()
-            .and_then(|d| d.file_name())
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "log".into());
-        if let Some(id) = fzf::pick_commit(&lines, &label)? {
+        let label = core::repo_name(repo);
+        if let Some(id) = fzf::pick_commit(&lines, &label, "copy")? {
             fzf::copy(&id);
             println!("{id}");
         }

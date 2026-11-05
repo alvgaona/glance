@@ -12,8 +12,21 @@ const CONTROL: [&str; 6] = ["--continue", "--abort", "--skip", "--quit", "--edit
 
 /// Runs `git rebase -i <args>` (or `git rebase --continue` etc.) with gg as the todo editor.
 /// Returns git's exit code.
+///
+/// Shortcuts for choosing which commits to edit:
+/// - no arguments: this branch's own commits (since it split off main);
+/// - a number `N`: the last N commits;
+/// - `-p` / `--pick`: choose the oldest commit to edit in fzf.
 pub fn run(args: &[String]) -> Result<i32> {
     let control = args.iter().any(|a| CONTROL.contains(&a.as_str()));
+    let (args, desc) = if control {
+        (args.to_vec(), None)
+    } else {
+        match resolve(args)? {
+            Some((args, desc)) => (args, desc),
+            None => return Ok(0), // picker closed
+        }
+    };
     let interactive = args.iter().any(|a| a == "-i" || a == "--interactive");
 
     let exe = std::env::current_exe().context("can't find the gg binary")?;
@@ -31,7 +44,12 @@ pub fn run(args: &[String]) -> Result<i32> {
     if !control && !interactive {
         cmd.arg("-i");
     }
-    cmd.args(args).env("GIT_SEQUENCE_EDITOR", editor);
+    cmd.args(&args).env("GIT_SEQUENCE_EDITOR", editor);
+    // Tells the editor how the commits were chosen, for its header.
+    match &desc {
+        Some(d) => cmd.env(DESC_ENV, d),
+        None => cmd.env_remove(DESC_ENV),
+    };
 
     let marker = cancel_marker()?;
     let _ = std::fs::remove_file(&marker);
@@ -42,6 +60,91 @@ pub fn run(args: &[String]) -> Result<i32> {
         return Ok(0);
     }
     Ok(status.code().unwrap_or(1))
+}
+
+const DESC_ENV: &str = "GG_REBASE_DESC";
+
+/// Turns gg's shortcuts into `git rebase` arguments plus a description for the header.
+/// `None` means the user closed the picker.
+fn resolve(args: &[String]) -> Result<Option<(Vec<String>, Option<String>)>> {
+    let repo = core::open()?;
+    let (first, rest) = match args.split_first() {
+        Some((f, r)) => (Some(f.as_str()), r),
+        None => (None, &[][..]),
+    };
+    let with_rest = |base: String| [vec![base], rest.to_vec()].concat();
+
+    match first {
+        None => match fork_point(&repo)? {
+            Some((base, desc)) => Ok(Some((vec![base.to_string()], Some(desc)))),
+            // On main itself, or nothing new on this branch: let the user choose.
+            None if crate::fzf::available() => pick(&repo, rest),
+            None => anyhow::bail!(
+                "no commits of this branch to rebase; pass a number (gg rebase 5), a commit, or a branch"
+            ),
+        },
+        Some("-p" | "--pick") => pick(&repo, rest),
+        Some(n) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => {
+            let n: usize = n.parse().context("count is too large")?;
+            if n == 0 {
+                anyhow::bail!("nothing to rebase: 0 commits");
+            }
+            let head = repo.head_id().context("this branch has no commits yet")?.detach();
+            let available = repo.rev_walk([head]).first_parent_only().all()?.take(n + 1).count();
+            let desc = Some(format!("last {n} commit{}", if n == 1 { "" } else { "s" }));
+            match available.cmp(&n) {
+                std::cmp::Ordering::Greater => Ok(Some((with_rest(format!("HEAD~{n}")), desc))),
+                // Exactly the whole history: git needs --root for that.
+                std::cmp::Ordering::Equal => Ok(Some((with_rest("--root".into()), desc))),
+                std::cmp::Ordering::Less => anyhow::bail!("this branch only has {available} commits"),
+            }
+        }
+        Some(_) => Ok(Some((args.to_vec(), None))),
+    }
+}
+
+/// Where this branch split off the default branch, and a description like
+/// "4 commits since branching off main". Compares with both the local and origin
+/// copies of main and keeps the closer one. `None` if there's nothing to rebase.
+fn fork_point(repo: &gix::Repository) -> Result<Option<(gix::ObjectId, String)>> {
+    let Ok(head) = repo.head_id() else { return Ok(None) };
+    let head = head.detach();
+    let Some((main, _)) = core::branches::default_branch(repo) else { return Ok(None) };
+
+    let mut best: Option<(usize, gix::ObjectId, String)> = None;
+    for name in [format!("refs/heads/{main}"), format!("refs/remotes/origin/{main}")] {
+        let Ok(mut r) = repo.find_reference(name.as_str()) else { continue };
+        let short = r.name().shorten().to_string();
+        let Ok(tip) = r.peel_to_id() else { continue };
+        let Ok(Some(base)) = repo.merge_base(head, tip.detach()) else { continue };
+        let base = base.detach();
+        let n = repo.rev_walk([head]).with_hidden([base]).all()?.count();
+        if n > 0 && best.as_ref().is_none_or(|(m, ..)| n < *m) {
+            best = Some((n, base, short));
+        }
+    }
+    Ok(best.map(|(n, base, from)| {
+        let s = if n == 1 { "" } else { "s" };
+        (base, format!("{n} commit{s} since branching off {from}"))
+    }))
+}
+
+/// fzf over this branch's history; the picked commit is the oldest one to edit.
+fn pick(repo: &gix::Repository, rest: &[String]) -> Result<Option<(Vec<String>, Option<String>)>> {
+    let commits = core::log::read(repo, 5000, false)?;
+    let lines = crate::render::log::lines(&commits, &crate::render::Paint { on: true });
+    let label = format!("{} · rebase from", core::repo_name(repo));
+    let Some(picked) = crate::fzf::pick_commit(&lines, &label, "edit this commit and everything newer")? else {
+        return Ok(None);
+    };
+    let commit = repo.rev_parse_single(picked.as_str())?.object()?.peel_to_commit()?;
+    let subject = commit.message()?.summary().to_string();
+    let desc = Some(format!("from {picked} {subject}"));
+    let base = match commit.parent_ids().next() {
+        Some(parent) => parent.to_string(),
+        None => "--root".into(),
+    };
+    Ok(Some(([vec![base], rest.to_vec()].concat(), desc)))
 }
 
 /// Left by the editor when the user quits, so `run` can tell a cancel from a failure.
@@ -94,8 +197,11 @@ fn header(repo: &gix::Repository, lines: &[todo::Line]) -> String {
     let n = lines.iter().filter(|l| matches!(l, todo::Line::Commit { .. })).count();
     let done = read("done").map(|d| todo::parse(&d).len()).unwrap_or(0);
     let mut s = format!("Rebase {branch}");
-    if !onto.is_empty() {
-        s += &format!(" onto {onto}");
+    match std::env::var(DESC_ENV) {
+        // "Rebase feat · 4 commits since branching off main"
+        Ok(desc) if !desc.is_empty() => s += &format!(" · {desc}"),
+        _ if !onto.is_empty() => s += &format!(" onto {onto}"),
+        _ => {}
     }
     s += &format!(" · {n} commit{}", if n == 1 { "" } else { "s" });
     if done > 0 {

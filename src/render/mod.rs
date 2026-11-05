@@ -1,6 +1,9 @@
 //! Turns data from `core` into printed text.
 
+pub mod branches;
 pub mod log;
+pub mod repos;
+pub mod show;
 pub mod status;
 
 use std::io::IsTerminal;
@@ -38,6 +41,24 @@ impl Paint {
     pub fn dim(&self) -> Style { self.pick(Style::new().dimmed()) }
     /// Current branch name.
     pub fn head(&self) -> Style { self.pick(Style::new().bold().cyan()) }
+}
+
+/// "+12 −3", "+5", "−7" or "binary".
+pub fn size(s: crate::core::diff::Size, p: &Paint) -> String {
+    use owo_colors::OwoColorize;
+    match s {
+        crate::core::diff::Size::Binary => format!("{}", "binary".style(p.dim())),
+        crate::core::diff::Size::Lines { added, removed } => {
+            let mut out = Vec::new();
+            if added > 0 {
+                out.push(format!("{}", format!("+{added}").style(p.green())));
+            }
+            if removed > 0 {
+                out.push(format!("{}", format!("−{removed}").style(p.red())));
+            }
+            out.join(" ")
+        }
+    }
 }
 
 /// "3m ago", "2h ago", "5d ago", "4w ago", "7mo ago", "2y ago".

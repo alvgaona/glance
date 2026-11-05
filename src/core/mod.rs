@@ -1,12 +1,20 @@
 //! Reads data from the repository. Never prints anything.
 
+pub mod branches;
+pub mod diff;
+pub mod graph;
 pub mod log;
+pub mod repos;
+pub mod show;
 pub mod status;
 
 use anyhow::{Context, Result};
 
 pub fn open() -> Result<gix::Repository> {
-    gix::discover(".").context("not inside a git repository")
+    let mut repo = gix::discover(".").context("not inside a git repository")?;
+    // The log walk reads each commit twice (walk, then details); a cache avoids the second read.
+    repo.object_cache_size_if_unset(16 << 20);
+    Ok(repo)
 }
 
 /// Seconds since the Unix epoch, right now.

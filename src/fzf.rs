@@ -73,7 +73,14 @@ pub fn pick_commit(lines: &[String], label: &str) -> Result<Option<String>> {
         _ => bail!("fzf exited with {}", out.status),
     }
     let picked = String::from_utf8_lossy(&out.stdout);
-    Ok(picked.split_whitespace().next().map(str::to_owned))
+    Ok(first_hash(&picked).map(str::to_owned))
+}
+
+/// First word of 7+ hex characters, skipping the graph in front of it.
+/// Connector lines of the graph have none.
+fn first_hash(line: &str) -> Option<&str> {
+    line.split(|c: char| !c.is_ascii_hexdigit())
+        .find(|w| w.len() >= 7 && w.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
 }
 
 /// Puts `text` on the macOS clipboard. Silently does nothing elsewhere.
@@ -86,7 +93,7 @@ pub fn copy(text: &str) {
     }
 }
 
-fn which(bin: &str) -> bool {
+pub fn which(bin: &str) -> bool {
     std::env::var_os("PATH")
         .map(|paths| std::env::split_paths(&paths).any(|dir| dir.join(bin).is_file()))
         .unwrap_or(false)

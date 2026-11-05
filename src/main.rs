@@ -1,11 +1,12 @@
 mod cli;
 mod core;
 mod fzf;
+mod patch;
 mod render;
 #[cfg(feature = "tui")]
 mod tui;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use clap::Parser;
 
 use cli::{Cli, Command};
@@ -17,7 +18,7 @@ fn main() -> Result<()> {
     match cli.command {
         Command::Status => {
             let repo = core::open()?;
-            let status = core::status::read(&repo)?;
+            let status = core::status::read(&repo, true)?;
             render::status::print(&status, &paint);
         }
         Command::Log { count, interactive, all } => {
@@ -29,8 +30,21 @@ fn main() -> Result<()> {
             }
             render::log::print(&commits, &paint);
         }
-        Command::Branches | Command::Show { .. } | Command::Repos => {
-            bail!("not implemented yet");
+        Command::Branches => {
+            let repo = core::open()?;
+            render::branches::print(&core::branches::read(&repo)?, &paint);
+        }
+        Command::Show { rev, patch } => {
+            let repo = core::open()?;
+            let shown = core::show::read(&repo, &rev)?;
+            render::show::print(&shown, &paint);
+            if patch {
+                println!();
+                patch::print(&shown.oid.to_string(), paint.on)?;
+            }
+        }
+        Command::Repos { dir } => {
+            render::repos::print(&core::repos::read(&dir)?, &paint);
         }
     }
     Ok(())
@@ -54,5 +68,5 @@ fn log_interactive(repo: &gix::Repository, commits: &[core::log::Commit]) -> Res
     #[cfg(feature = "tui")]
     return tui::log::run(commits);
     #[cfg(not(feature = "tui"))]
-    bail!("`gg log -i` needs fzf installed");
+    anyhow::bail!("`gg log -i` needs fzf installed");
 }

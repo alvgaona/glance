@@ -1,11 +1,15 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
+use gix::ObjectId;
 use gix::bstr::ByteSlice;
+use gix::traverse::commit::topo;
 
 #[derive(Debug)]
 pub struct Commit {
+    pub oid: ObjectId,
     pub id: String,
+    pub parents: Vec<ObjectId>,
     pub summary: String,
     pub author: String,
     /// Seconds since the Unix epoch.
@@ -15,7 +19,7 @@ pub struct Commit {
     pub refs: Vec<RefLabel>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum RefLabel {
     Head(String),
     Branch(String),
@@ -23,10 +27,11 @@ pub enum RefLabel {
     Tag(String),
 }
 
-/// Newest first. With `all`, walks from every branch, remote and tag instead of just HEAD.
+/// Newest first, children always before parents (like `git log --graph`).
+/// With `all`, walks from every branch, remote and tag instead of just HEAD.
 pub fn read(repo: &gix::Repository, count: usize, all: bool) -> Result<Vec<Commit>> {
     let labels = ref_labels(repo)?;
-    let mut tips: Vec<gix::ObjectId> = repo.head_id().ok().map(|id| id.detach()).into_iter().collect();
+    let mut tips: Vec<ObjectId> = repo.head_id().ok().map(|id| id.detach()).into_iter().collect();
     if all {
         tips.extend(labels.keys().copied());
     }
@@ -34,48 +39,46 @@ pub fn read(repo: &gix::Repository, count: usize, all: bool) -> Result<Vec<Commi
         return Ok(Vec::new()); // unborn branch: no commits yet
     }
 
-    let walk = repo
-        .rev_walk(tips)
-        .sorting(gix::revision::walk::Sorting::ByCommitTime(Default::default()))
-        .all()?;
+    let walk = topo::Builder::new(&repo.objects)
+        .with_tips(tips)
+        // Keeps each branch's commits together, like `git log --graph`.
+        .sorting(topo::Sorting::TopoOrder)
+        .build()?;
+
     let mut out = Vec::with_capacity(count.min(1024));
     for info in walk.take(count) {
         let info = info?;
-        let commit = info.object()?;
+        let commit = repo.find_commit(info.id)?;
         let author = commit.author()?;
+        let parents: Vec<ObjectId> = commit.parent_ids().map(|id| id.detach()).collect();
         out.push(Commit {
-            id: info.id().shorten_or_id().to_string(),
+            oid: info.id,
+            id: commit.id().shorten_or_id().to_string(),
+            is_merge: parents.len() > 1,
+            parents,
             summary: commit.message()?.summary().to_str_lossy().into_owned(),
             author: author.name.to_str_lossy().into_owned(),
             time: commit.time()?.seconds,
-            is_merge: commit.parent_ids().count() > 1,
-            refs: labels.get(&info.id).map(|v| v.iter().map(clone_label).collect()).unwrap_or_default(),
+            refs: labels.get(&info.id).cloned().unwrap_or_default(),
         });
     }
     Ok(out)
 }
 
-fn clone_label(l: &RefLabel) -> RefLabel {
-    match l {
-        RefLabel::Head(s) => RefLabel::Head(s.clone()),
-        RefLabel::Branch(s) => RefLabel::Branch(s.clone()),
-        RefLabel::Remote(s) => RefLabel::Remote(s.clone()),
-        RefLabel::Tag(s) => RefLabel::Tag(s.clone()),
-    }
-}
-
-fn ref_labels(repo: &gix::Repository) -> Result<HashMap<gix::ObjectId, Vec<RefLabel>>> {
-    let mut map: HashMap<gix::ObjectId, Vec<RefLabel>> = HashMap::new();
+/// Branch, remote and tag names for every commit that has one.
+pub fn ref_labels(repo: &gix::Repository) -> Result<HashMap<ObjectId, Vec<RefLabel>>> {
+    let mut map: HashMap<ObjectId, Vec<RefLabel>> = HashMap::new();
     let head_branch = repo.head_name()?.map(|n| n.shorten().to_string());
 
     let platform = repo.references()?;
     for r in platform.all()? {
         let Ok(mut r) = r else { continue };
-        let Ok(id) = r.peel_to_id() else { continue };
-        let id = id.detach();
+        // Read the name first: peeling a symbolic ref (origin/HEAD) renames it to its target.
         let full = r.name().as_bstr().to_str_lossy().into_owned();
         let short = r.name().shorten().to_string();
-        let label = if let Some(_) = full.strip_prefix("refs/heads/") {
+        let Ok(id) = r.peel_to_id() else { continue };
+        let id = id.detach();
+        let label = if full.starts_with("refs/heads/") {
             if head_branch.as_deref() == Some(short.as_str()) {
                 RefLabel::Head(short)
             } else {

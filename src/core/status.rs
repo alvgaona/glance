@@ -2,6 +2,8 @@ use anyhow::Result;
 use gix::bstr::ByteSlice;
 use gix::status::index_worktree::iter::Summary;
 
+use super::diff::{self, Size};
+
 #[derive(Debug, Default)]
 pub struct Status {
     /// Branch name, or `None` when HEAD is detached.
@@ -31,6 +33,8 @@ pub struct FileChange {
     pub path: String,
     /// Set for renames and copies.
     pub from: Option<String>,
+    /// Lines added/removed; `None` when not computed.
+    pub size: Option<Size>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,8 +47,10 @@ pub enum ChangeKind {
     TypeChange,
 }
 
-pub fn read(repo: &gix::Repository) -> Result<Status> {
+/// With `sizes`, also counts added/removed lines per file (slower; `gg repos` skips it).
+pub fn read(repo: &gix::Repository, sizes: bool) -> Result<Status> {
     let mut st = Status::default();
+    let workdir = repo.workdir().map(|d| d.to_path_buf());
 
     let head_ref = repo.head_name()?;
     st.branch = head_ref.as_ref().map(|n| n.shorten().to_string());
@@ -65,24 +71,42 @@ pub fn read(repo: &gix::Repository) -> Result<Status> {
         match item? {
             gix::status::Item::TreeIndex(change) => {
                 use gix::diff::index::ChangeRef::*;
-                let fc = match change {
-                    Addition { location, .. } => file(ChangeKind::Added, &location, None),
-                    Deletion { location, .. } => file(ChangeKind::Deleted, &location, None),
-                    Modification { location, .. } => file(ChangeKind::Modified, &location, None),
+                // (kind, path, renamed-from, old blob, new blob)
+                let (kind, path, from, old, new) = match change {
+                    Addition { location, id, .. } => (ChangeKind::Added, location, None, None, Some(id.into_owned())),
+                    Deletion { location, id, .. } => (ChangeKind::Deleted, location, None, Some(id.into_owned()), None),
+                    Modification {
+                        location, previous_id, id, ..
+                    } => (ChangeKind::Modified, location, None, Some(previous_id.into_owned()), Some(id.into_owned())),
                     Rewrite {
                         source_location,
+                        source_id,
                         location,
+                        id,
                         copy,
                         ..
                     } => {
                         let kind = if copy { ChangeKind::Copied } else { ChangeKind::Renamed };
-                        file(kind, &location, Some(&source_location))
+                        (kind, location, Some(source_location), Some(source_id.into_owned()), Some(id.into_owned()))
                     }
                 };
+                let mut fc = file(kind, &path, from.as_deref());
+                if sizes {
+                    let read = |id: Option<gix::ObjectId>| id.map(|id| diff::blob(repo, id)).unwrap_or_default();
+                    fc.size = diff::count(&read(old), &read(new));
+                }
                 st.staged.push(fc);
             }
             gix::status::Item::IndexWorktree(item) => {
                 let path = item.rela_path().to_str_lossy().into_owned();
+                // Index blob vs the file on disk.
+                let size = match (&item, &workdir) {
+                    (gix::status::index_worktree::Item::Modification { entry, .. }, Some(dir)) if sizes => {
+                        let on_disk = std::fs::read(dir.join(&path)).unwrap_or_default();
+                        diff::count(&diff::blob(repo, entry.id), &on_disk)
+                    }
+                    _ => None,
+                };
                 let kind = match item.summary() {
                     None => continue,
                     Some(Summary::Added) => {
@@ -100,7 +124,7 @@ pub fn read(repo: &gix::Repository) -> Result<Status> {
                     Some(Summary::Copied) => ChangeKind::Copied,
                     Some(Summary::IntentToAdd) => ChangeKind::Added,
                 };
-                st.unstaged.push(FileChange { kind, path, from: None });
+                st.unstaged.push(FileChange { kind, path, from: None, size });
             }
         }
     }
@@ -118,10 +142,12 @@ fn file(kind: ChangeKind, path: &gix::bstr::BStr, from: Option<&gix::bstr::BStr>
         kind,
         path: path.to_str_lossy().into_owned(),
         from: from.map(|f| f.to_str_lossy().into_owned()),
+        size: None,
     }
 }
 
-fn upstream(
+/// Upstream of `branch` with ahead/behind counts, if one is configured.
+pub fn upstream(
     repo: &gix::Repository,
     branch: &gix::refs::FullNameRef,
     head: gix::ObjectId,
@@ -146,7 +172,7 @@ fn upstream(
     }))
 }
 
-fn count_stashes(repo: &gix::Repository) -> usize {
+pub fn count_stashes(repo: &gix::Repository) -> usize {
     // The stash list is the reflog of refs/stash: one line per entry.
     std::fs::read(repo.common_dir().join("logs/refs/stash"))
         .map(|b| b.lines().count())

@@ -23,11 +23,11 @@ pub fn print(st: &Status, p: &Paint) {
     }
     if !st.staged.is_empty() {
         section("Staged", st.staged.len(), Style::new().green(), p);
-        files(&st.staged, p.green(), p);
+        files(&st.staged, Style::new().green(), p);
     }
     if !st.unstaged.is_empty() {
         section("Unstaged", st.unstaged.len(), Style::new().yellow(), p);
-        files(&st.unstaged, p.yellow(), p);
+        files(&st.unstaged, Style::new().yellow(), p);
     }
     if !st.untracked.is_empty() {
         section("Untracked", st.untracked.len(), Style::new().dimmed(), p);
@@ -80,24 +80,34 @@ fn section(title: &str, n: usize, color: Style, p: &Paint) {
 }
 
 fn files(list: &[FileChange], style: Style, p: &Paint) {
-    for f in list {
-        let mark = match f.kind {
-            ChangeKind::Added => "A",
-            ChangeKind::Modified => "M",
-            ChangeKind::Deleted => "D",
-            ChangeKind::Renamed => "R",
-            ChangeKind::Copied => "C",
-            ChangeKind::TypeChange => "T",
+    // Path text without colour, so sizes line up in one column.
+    let names: Vec<String> = list
+        .iter()
+        .map(|f| match &f.from {
+            Some(from) => format!("{from} → {}", f.path),
+            None => f.path.clone(),
+        })
+        .collect();
+    let width = names.iter().map(|n| n.chars().count()).max().unwrap_or(0);
+
+    for (f, name) in list.iter().zip(&names) {
+        let pad = " ".repeat(width - name.chars().count());
+        let shown = match &f.from {
+            Some(from) => format!("{} {} {}", from.style(p.dim()), "→".style(p.dim()), f.path),
+            None => f.path.clone(),
         };
-        match &f.from {
-            Some(from) => println!(
-                "  {}  {} {} {}",
-                mark.style(style),
-                from.style(p.dim()),
-                "→".style(p.dim()),
-                f.path
-            ),
-            None => println!("  {}  {}", mark.style(style), f.path),
-        }
+        let size = f.size.map(|s| super::size(s, p)).unwrap_or_default();
+        println!("  {}  {shown}{pad}  {size}", mark(f.kind).style(p.pick(style)));
+    }
+}
+
+pub fn mark(kind: ChangeKind) -> &'static str {
+    match kind {
+        ChangeKind::Added => "A",
+        ChangeKind::Modified => "M",
+        ChangeKind::Deleted => "D",
+        ChangeKind::Renamed => "R",
+        ChangeKind::Copied => "C",
+        ChangeKind::TypeChange => "T",
     }
 }

@@ -49,8 +49,16 @@ pub enum Command {
         /// Revision to show.
         #[arg(default_value = "HEAD")]
         rev: String,
+
+        /// Also print the full diff (through delta when installed).
+        #[arg(short, long)]
+        patch: bool,
     },
 
-    /// Every repo under the current folder, at a glance.
-    Repos,
+    /// Every repo in a folder, at a glance.
+    Repos {
+        /// Folder holding the repos.
+        #[arg(default_value = ".")]
+        dir: std::path::PathBuf,
+    },
 }

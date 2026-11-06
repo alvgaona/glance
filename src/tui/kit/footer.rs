@@ -33,6 +33,13 @@ pub fn search(query: &str, typing: bool, found: usize, total: usize) -> Line<'st
     Line::from(spans)
 }
 
+/// Adds `i sidebar` before the last hint, on screens wide enough for one.
+pub fn sidebar(pairs: &mut Vec<(&str, &str)>, width: u16) {
+    if width >= super::layout::SIDE_FROM {
+        pairs.insert(pairs.len().saturating_sub(1), ("i", "sidebar"));
+    }
+}
+
 /// `left`, then the hints on the right. List hints most important first: when the
 /// line is too narrow the ones before the last go first, so "q quit" always stays.
 pub fn draw(f: &mut Frame, area: Rect, left: Line<'static>, mut pairs: Vec<(&str, &str)>) {

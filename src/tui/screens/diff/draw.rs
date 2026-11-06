@@ -222,6 +222,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         ("ctrl+p", "commands"),
         ("q", "quit"),
     ]);
+    footer::sidebar(&mut pairs, area.width);
     if app.searching {
         pairs = vec![("enter", "keep filter"), ("esc", "clear")];
     }

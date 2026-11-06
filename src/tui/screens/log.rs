@@ -668,11 +668,14 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     } else {
         Line::styled(format!("{total} commit{}", if total == 1 { "" } else { "s" }), theme::muted())
     };
-    let pairs = match (app.opts.mode, app.searching) {
+    let mut pairs = match (app.opts.mode, app.searching) {
         (_, true) => vec![("enter", "keep filter"), ("esc", "clear")],
         (Mode::Browse, false) => vec![("/", "search"), ("enter", "copy"), ("ctrl+p", "commands"), ("esc", "quit")],
         (Mode::Pick, false) => vec![("/", "search"), ("enter", "rebase from here"), ("esc", "cancel")],
     };
+    if !app.searching && app.details {
+        footer::sidebar(&mut pairs, area.width);
+    }
     footer::draw(f, area, left, pairs);
 }
 

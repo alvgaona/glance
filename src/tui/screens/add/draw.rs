@@ -298,6 +298,7 @@ fn draw_footer(f: &mut Frame, app: &mut App, area: Rect) {
             pairs.push(("d", "discard hunk"));
         }
         pairs.extend([("v", "pick lines"), ("j/k", "hunks"), ("esc", "files"), ("q", "quit")]);
+        footer::sidebar(&mut pairs, area.width);
         footer::draw(f, area, left, pairs);
         return;
     }
@@ -312,7 +313,7 @@ fn draw_footer(f: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
     let toggle = if app.current().is_some_and(|e| e.group == Group::Staged) { "unstage" } else { "stage" };
-    let pairs = if app.entries.is_empty() {
+    let mut pairs = if app.entries.is_empty() {
         vec![("ctrl+r", "reload"), ("q", "quit")]
     } else {
         vec![
@@ -326,5 +327,6 @@ fn draw_footer(f: &mut Frame, app: &mut App, area: Rect) {
             ("q", "quit"),
         ]
     };
+    footer::sidebar(&mut pairs, area.width);
     footer::draw(f, area, Line::default(), pairs);
 }

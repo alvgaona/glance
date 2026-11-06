@@ -700,7 +700,11 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
             left.push(Span::styled(format!("{n} {}", a.word()), theme::muted()));
         }
     }
-    footer::draw(f, area, Line::from(left), vec![("ctrl+p", "commands"), ("w", "apply"), ("esc", "abort")]);
+    let mut pairs = vec![("ctrl+p", "commands"), ("w", "apply"), ("esc", "abort")];
+    if app.details {
+        footer::sidebar(&mut pairs, area.width);
+    }
+    footer::draw(f, area, Line::from(left), pairs);
 }
 
 fn totals(s: &Details) -> (u32, u32) {

@@ -19,7 +19,7 @@ pub fn panel(bg: Color) -> Block<'static> {
 }
 
 /// The sidebar shows from this many columns, this wide.
-const SIDE_FROM: u16 = 180;
+pub const SIDE_FROM: u16 = 180;
 const SIDE_WIDTH: u16 = 44;
 
 /// A screen's body, split: the list, the main pane, and on wide screens a sidebar.

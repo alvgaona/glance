@@ -212,7 +212,9 @@ fn the_sidebar_shows_hunks_and_the_next_commit_on_wide_screens() {
         cells.concat()
     };
     let wide = screen(&mut app, 200);
-    for want in ["hunks   1", "top of the file", "next commit", "nothing staged yet", "last commit", "b.txt"] {
+    for want in
+        ["hunks   1", "top of the file", "next commit", "nothing staged yet", "last commit", "b.txt", "i sidebar"]
+    {
         assert!(wide.contains(want), "{want}: {wide}");
     }
     assert!(!screen(&mut app, 150).contains("next commit"));

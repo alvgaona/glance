@@ -153,7 +153,7 @@ fn draw_side(f: &mut Frame, app: &mut App, area: Rect) {
         lines.push(Line::styled(format!("{} · {}", d.author, crate::fmt::relative_time(d.time, now)), theme::muted()));
         if !d.body.is_empty() {
             lines.push(Line::raw(""));
-            let body = d.body.lines().flat_map(|l| kit::wrap(l, w)).take(12);
+            let body = kit::reflow(&d.body, w).into_iter().take(12);
             lines.extend(body.map(|l| Line::styled(l, theme::muted())));
         }
         sections.push(Section { title: "", count: None, lines });

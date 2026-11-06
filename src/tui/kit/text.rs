@@ -27,6 +27,32 @@ pub fn truncate(line: Line<'static>, width: u16) -> Line<'static> {
     Line::from(out)
 }
 
+/// A commit message body wrapped to `width`: the lines of each paragraph are joined
+/// first (messages are broken at ~72 columns already). Blank lines stay, and a list
+/// item (`- `, `* `, `1. `) starts a new paragraph.
+pub fn reflow(text: &str, width: usize) -> Vec<String> {
+    let item = |l: &str| {
+        let l = l.trim_start();
+        l.starts_with("- ") || l.starts_with("* ") || l.split_once(". ").is_some_and(|(n, _)| n.parse::<u32>().is_ok())
+    };
+    let mut paragraphs: Vec<String> = Vec::new();
+    let mut open = false;
+    for l in text.lines() {
+        if l.trim().is_empty() {
+            paragraphs.push(String::new());
+            open = false;
+        } else if open && !item(l) {
+            let p = paragraphs.last_mut().unwrap();
+            p.push(' ');
+            p.push_str(l.trim());
+        } else {
+            paragraphs.push(l.trim_end().to_string());
+            open = true;
+        }
+    }
+    paragraphs.iter().flat_map(|p| wrap(p, width)).collect()
+}
+
 /// Word-wraps `text` to `width` columns. Words longer than a line are split.
 pub fn wrap(text: &str, width: usize) -> Vec<String> {
     let width = width.max(1);
@@ -70,7 +96,13 @@ pub fn pill(text: &str, bg: Color, fg: Color) -> Span<'static> {
 
 #[cfg(test)]
 mod tests {
-    use super::wrap;
+    use super::{reflow, wrap};
+
+    #[test]
+    fn reflows_paragraphs_and_keeps_lists() {
+        let body = "The sidebar is now\na shared piece.\n\n- one\n- two\n  more";
+        assert_eq!(reflow(body, 40), ["The sidebar is now a shared piece.", "", "- one", "- two more"]);
+    }
 
     #[test]
     fn wraps_words() {

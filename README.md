@@ -109,6 +109,7 @@ Options are remembered between runs, in `~/.local/state/glance/diff`.
 | --- | --- |
 | `/` | search commits |
 | `tab` | show or hide details |
+| `i` | on wide screens: the sidebar with the message and files; the details keep the diff |
 | `y` | copy the commit id |
 | `enter` | copy the commit id and quit |
 

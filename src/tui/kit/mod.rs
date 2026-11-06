@@ -19,6 +19,6 @@ pub use input::{Input, InputEvent};
 pub use layout::{centered, panel, panes};
 pub use palette::{Command, Palette, PaletteEvent};
 pub use scroll::Scroll;
-pub use text::{pill, truncate, wrap};
+pub use text::{pill, reflow, truncate, wrap};
 pub use textarea::TextArea;
 pub use toast::Toast;

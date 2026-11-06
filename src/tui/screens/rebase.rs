@@ -69,8 +69,12 @@ struct App<'r> {
     side: bool,
     side_open: bool,
     /// Diffs by (commit, pane width), filled in `tick`.
-    diffs: HashMap<(String, u16), Vec<Line<'static>>>,
+    diffs: HashMap<(String, u16), diff::Patches>,
     diff_width: u16,
+    /// The sidebar's file section, and the file on each of its rows ("also in" rows
+    /// have none), for clicks.
+    files_area: Rect,
+    file_rows: Vec<Option<usize>>,
     detail_scroll: Scroll,
     /// The commit the diff pane is scrolled for: another one starts at the top.
     scrolled_for: Option<String>,
@@ -123,6 +127,8 @@ fn start(repo: &gix::Repository, mut lines: Vec<Todo>, header: Header, newest_fi
         side_open: false,
         diffs: HashMap::new(),
         diff_width: 0,
+        files_area: Rect::default(),
+        file_rows: Vec::new(),
         detail_scroll: Scroll::default(),
         scrolled_for: None,
         detail_area: Rect::default(),
@@ -153,11 +159,14 @@ impl Screen for App<'_> {
         let Some(Todo::Commit { hash, .. }) = self.lines.get(self.selected) else { return Ok(()) };
         let key = (hash.clone(), self.diff_width);
         if !self.diffs.contains_key(&key) {
-            let lines = match self.info.get(hash).and_then(|i| i.as_ref()) {
+            let p = match self.info.get(hash).and_then(|i| i.as_ref()) {
                 Some(d) => diff::patches(self.repo, &d.files, self.diff_width),
-                None => vec![Line::styled("Couldn't read this commit.", theme::muted())],
+                None => {
+                    let lines = vec![Line::styled("Couldn't read this commit.", theme::muted())];
+                    diff::Patches { lines, ..Default::default() }
+                }
             };
-            self.diffs.insert(key, lines);
+            self.diffs.insert(key, p);
         }
         Ok(())
     }
@@ -356,6 +365,14 @@ impl App<'_> {
             MouseEventKind::ScrollDown if in_diff => self.detail_scroll.wheel(true),
             MouseEventKind::ScrollUp => self.select(self.selected.saturating_sub(1)),
             MouseEventKind::ScrollDown => self.select(self.selected + 1),
+            MouseEventKind::Down(MouseButton::Left) if self.side_open && list::inside(self.files_area, &m) => {
+                let row = (m.row - self.files_area.y) as usize;
+                let Some(Some(file)) = self.file_rows.get(row) else { return };
+                let Some(Todo::Commit { hash, .. }) = self.lines.get(self.selected) else { return };
+                if let Some(&at) = self.diffs.get(&(hash.clone(), self.diff_width)).and_then(|d| d.files.get(*file)) {
+                    self.detail_scroll.to(at);
+                }
+            }
             MouseEventKind::Down(MouseButton::Left) => {
                 if let Some(i) = list::row_at(self.list_area, self.scroll, &m) {
                     self.select(i);
@@ -396,7 +413,7 @@ fn draw(f: &mut Frame, app: &mut App) {
     match (details, side) {
         // Wide: the message and files on the side, the diff in the middle.
         (Some(main), Some(side)) => {
-            draw_side(f, app, side);
+            (app.files_area, app.file_rows) = draw_side(f, app, side);
             draw_diff(f, app, main);
         }
         (Some(d), None) => draw_details(f, app, d),
@@ -618,17 +635,18 @@ fn also_in(app: &App, path: &str) -> Vec<String> {
 }
 
 /// The sidebar: the commit's message and what its action does, then its files, each
-/// with the other commits in the list that change it too.
-fn draw_side(f: &mut Frame, app: &App, area: Rect) {
+/// with the other commits in the list that change it too. Gives where the files are
+/// and the file on each row.
+fn draw_side(f: &mut Frame, app: &App, area: Rect) -> (Rect, Vec<Option<usize>>) {
     let w = (area.width as usize).saturating_sub(4);
     let Some(Todo::Commit { hash, action, .. }) = app.lines.get(app.selected) else {
         sidebar::draw(f, area, vec![Section { title: "", count: None, lines: Vec::new() }]);
-        return;
+        return Default::default();
     };
     let Some(d) = app.info.get(hash).and_then(|i| i.as_ref()) else {
         let lines = vec![Line::styled("Couldn't read this commit.", theme::muted())];
         sidebar::draw(f, area, vec![Section { title: "", count: None, lines }]);
-        return;
+        return Default::default();
     };
     let mut lines = vec![
         Line::from(vec![
@@ -651,11 +669,13 @@ fn draw_side(f: &mut Frame, app: &App, area: Rect) {
         lines.extend(note.map(|l| Line::styled(format!("  {l}"), theme::text())));
     }
 
-    let mut files = Vec::new();
-    for file in &d.files {
+    let (mut files, mut rows) = (Vec::new(), Vec::new());
+    for (i, file) in d.files.iter().enumerate() {
         files.push(file_row(file));
+        rows.push(Some(i));
         let others = also_in(app, &file.path);
         if !others.is_empty() {
+            rows.push(None);
             files.push(Line::styled(format!("   also in {}", others.join(", ")), Style::new().fg(theme::YELLOW)));
         }
     }
@@ -663,7 +683,7 @@ fn draw_side(f: &mut Frame, app: &App, area: Rect) {
         Section { title: "", count: None, lines },
         Section { title: "files", count: Some(d.files.len()), lines: files },
     ];
-    sidebar::draw(f, area, sections);
+    (sidebar::draw(f, area, sections)[1], rows)
 }
 
 /// The selected commit's diff, scrolled with ctrl+d/u or the wheel.
@@ -678,7 +698,7 @@ fn draw_diff(f: &mut Frame, app: &mut App, area: Rect) {
         app.scrolled_for = Some(hash.clone());
         app.detail_scroll.reset();
     }
-    let Some(lines) = app.diffs.get(&(hash.clone(), inner.width)) else { return };
+    let Some(diff::Patches { lines, .. }) = app.diffs.get(&(hash.clone(), inner.width)) else { return };
     app.detail_scroll.fit(lines.len(), inner.height);
     let shown: Vec<Line> =
         lines.iter().skip(app.detail_scroll.top() as usize).take(inner.height as usize).cloned().collect();
@@ -769,6 +789,8 @@ mod tests {
         let text: String = t.backend().buffer().content().iter().map(|c| c.symbol()).collect();
         assert!(app.side_open && text.contains("files   1") && text.contains("also in"), "{text}");
         assert!(app.diffs.keys().any(|(_, w)| *w == app.diff_width));
+        // The file's row, then its "also in" row, which goes nowhere.
+        assert_eq!(app.file_rows, [Some(0), None]);
         app.key(press(KeyCode::Char('i')));
         t.draw(|f| app.draw(f)).unwrap();
         assert!(!app.side_open);

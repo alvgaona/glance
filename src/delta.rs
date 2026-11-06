@@ -10,18 +10,33 @@ pub fn available() -> bool {
 /// Put in front of each hunk header (delta's `hunk-label`) to find them in the output,
 /// then drawn as the `•` delta's own `navigate` puts there. Private use: never in a diff.
 const MARK: char = '\u{E000}';
+/// The same for file headers, put before delta's usual labels and then taken out.
+const FILE_MARK: char = '\u{E001}';
 
-/// What delta drew: text with colour codes, and the lines its hunk headers are on.
+/// What delta drew: text with colour codes, and the lines its hunk and file headers
+/// are on.
 pub struct Drawn {
     pub text: String,
     pub hunks: Vec<usize>,
+    pub files: Vec<usize>,
 }
 
 /// `patch` drawn by delta at `width` columns. The user's delta settings (theme, styles)
 /// still apply; `set` overrides some, as `("side-by-side", "false")`.
 pub fn render(patch: &str, width: u16, set: &[(&str, &str)]) -> Result<Drawn, String> {
     let mark = MARK.to_string();
-    let fixed = [("hunk-label", mark.as_str()), ("hyperlinks", "false")];
+    let label = |text: &str| format!("{FILE_MARK}{text}");
+    let (added, removed, renamed, copied) = (label("added:"), label("removed:"), label("renamed:"), label("copied:"));
+    let modified = FILE_MARK.to_string();
+    let fixed = [
+        ("hunk-label", mark.as_str()),
+        ("file-modified-label", modified.as_str()),
+        ("file-added-label", added.as_str()),
+        ("file-removed-label", removed.as_str()),
+        ("file-renamed-label", renamed.as_str()),
+        ("file-copied-label", copied.as_str()),
+        ("hyperlinks", "false"),
+    ];
     // Kept: a `git -c` from the user still counts.
     let params = std::iter::once(std::env::var("GIT_CONFIG_PARAMETERS").unwrap_or_default())
         .chain(fixed.iter().chain(set).map(|(k, v)| format!("'delta.{k}'='{v}'")))
@@ -37,8 +52,11 @@ pub fn render(patch: &str, width: u16, set: &[(&str, &str)]) -> Result<Drawn, St
         Ok(out) => return Err(out.stderr.trim().to_string()),
         Err(e) => return Err(format!("could not run delta: {e}")),
     };
-    let hunks = out.lines().enumerate().filter(|(_, l)| l.contains(MARK)).map(|(i, _)| i).collect();
-    Ok(Drawn { text: out.replace(MARK, "•"), hunks })
+    let at = |mark: char| out.lines().enumerate().filter(|(_, l)| l.contains(mark)).map(|(i, _)| i).collect();
+    let (hunks, files) = (at(MARK), at(FILE_MARK));
+    // A modified file's label is only the mark: take its space too, as delta's own empty label has none.
+    let text = out.replace(MARK, "•").replace(&format!("{FILE_MARK} "), "").replace(FILE_MARK, "");
+    Ok(Drawn { text, hunks, files })
 }
 
 /// A delta switch from git config (`delta.side-by-side`), when it's set.

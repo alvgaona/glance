@@ -14,24 +14,44 @@ use crate::tui::theme;
 /// Stop drawing diffs after this many lines; huge commits would make the panel slow.
 const MAX_DIFF_LINES: usize = 4000;
 
+/// Diff lines, and the lines each file's header and each hunk start on.
+#[derive(Default)]
+pub struct Patches {
+    pub lines: Vec<Line<'static>>,
+    pub files: Vec<usize>,
+    pub hunks: Vec<usize>,
+}
+
+impl Patches {
+    /// Put `lines` above: every position moves down.
+    pub fn below(mut self, mut lines: Vec<Line<'static>>) -> Self {
+        let n = lines.len();
+        self.files.iter_mut().chain(&mut self.hunks).for_each(|i| *i += n);
+        lines.append(&mut self.lines);
+        self.lines = lines;
+        self
+    }
+}
+
 /// Each file's diff, `width` columns wide: drawn by delta when it's installed, else a
 /// header bar per file and its lines, added on green and removed on red.
-pub fn patches(repo: &gix::Repository, files: &[FileStat], width: u16) -> Vec<Line<'static>> {
+pub fn patches(repo: &gix::Repository, files: &[FileStat], width: u16) -> Patches {
     if crate::delta::available()
-        && let Some(lines) = by_delta(repo, files, width)
+        && let Some(p) = by_delta(repo, files, width)
     {
-        return lines;
+        return p;
     }
-    let mut out = Vec::new();
+    let mut out = Patches::default();
     let mut shown = 0;
     for f in files {
-        out.push(Line::raw(""));
+        out.lines.push(Line::raw(""));
+        out.files.push(out.lines.len());
         let (mark, color) = kind_mark(f.kind);
         let name = match &f.from {
             Some(from) => format!("{from} → {}", f.path),
             None => f.path.clone(),
         };
-        out.push(
+        out.lines.push(
             Line::from(vec![
                 Span::styled(format!(" {mark} "), Style::new().fg(color)),
                 Span::styled(name, theme::bold()),
@@ -39,21 +59,26 @@ pub fn patches(repo: &gix::Repository, files: &[FileStat], width: u16) -> Vec<Li
             .style(Style::new().bg(theme::ELEMENT)),
         );
         if shown >= MAX_DIFF_LINES {
-            out.push(Line::styled("   diff not shown: too many changes", theme::faint()));
+            out.lines.push(Line::styled("   diff not shown: too many changes", theme::faint()));
             continue;
         }
         let Some(lines) = tree::file_patch(repo, f) else {
-            out.push(Line::styled("   binary or very large file", theme::faint()));
+            out.lines.push(Line::styled("   binary or very large file", theme::faint()));
             continue;
         };
         shown += lines.len();
-        out.extend(lines.into_iter().map(line));
+        for l in lines {
+            if matches!(l, PatchLine::Hunk { .. }) {
+                out.hunks.push(out.lines.len());
+            }
+            out.lines.push(line(l));
+        }
     }
     out
 }
 
 /// All the files in one delta run; `None` if delta failed.
-fn by_delta(repo: &gix::Repository, files: &[FileStat], width: u16) -> Option<Vec<Line<'static>>> {
+fn by_delta(repo: &gix::Repository, files: &[FileStat], width: u16) -> Option<Patches> {
     let mut text = Vec::new();
     let (mut left, mut lines) = (files.len(), 0);
     for f in files {
@@ -72,7 +97,9 @@ fn by_delta(repo: &gix::Repository, files: &[FileStat], width: u16) -> Option<Ve
     if left > 0 {
         out.push(Line::styled(format!("   {left} more files not shown: too many changes"), theme::faint()));
     }
-    Some(out)
+    // The blank line on top moves everything down one.
+    let at = |v: Vec<usize>| v.into_iter().map(|i| i + 1).collect();
+    Some(Patches { lines: out, files: at(drawn.files), hunks: at(drawn.hunks) })
 }
 
 /// One diff line: line number, `+`/`-`, text; added lines on green, removed on red.

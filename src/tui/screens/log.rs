@@ -71,7 +71,7 @@ struct App<'r> {
     meta: HashMap<gix::ObjectId, Rc<Details>>,
     /// The details panel by (commit, width, sidebar open), filled in `tick`: delta
     /// draws diffs to fit, and with the sidebar open the panel is only the diff.
-    cache: HashMap<(gix::ObjectId, u16, bool), Rc<Vec<Line<'static>>>>,
+    cache: HashMap<(gix::ObjectId, u16, bool), Rc<diff::Patches>>,
     /// The details panel's inner width at the last draw.
     detail_width: u16,
     /// The sidebar, on wide screens, and whether the last draw had room for it.
@@ -81,6 +81,8 @@ struct App<'r> {
     palette: Option<Palette<Cmd>>,
     list_area: Rect,
     detail_area: Rect,
+    /// The sidebar's file rows, one per file, for clicks.
+    files_area: Rect,
     repo_name: String,
     branch: String,
 }
@@ -120,6 +122,7 @@ fn start(repo: &gix::Repository, opts: Options) -> Result<App<'_>> {
         palette: None,
         list_area: Rect::default(),
         detail_area: Rect::default(),
+        files_area: Rect::default(),
         repo_name: crate::git::repo_name(repo),
         branch: repo.head_name().ok().flatten().map(|n| n.shorten().to_string()).unwrap_or_else(|| "detached".into()),
         opts,
@@ -321,6 +324,14 @@ impl App<'_> {
                 self.step(self.visible.len() as isize);
                 return Flow::Stay;
             }
+            KeyCode::Char('n') if self.details => {
+                self.jump(true);
+                return Flow::Stay;
+            }
+            KeyCode::Char('N') if self.details => {
+                self.jump(false);
+                return Flow::Stay;
+            }
             KeyCode::Char('/') => Cmd::Search,
             KeyCode::Char('y') if self.opts.mode == Mode::Browse => Cmd::Copy,
             KeyCode::Char('a') if self.opts.mode == Mode::Browse => Cmd::ToggleAll,
@@ -365,6 +376,12 @@ impl App<'_> {
             MouseEventKind::ScrollUp if in_details => self.detail_scroll.wheel(false),
             MouseEventKind::ScrollDown => self.step(1),
             MouseEventKind::ScrollUp => self.step(-1),
+            MouseEventKind::Down(MouseButton::Left) if self.side_open && list::inside(self.files_area, &m) => {
+                let file = (m.row - self.files_area.y) as usize;
+                if let Some(at) = self.detail().and_then(|d| d.files.get(file).copied()) {
+                    self.detail_scroll.to(at);
+                }
+            }
             MouseEventKind::Down(MouseButton::Left) => {
                 let Some(mut i) = list::row_at(self.list_area, self.scroll, &m) else { return };
                 // A click on a label selects the commit below it.
@@ -395,18 +412,31 @@ impl App<'_> {
                 }
                 Err(e) => {
                     let lines = vec![Line::styled(format!("Couldn't read this commit: {e}"), theme::muted())];
-                    self.cache.insert(key, Rc::new(lines));
+                    self.cache.insert(key, Rc::new(diff::Patches { lines, ..Default::default() }));
                     return;
                 }
             }
         }
         let d = &self.meta[&oid];
         // The sidebar has the message and the files; the panel keeps the diff.
-        let lines = if key.2 { diff::patches(self.repo, &d.files, key.1) } else { detail_lines(self.repo, d, key.1) };
-        self.cache.insert(key, Rc::new(lines));
+        let p = if key.2 { diff::patches(self.repo, &d.files, key.1) } else { detail_lines(self.repo, d, key.1) };
+        self.cache.insert(key, Rc::new(p));
     }
 
-    fn detail(&self) -> Option<Rc<Vec<Line<'static>>>> {
+    /// Scrolls the details to the next hunk (or the one before), if there is one.
+    fn jump(&mut self, forward: bool) {
+        let Some(d) = self.detail() else { return };
+        let top = self.detail_scroll.top() as usize;
+        let to = if forward { d.hunks.iter().find(|&&h| h > top) } else { d.hunks.iter().rev().find(|&&h| h < top) };
+        match to {
+            Some(&h) => self.detail_scroll.to(h),
+            // Before the first hunk: back to the top, where the message is.
+            None if !forward => self.detail_scroll.reset(),
+            None => {}
+        }
+    }
+
+    fn detail(&self) -> Option<Rc<diff::Patches>> {
         self.cache.get(&(self.selected_commit()?.oid, self.detail_width, self.side_open)).cloned()
     }
 }
@@ -445,7 +475,7 @@ fn draw(f: &mut Frame, app: &mut App) {
         let p = kit::panes(body, Some(list_width(app)), app.visible.len() as u16 + 2, app.side);
         if let Some(side) = p.side {
             app.side_open = true;
-            draw_side(f, app, side);
+            app.files_area = draw_side(f, app, side);
         }
         (p.list, Some(p.main))
     };
@@ -592,18 +622,19 @@ fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
         f.render_widget(block, area);
         return;
     };
-    app.detail_scroll.fit(d.len(), inner_h);
-    f.render_widget(Paragraph::new(d.to_vec()).scroll((app.detail_scroll.top(), 0)).block(block), area);
+    app.detail_scroll.fit(d.lines.len(), inner_h);
+    f.render_widget(Paragraph::new(d.lines.clone()).scroll((app.detail_scroll.top(), 0)).block(block), area);
     app.detail_scroll.draw_more(f, area);
 }
 
-/// The sidebar: the commit's id, author, refs and message, then its files.
-fn draw_side(f: &mut Frame, app: &App, area: Rect) {
+/// The sidebar: the commit's id, author, refs and message, then its files. Gives where
+/// the file rows are.
+fn draw_side(f: &mut Frame, app: &App, area: Rect) -> Rect {
     let w = (area.width as usize).saturating_sub(4);
     let Some(d) = app.selected_commit().and_then(|c| app.meta.get(&c.oid)) else {
         let reading = Section { title: "", count: None, lines: vec![Line::styled("reading…", theme::faint())] };
         sidebar::draw(f, area, vec![reading]);
-        return;
+        return Rect::default();
     };
     let mut lines = vec![
         Line::from(vec![
@@ -629,10 +660,10 @@ fn draw_side(f: &mut Frame, app: &App, area: Rect) {
         Section { title: "", count: None, lines },
         Section { title: "files", count: Some(d.files.len()), lines: files },
     ];
-    sidebar::draw(f, area, sections);
+    sidebar::draw(f, area, sections)[1]
 }
 
-fn detail_lines(repo: &gix::Repository, s: &Details, width: u16) -> Vec<Line<'static>> {
+fn detail_lines(repo: &gix::Repository, s: &Details, width: u16) -> diff::Patches {
     let mut out = vec![Line::from(vec![
         Span::styled(s.id.clone(), Style::new().fg(theme::ACCENT)),
         Span::styled("  ·  ", theme::faint()),
@@ -657,8 +688,7 @@ fn detail_lines(repo: &gix::Repository, s: &Details, width: u16) -> Vec<Line<'st
 
     out.push(Line::raw(""));
     out.extend(changes::files(&s.files, None));
-    out.extend(diff::patches(repo, &s.files, width));
-    out
+    diff::patches(repo, &s.files, width).below(out)
 }
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
@@ -714,9 +744,46 @@ mod tests {
         assert!(app.side_open && wide.contains("files   1"), "{wide}");
         // The panel is the diff only: the subject `a.txt` shows in the list and the sidebar.
         let panel = app.detail().unwrap();
-        assert!(!panel.iter().any(|l| l.to_string() == "a.txt"), "{panel:?}");
+        assert!(!panel.lines.iter().any(|l| l.to_string() == "a.txt"), "{:?}", panel.lines);
         app.key(press(KeyCode::Char('i')));
         screen(&mut app, 200);
-        assert!(!app.side_open && app.detail().unwrap().iter().any(|l| l.to_string() == "a.txt"));
+        assert!(!app.side_open && app.detail().unwrap().lines.iter().any(|l| l.to_string() == "a.txt"));
+    }
+
+    #[test]
+    fn n_jumps_to_hunks_and_a_click_on_a_file_to_its_diff() {
+        let s = crate::git::run::Scratch::new("log-jump");
+        let old: String = (1..=30).map(|i| format!("{i}\n")).collect();
+        s.commit("a.txt", &old);
+        s.write("a.txt", &old.replace("\n2\n", "\ntwo\n").replace("25\n", "twenty-five\n"));
+        s.write("b.txt", "b\n");
+        s.git(&["add", "."]);
+        s.git(&["commit", "-q", "-m", "two files"]);
+        let repo = s.repo();
+        let mut app = start(&repo, Options { mode: Mode::Browse, all: false, count: 10 }).unwrap();
+        let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(200, 30)).unwrap();
+        t.draw(|f| app.draw(f)).unwrap();
+        app.tick().unwrap();
+        t.draw(|f| app.draw(f)).unwrap();
+        let d = app.detail().unwrap();
+        assert_eq!((d.files.len(), d.hunks.len()), (2, 3), "{:?}", d.lines);
+
+        app.key(press(KeyCode::Char('n')));
+        assert_eq!(app.detail_scroll.top() as usize, d.hunks[0]);
+        app.key(press(KeyCode::Char('n')));
+        assert_eq!(app.detail_scroll.top() as usize, d.hunks[1]);
+        app.key(press(KeyCode::Char('N')));
+        assert_eq!(app.detail_scroll.top() as usize, d.hunks[0]);
+
+        // The second file's row in the sidebar.
+        let at = app.files_area;
+        let click = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: at.x + 2,
+            row: at.y + 1,
+            modifiers: KeyModifiers::NONE,
+        };
+        app.mouse(click);
+        assert_eq!(app.detail_scroll.top() as usize, d.files[1]);
     }
 }

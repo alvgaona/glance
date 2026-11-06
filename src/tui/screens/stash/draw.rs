@@ -237,8 +237,8 @@ pub(super) fn build_detail(
                 out.push(Line::raw(""));
                 out.extend(panels::changes::files(&untracked, Some("untracked")));
             }
-            out.extend(diff::patches(repo, &tracked, width as u16));
-            out.extend(diff::patches(repo, &untracked, width as u16));
+            out.extend(diff::patches(repo, &tracked, width as u16).lines);
+            out.extend(diff::patches(repo, &untracked, width as u16).lines);
         }
         Err(e) => out.push(Line::styled(format!("couldn't read the stash: {e}"), Style::new().fg(theme::RED))),
     }

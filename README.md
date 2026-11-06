@@ -109,7 +109,8 @@ Options are remembered between runs, in `~/.local/state/glance/diff`.
 | --- | --- |
 | `/` | search commits |
 | `tab` | show or hide details |
-| `i` | on wide screens: the sidebar with the message and files; the details keep the diff |
+| `n` / `N` | next / previous hunk in the details |
+| `i` | on wide screens: the sidebar with the message and files; the details keep the diff, and a click on a file goes to it |
 | `y` | copy the commit id |
 | `enter` | copy the commit id and quit |
 
@@ -161,7 +162,7 @@ Options are remembered between runs, in `~/.local/state/glance/diff`.
 | `p` `r` `e` `s` `f` `d` | pick, reword, edit, squash, fixup, drop |
 | `shift+↑` / `shift+↓` | move a commit |
 | `o` | newest or oldest first (`git config glance.rebaseOrder oldest`) |
-| `i` | on wide screens: the commit's diff, with its message and files on the side; each file says which other commits change it |
+| `i` | on wide screens: the commit's diff, with its message and files on the side; each file says which other commits change it, and a click on it goes to its diff |
 | `ctrl+d` / `ctrl+u` | scroll that diff |
 | `ctrl+s` | run the rebase |
 | `esc` | abort |

@@ -76,10 +76,16 @@ impl Scroll {
 
     /// "↓ 12 more · J/K" on the bottom edge of `area` while there's more, "↑ J/K" at the end.
     pub fn draw_more(&self, f: &mut Frame, area: Rect) {
+        self.draw_more_keys(f, area, "J/K")
+    }
+
+    /// [`Scroll::draw_more`] naming other keys, for screens where J/K do something else.
+    pub fn draw_more_keys(&self, f: &mut Frame, area: Rect, keys: &str) {
         if self.top == 0 && self.below == 0 {
             return;
         }
-        let text = if self.below > 0 { format!(" ↓ {} more · J/K ", self.below) } else { " ↑ J/K ".to_string() };
+        let text =
+            if self.below > 0 { format!(" ↓ {} more · {keys} ", self.below) } else { format!(" ↑ {keys} ") };
         let w = text.chars().count() as u16;
         let r = Rect { x: area.right().saturating_sub(w + 1), y: area.bottom().saturating_sub(1), width: w, height: 1 };
         f.render_widget(Paragraph::new(Span::styled(text, theme::faint())), r.intersection(area));

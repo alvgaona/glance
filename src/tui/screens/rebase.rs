@@ -15,10 +15,11 @@ use ratatui::{
 use crate::fmt::{now, relative_time};
 use crate::git::commit::{self, Details};
 use crate::git::diff::Size;
-use crate::git::status::ChangeKind;
 use crate::git::todo::{self, Action, Line as Todo};
 use crate::tui::app::{self, Flow, Screen};
-use crate::tui::kit::{self, Command, Confirm, Palette, PaletteEvent, Toast, footer, list};
+use crate::tui::kit::sidebar::{self, Section};
+use crate::tui::kit::{self, Command, Confirm, Palette, PaletteEvent, Scroll, Toast, footer, list};
+use crate::tui::panels::diff;
 use crate::tui::theme;
 
 /// What the editor shows at the top.
@@ -41,11 +42,13 @@ enum Cmd {
     Flip,
     Undo,
     Details,
+    Side,
     Apply,
     Abort,
 }
 
-struct App {
+struct App<'r> {
+    repo: &'r gix::Repository,
     /// `lines` and `original` are kept in display order; git wants oldest first.
     lines: Vec<Todo>,
     original: Vec<Todo>,
@@ -62,10 +65,29 @@ struct App {
     confirm_abort: Option<Confirm>,
     /// Where the rows were last drawn, for mouse clicks.
     list_area: Rect,
+    /// The sidebar, on wide screens. With it open, the details pane is the diff.
+    side: bool,
+    side_open: bool,
+    /// Diffs by (commit, pane width), filled in `tick`.
+    diffs: HashMap<(String, u16), Vec<Line<'static>>>,
+    diff_width: u16,
+    detail_scroll: Scroll,
+    /// The commit the diff pane is scrolled for: another one starts at the top.
+    scrolled_for: Option<String>,
+    detail_area: Rect,
 }
 
 /// `lines` come in git's order (oldest first); the result is in git's order too.
-pub fn run(repo: &gix::Repository, mut lines: Vec<Todo>, header: Header, newest_first: bool) -> Result<Outcome> {
+pub fn run(repo: &gix::Repository, lines: Vec<Todo>, header: Header, newest_first: bool) -> Result<Outcome> {
+    let mut app = start(repo, lines, header, newest_first);
+    app.side = crate::tui::state::sidebar();
+    let out = app::run(&mut app)?;
+    crate::tui::state::set_sidebar(app.side);
+    Ok(out)
+}
+
+/// The screen as it opens, before the first draw.
+fn start(repo: &gix::Repository, mut lines: Vec<Todo>, header: Header, newest_first: bool) -> App<'_> {
     // Commit details up front: rebases are short, and it keeps drawing simple.
     let info = lines
         .iter()
@@ -83,7 +105,8 @@ pub fn run(repo: &gix::Repository, mut lines: Vec<Todo>, header: Header, newest_
         lines.reverse();
     }
 
-    let mut app = App {
+    App {
+        repo,
         original: lines.clone(),
         lines,
         newest_first,
@@ -96,12 +119,17 @@ pub fn run(repo: &gix::Repository, mut lines: Vec<Todo>, header: Header, newest_
         palette: None,
         confirm_abort: None,
         list_area: Rect::default(),
-    };
-
-    app::run(&mut app)
+        side: true,
+        side_open: false,
+        diffs: HashMap::new(),
+        diff_width: 0,
+        detail_scroll: Scroll::default(),
+        scrolled_for: None,
+        detail_area: Rect::default(),
+    }
 }
 
-impl Screen for App {
+impl Screen for App<'_> {
     type Out = Outcome;
     type Effect = std::convert::Infallible;
 
@@ -116,6 +144,22 @@ impl Screen for App {
     }
     fn mouse(&mut self, m: MouseEvent) {
         self.on_mouse(m)
+    }
+    fn tick(&mut self) -> Result<()> {
+        // The diff pane only shows with the sidebar; zero until the first draw.
+        if !self.side_open || self.diff_width == 0 {
+            return Ok(());
+        }
+        let Some(Todo::Commit { hash, .. }) = self.lines.get(self.selected) else { return Ok(()) };
+        let key = (hash.clone(), self.diff_width);
+        if !self.diffs.contains_key(&key) {
+            let lines = match self.info.get(hash).and_then(|i| i.as_ref()) {
+                Some(d) => diff::patches(self.repo, &d.files, self.diff_width),
+                None => vec![Line::styled("Couldn't read this commit.", theme::muted())],
+            };
+            self.diffs.insert(key, lines);
+        }
+        Ok(())
     }
     fn toast(&mut self) -> &mut Option<Toast> {
         &mut self.toast
@@ -133,6 +177,7 @@ fn commands() -> Vec<Command<Cmd>> {
         Command { label: "Move up", keys: "shift+↑", action: Cmd::MoveUp },
         Command { label: "Move down", keys: "shift+↓", action: Cmd::MoveDown },
         Command { label: "Flip order: newest or oldest first", keys: "o", action: Cmd::Flip },
+        Command { label: "Sidebar: show or hide (wide screens)", keys: "i", action: Cmd::Side },
         Command { label: "Undo all changes", keys: "u", action: Cmd::Undo },
         Command { label: "Show or hide details", keys: "tab", action: Cmd::Details },
         Command { label: "Apply and run the rebase", keys: "ctrl+s", action: Cmd::Apply },
@@ -140,7 +185,7 @@ fn commands() -> Vec<Command<Cmd>> {
     ]
 }
 
-impl App {
+impl App<'_> {
     fn last(&self) -> usize {
         self.lines.len().saturating_sub(1)
     }
@@ -182,6 +227,11 @@ impl App {
             return None;
         }
 
+        // J/K move commits here, so the diff scrolls with ctrl+d/u only.
+        if ctrl && matches!(k.code, KeyCode::Char('d' | 'u')) {
+            self.detail_scroll.key(k, self.detail_area.height);
+            return None;
+        }
         let i = self.selected;
         let cmd = match k.code {
             KeyCode::Char('p') if ctrl => {
@@ -229,6 +279,7 @@ impl App {
             KeyCode::Char('o') => Cmd::Flip,
             KeyCode::Char('u') => Cmd::Undo,
             KeyCode::Tab => Cmd::Details,
+            KeyCode::Char('i') => Cmd::Side,
             KeyCode::Char(c) => Cmd::Set(Action::ALL.into_iter().find(|a| a.key() == c)?),
             _ => return None,
         };
@@ -267,6 +318,7 @@ impl App {
                 self.toast = Some(Toast::new("Back to the original list", theme::ACCENT));
             }
             Cmd::Details => self.details = !self.details,
+            Cmd::Side => self.side = !self.side,
             Cmd::Apply => {
                 let mut lines = self.lines.clone();
                 if self.newest_first {
@@ -298,7 +350,10 @@ impl App {
         if self.palette.is_some() || self.confirm_abort.is_some() {
             return;
         }
+        let in_diff = self.side_open && list::inside(self.detail_area, &m);
         match m.kind {
+            MouseEventKind::ScrollUp if in_diff => self.detail_scroll.wheel(false),
+            MouseEventKind::ScrollDown if in_diff => self.detail_scroll.wheel(true),
             MouseEventKind::ScrollUp => self.select(self.selected.saturating_sub(1)),
             MouseEventKind::ScrollDown => self.select(self.selected + 1),
             MouseEventKind::Down(MouseButton::Left) => {
@@ -330,15 +385,22 @@ fn draw(f: &mut Frame, app: &mut App) {
 
     draw_header(f, app, header);
 
-    let (list, details) = if !app.details {
-        (body, None)
+    let (list, details, side) = if !app.details {
+        (body, None, None)
     } else {
-        let p = kit::panes(body, Some(list_width(app)), app.lines.len() as u16 + 2, false);
-        (p.list, Some(p.main))
+        let p = kit::panes(body, Some(list_width(app)), app.lines.len() as u16 + 2, app.side);
+        (p.list, Some(p.main), p.side)
     };
     draw_list(f, app, list);
-    if let Some(d) = details {
-        draw_details(f, app, d);
+    app.side_open = side.is_some();
+    match (details, side) {
+        // Wide: the message and files on the side, the diff in the middle.
+        (Some(main), Some(side)) => {
+            draw_side(f, app, side);
+            draw_diff(f, app, main);
+        }
+        (Some(d), None) => draw_details(f, app, d),
+        _ => {}
     }
     draw_footer(f, app, footer);
 
@@ -504,17 +566,7 @@ fn details(s: &Details, action: Action, newest_first: bool) -> Vec<Line<'static>
         out.extend(s.body.lines().map(|l| Line::styled(l.to_string(), theme::muted())));
     }
 
-    // What the chosen action will do, in words.
-    let older = if newest_first { "below" } else { "above" };
-    let what = match action {
-        Action::Pick => None,
-        Action::Reword => Some(("Git will ask for a new message.".to_string(), theme::BLUE)),
-        Action::Edit => Some(("The rebase stops here so you can amend.".to_string(), theme::YELLOW)),
-        Action::Squash => Some((format!("Folded into the commit {older}; messages combined."), theme::PURPLE)),
-        Action::Fixup => Some((format!("Folded into the commit {older}; this message is dropped."), theme::PURPLE)),
-        Action::Drop => Some(("Removed from the branch.".to_string(), theme::RED)),
-    };
-    if let Some((text, color)) = what {
+    if let Some((text, color)) = action_note(action, newest_first) {
         out.push(Line::raw(""));
         out.push(Line::from(vec![Span::styled("● ", Style::new().fg(color)), Span::styled(text, theme::text())]));
     }
@@ -522,33 +574,116 @@ fn details(s: &Details, action: Action, newest_first: bool) -> Vec<Line<'static>
     out.push(Line::raw(""));
     let n = s.files.len();
     out.push(Line::styled(format!("{n} file{}", if n == 1 { "" } else { "s" }), theme::faint()));
-    for file in &s.files {
-        let (mark, color) = match file.kind {
-            ChangeKind::Added => ("A", theme::GREEN),
-            ChangeKind::Deleted => ("D", theme::RED),
-            ChangeKind::Renamed | ChangeKind::Copied => ("R", theme::BLUE),
-            ChangeKind::Modified | ChangeKind::TypeChange => ("M", theme::YELLOW),
-        };
-        let mut spans = vec![
-            Span::styled(format!("{mark}  "), Style::new().fg(color)),
-            Span::styled(file.path.clone(), theme::text()),
-        ];
-        match file.size {
-            Some(Size::Lines { added, removed }) => {
-                spans.push(Span::raw("  "));
-                if added > 0 {
-                    spans.push(Span::styled(format!("+{added} "), Style::new().fg(theme::GREEN)));
-                }
-                if removed > 0 {
-                    spans.push(Span::styled(format!("−{removed}"), Style::new().fg(theme::RED)));
-                }
-            }
-            Some(Size::Binary) => spans.push(Span::styled("  binary", theme::faint())),
-            None => {}
-        }
-        out.push(Line::from(spans));
-    }
+    out.extend(s.files.iter().map(file_row));
     out
+}
+
+/// What the chosen action will do, in words.
+fn action_note(action: Action, newest_first: bool) -> Option<(String, Color)> {
+    let older = if newest_first { "below" } else { "above" };
+    match action {
+        Action::Pick => None,
+        Action::Reword => Some(("Git will ask for a new message.".to_string(), theme::BLUE)),
+        Action::Edit => Some(("The rebase stops here so you can amend.".to_string(), theme::YELLOW)),
+        Action::Squash => Some((format!("Folded into the commit {older}; messages combined."), theme::PURPLE)),
+        Action::Fixup => Some((format!("Folded into the commit {older}; this message is dropped."), theme::PURPLE)),
+        Action::Drop => Some(("Removed from the branch.".to_string(), theme::RED)),
+    }
+}
+
+/// `M  src/app.rs  +5 −1`.
+fn file_row(file: &crate::git::tree::FileStat) -> Line<'static> {
+    crate::tui::panels::changes::Item::stat(file).row()
+}
+
+/// Other commits in the list that change `path`, as `abc1234 ↑2`: how many rows above
+/// or below. Moving a commit past one of them is where conflicts come from.
+fn also_in(app: &App, path: &str) -> Vec<String> {
+    let at = app.selected;
+    let touches = |hash: &String| {
+        let files = app.info.get(hash).and_then(|i| i.as_ref()).map(|d| d.files.as_slice()).unwrap_or_default();
+        files.iter().any(|f| f.path == path || f.from.as_deref() == Some(path))
+    };
+    app.lines
+        .iter()
+        .enumerate()
+        .filter_map(|(i, l)| match l {
+            Todo::Commit { hash, action, .. } if i != at && *action != Action::Drop && touches(hash) => {
+                let (arrow, n) = if i < at { ("↑", at - i) } else { ("↓", i - at) };
+                Some(format!("{} {arrow}{n}", &hash[..7.min(hash.len())]))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// The sidebar: the commit's message and what its action does, then its files, each
+/// with the other commits in the list that change it too.
+fn draw_side(f: &mut Frame, app: &App, area: Rect) {
+    let w = (area.width as usize).saturating_sub(4);
+    let Some(Todo::Commit { hash, action, .. }) = app.lines.get(app.selected) else {
+        sidebar::draw(f, area, vec![Section { title: "", count: None, lines: Vec::new() }]);
+        return;
+    };
+    let Some(d) = app.info.get(hash).and_then(|i| i.as_ref()) else {
+        let lines = vec![Line::styled("Couldn't read this commit.", theme::muted())];
+        sidebar::draw(f, area, vec![Section { title: "", count: None, lines }]);
+        return;
+    };
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(d.id.clone(), Style::new().fg(theme::ACCENT)),
+            Span::styled(format!("  {}", d.author), theme::muted()),
+        ]),
+        Line::styled(relative_time(d.time, now()), theme::faint()),
+        Line::raw(""),
+    ];
+    lines.extend(kit::wrap(&d.subject, w).into_iter().map(|l| Line::styled(l, theme::bold())));
+    if !d.body.is_empty() {
+        lines.push(Line::raw(""));
+        lines.extend(kit::reflow(&d.body, w).into_iter().map(|l| Line::styled(l, theme::muted())));
+    }
+    if let Some((text, color)) = action_note(*action, app.newest_first) {
+        lines.push(Line::raw(""));
+        let mut note = kit::wrap(&text, w.saturating_sub(2)).into_iter();
+        let first = note.next().unwrap_or_default();
+        lines.push(Line::from(vec![Span::styled("● ", Style::new().fg(color)), Span::styled(first, theme::text())]));
+        lines.extend(note.map(|l| Line::styled(format!("  {l}"), theme::text())));
+    }
+
+    let mut files = Vec::new();
+    for file in &d.files {
+        files.push(file_row(file));
+        let others = also_in(app, &file.path);
+        if !others.is_empty() {
+            files.push(Line::styled(format!("   also in {}", others.join(", ")), Style::new().fg(theme::YELLOW)));
+        }
+    }
+    let sections = vec![
+        Section { title: "", count: None, lines },
+        Section { title: "files", count: Some(d.files.len()), lines: files },
+    ];
+    sidebar::draw(f, area, sections);
+}
+
+/// The selected commit's diff, scrolled with ctrl+d/u or the wheel.
+fn draw_diff(f: &mut Frame, app: &mut App, area: Rect) {
+    let block = kit::panel(theme::PANEL);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    app.detail_area = area;
+    app.diff_width = inner.width;
+    let Some(Todo::Commit { hash, .. }) = app.lines.get(app.selected) else { return };
+    if app.scrolled_for.as_ref() != Some(hash) {
+        app.scrolled_for = Some(hash.clone());
+        app.detail_scroll.reset();
+    }
+    let Some(lines) = app.diffs.get(&(hash.clone(), inner.width)) else { return };
+    app.detail_scroll.fit(lines.len(), inner.height);
+    let shown: Vec<Line> =
+        lines.iter().skip(app.detail_scroll.top() as usize).take(inner.height as usize).cloned().collect();
+    f.render_widget(Paragraph::new(shown), inner);
+    app.detail_scroll.draw_more_keys(f, area, "ctrl+d/u");
 }
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
@@ -577,4 +712,61 @@ fn totals(s: &Details) -> (u32, u32) {
         }
     }
     (a, r)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::git::run::Scratch;
+    use crate::tui::app::press;
+
+    /// Three commits, oldest first: the first and last change a.txt.
+    fn screen<'r>(s: &Scratch, repo: &'r gix::Repository) -> App<'r> {
+        s.commit("a.txt", "1\n");
+        s.commit("b.txt", "b\n");
+        s.commit("a.txt", "2\n");
+        let ids = |rev: &str| repo.rev_parse_single(rev).unwrap().to_string()[..7].to_string();
+        let lines = ["HEAD~2", "HEAD~1", "HEAD"]
+            .map(|r| Todo::Commit { action: Action::Pick, hash: ids(r), subject: r.into() })
+            .to_vec();
+        start(repo, lines, Header { branch: "main".into(), detail: String::new() }, false)
+    }
+
+    #[test]
+    fn files_say_which_other_commits_change_them() {
+        let s = Scratch::new("rebase-overlap");
+        let repo = s.repo();
+        let mut app = screen(&s, &repo);
+        let last = match &app.lines[2] {
+            Todo::Commit { hash, .. } => hash.clone(),
+            Todo::Other(_) => unreachable!(),
+        };
+        assert_eq!(also_in(&app, "a.txt"), [format!("{last} ↓2")]);
+        // From the middle commit, b.txt is only its own.
+        app.selected = 1;
+        assert!(also_in(&app, "b.txt").is_empty());
+        app.selected = 0;
+        // A dropped commit no longer counts.
+        app.selected = 2;
+        app.key(press(KeyCode::Char('d')));
+        app.selected = 0;
+        assert!(also_in(&app, "a.txt").is_empty());
+    }
+
+    #[test]
+    fn wide_screens_show_the_diff_with_the_message_on_the_side() {
+        let s = Scratch::new("rebase-side");
+        let repo = s.repo();
+        let mut app = screen(&s, &repo);
+        let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(200, 24)).unwrap();
+        t.draw(|f| app.draw(f)).unwrap();
+        app.tick().unwrap();
+        t.draw(|f| app.draw(f)).unwrap();
+        let text: String = t.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+        assert!(app.side_open && text.contains("files   1") && text.contains("also in"), "{text}");
+        assert!(app.diffs.keys().any(|(_, w)| *w == app.diff_width));
+        app.key(press(KeyCode::Char('i')));
+        t.draw(|f| app.draw(f)).unwrap();
+        assert!(!app.side_open);
+    }
 }

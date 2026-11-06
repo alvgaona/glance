@@ -189,3 +189,13 @@ fn unstaging_a_rename_takes_back_both_halves() {
     assert!(app.entries.iter().all(|e| e.group != Group::Staged));
     assert_eq!(group_of(&app, "c.txt"), Group::Untracked);
 }
+
+#[test]
+fn the_list_is_as_wide_as_its_rows() {
+    let s = scratch("add-width");
+    let mut app = start(s.repo()).unwrap();
+    let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(200, 30)).unwrap();
+    t.draw(|f| app.draw(f)).unwrap();
+    // Short paths: the minimum, not two fifths of the screen.
+    assert_eq!(app.list_area.width, 28 - 3);
+}

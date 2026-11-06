@@ -17,8 +17,10 @@ pub(super) fn draw(f: &mut Frame, app: &mut App) {
 
     draw_header(f, app, header);
     let (list, details) = if body.width >= 110 {
+        // As wide as the longest row, so the diff gets the rest; within two fifths.
+        let w = list_width(app).min(body.width * 2 / 5).max(28);
         let [l, _, r] =
-            Layout::horizontal([Constraint::Percentage(40), Constraint::Length(1), Constraint::Min(40)]).areas(body);
+            Layout::horizontal([Constraint::Length(w), Constraint::Length(1), Constraint::Min(40)]).areas(body);
         (l, r)
     } else {
         // Not `clamp`: it panics when a short terminal makes the upper bound the smaller one.
@@ -88,6 +90,24 @@ fn display(app: &App) -> Vec<Option<usize>> {
         out.push(Some(i));
     }
     out
+}
+
+/// The list's width with its padding: its widest file row or group header.
+fn list_width(app: &App) -> u16 {
+    let file = |e: &Entry| {
+        let note = if e.group == Group::Conflicts { super::conflict::what(e.conflict).len() + 2 } else { 0 };
+        e.item().row().width() + note
+    };
+    let header = |g: Group| {
+        let items: Vec<changes::Item> = app.entries.iter().filter(|e| e.group == g).map(|e| e.item()).collect();
+        changes::header(format!("{} {}", g.title(), items.len()), &items).width()
+    };
+    // Entries come grouped, so each group's header is measured once.
+    let mut groups: Vec<Group> = app.entries.iter().map(|e| e.group).collect();
+    groups.dedup();
+    let widest = app.entries.iter().map(file).chain(groups.into_iter().map(header)).max().unwrap_or(0);
+    // The selection bar, then the panel's padding: 2 left, 1 right.
+    (widest + 2 + 3).min(u16::MAX as usize) as u16
 }
 
 fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {

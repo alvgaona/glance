@@ -20,17 +20,8 @@ pub(super) fn draw(f: &mut Frame, app: &mut App) {
     // Narrow: all three stacked.
     // Not `clamp`: it panics when a short terminal makes the upper bound the smaller one.
     let list_rows = (app.visible.len() as u16 + 4).min(body.height / 3).max(5);
-    let (changes, right) = if body.width >= 110 {
-        let [l, _, r] =
-            Layout::horizontal([Constraint::Percentage(40), Constraint::Length(1), Constraint::Min(40)]).areas(body);
-        (l, r)
-    } else {
-        // As tall as the changes need, leaving room for the stashes below.
-        let h = app.changes.height(body.width).min(body.height.saturating_sub(12).max(body.height / 2));
-        let [t, _, b] =
-            Layout::vertical([Constraint::Length(h), Constraint::Length(1), Constraint::Min(5)]).areas(body);
-        (t, b)
-    };
+    let p = kit::panes(body, Some(app.changes.width()), app.changes.height(body.width), false);
+    let (changes, right) = (p.list, p.main);
     let [list, _, details] =
         Layout::vertical([Constraint::Length(list_rows), Constraint::Length(1), Constraint::Min(3)]).areas(right);
     app.changes_area = changes;

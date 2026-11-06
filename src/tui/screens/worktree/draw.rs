@@ -16,17 +16,8 @@ pub(super) fn draw(f: &mut Frame, app: &mut App) {
     .areas(area);
 
     draw_header(f, app, header);
-    let (list, details) = if body.width >= 120 {
-        let [l, _, r] =
-            Layout::horizontal([Constraint::Percentage(55), Constraint::Length(1), Constraint::Min(40)]).areas(body);
-        (l, r)
-    } else {
-        // Not `clamp`: it panics when a short terminal makes the upper bound the smaller one.
-        let rows = (app.rows.len() as u16 + 2).min(body.height / 2).max(4);
-        let [t, _, b] =
-            Layout::vertical([Constraint::Length(rows), Constraint::Length(1), Constraint::Min(5)]).areas(body);
-        (t, b)
-    };
+    let p = kit::panes(body, Some(list_width(app)), app.rows.len() as u16 + 2, false);
+    let (list, details) = (p.list, p.main);
     draw_list(f, app, list);
     draw_details(f, app, details);
     draw_footer(f, app, footer);
@@ -90,6 +81,21 @@ fn sync_text(r: &Row) -> String {
     let Load::Ready(st) = &r.load else { return String::new() };
     let Some(u) = &st.upstream else { return String::new() };
     crate::fmt::sync::arrows(u.ahead, u.behind)
+}
+
+/// The list's width that fits its columns as `draw_list` lays them out: bar, dot,
+/// path, branch and lock on the left; state, sync and age on the right.
+fn list_width(app: &App) -> u16 {
+    let w = |f: &dyn Fn(&Row) -> usize| app.rows.iter().map(f).max().unwrap_or(0);
+    let path = w(&|r| crate::fmt::width(&app.name(&r.wt.path)));
+    let branch = w(&|r| crate::fmt::width(&r.label()));
+    let locked = if app.rows.iter().any(|r| r.wt.locked.is_some()) { 8 } else { 0 };
+    let state = w(&|r| crate::fmt::width(&state_text(r).content));
+    let sync = match w(&|r| crate::fmt::width(&sync_text(r))) {
+        0 => 0,
+        s => 2 + s,
+    };
+    (4 + path + 2 + branch + locked + state + sync + 11 + 2).min(u16::MAX as usize) as u16
 }
 
 fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {

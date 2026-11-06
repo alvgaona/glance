@@ -1,6 +1,8 @@
 //! Drawing the staging screen: header, file groups, diff, footer.
 
 use super::*;
+use crate::git::diff::Size;
+use crate::tui::kit::sidebar::{self, Section};
 
 pub(super) fn draw(f: &mut Frame, app: &mut App) {
     let full = f.area();
@@ -16,17 +18,12 @@ pub(super) fn draw(f: &mut Frame, app: &mut App) {
     .areas(area);
 
     draw_header(f, app, header);
-    let (list, details) = if body.width >= 110 {
-        let [l, _, r] =
-            Layout::horizontal([Constraint::Percentage(40), Constraint::Length(1), Constraint::Min(40)]).areas(body);
-        (l, r)
-    } else {
-        // Not `clamp`: it panics when a short terminal makes the upper bound the smaller one.
-        let rows = (display(app).len() as u16 + 2).min(body.height / 2).max(4);
-        let [t, _, b] =
-            Layout::vertical([Constraint::Length(rows), Constraint::Length(1), Constraint::Min(5)]).areas(body);
-        (t, b)
-    };
+    let p = kit::panes(body, Some(list_width(app)), display(app).len() as u16 + 2, app.side && !app.entries.is_empty());
+    let (list, details) = (p.list, p.main);
+    app.outline_area = Rect::default();
+    if let Some(side) = p.side {
+        draw_side(f, app, side);
+    }
     draw_list(f, app, list);
     draw_diff(f, app, details);
     draw_footer(f, app, footer);
@@ -88,6 +85,88 @@ fn display(app: &App) -> Vec<Option<usize>> {
         out.push(Some(i));
     }
     out
+}
+
+/// The sidebar: the file's hunks, then what the next commit would be.
+fn draw_side(f: &mut Frame, app: &mut App, area: Rect) {
+    let view = app.view();
+    let outline = view.outline();
+    // The hunk worked on, or the one at the top of the diff.
+    let top = app.detail_scroll.top() as usize;
+    let here = if app.focus == Focus::Hunks { Some(app.hunk) } else { view.ranges.iter().position(|r| r.end > top) };
+    let hunks = outline
+        .iter()
+        .enumerate()
+        .map(|(i, (line, context))| sidebar::outline_row(*line, context, here == Some(i)))
+        .collect();
+
+    let mut next = Vec::new();
+    next.push(match (&app.st.branch, &app.st.upstream) {
+        (None, _) => Line::styled("detached HEAD", Style::new().fg(theme::YELLOW)),
+        (Some(b), None) => Line::from(vec![
+            Span::styled(format!("on {b}"), theme::text()),
+            Span::styled("  no upstream", theme::faint()),
+        ]),
+        (Some(b), Some(up)) => {
+            let mut spans = vec![Span::styled(format!("on {b}  "), theme::text())];
+            spans.push(match (up.ahead, up.behind) {
+                (0, 0) => Span::styled("=", theme::faint()),
+                (a, 0) => Span::styled(format!("↑{a}"), Style::new().fg(theme::GREEN)),
+                (0, b) => Span::styled(format!("↓{b}"), Style::new().fg(theme::RED)),
+                (a, b) => Span::styled(format!("↑{a} ↓{b}"), Style::new().fg(theme::YELLOW)),
+            });
+            spans.push(Span::styled(format!(" {}", up.name), theme::faint()));
+            Line::from(spans)
+        }
+    });
+    if let Some(op) = &app.st.in_progress {
+        next.push(Line::styled(format!("{op} in progress"), Style::new().fg(theme::YELLOW)));
+    }
+    let staged: Vec<changes::Item> =
+        app.entries.iter().filter(|e| e.group == Group::Staged).map(|e| e.item()).collect();
+    next.push(if staged.is_empty() {
+        Line::styled("nothing staged yet", theme::muted())
+    } else {
+        let mut spans = vec![Span::styled(
+            format!("{} file{}  ", staged.len(), if staged.len() == 1 { "" } else { "s" }),
+            theme::text(),
+        )];
+        let (a, r) = staged.iter().fold((0, 0), |(a, r), i| match i.size {
+            Some(Size::Lines { added, removed }) => (a + added, r + removed),
+            _ => (a, r),
+        });
+        spans.extend(changes::counts(Some(Size::Lines { added: a, removed: r })));
+        Line::from(spans)
+    });
+    if let Some(last) = &app.last_commit {
+        next.push(Line::raw(""));
+        next.push(Line::styled("last commit, C amends it", theme::faint()));
+        next.push(Line::styled(last.clone(), theme::muted()));
+    }
+
+    let sections = vec![
+        Section { title: "hunks", count: Some(outline.len()), lines: hunks },
+        Section { title: "next commit", count: None, lines: next },
+    ];
+    app.outline_area = sidebar::draw(f, area, sections)[0];
+}
+
+/// The list's width with its padding: its widest file row or group header.
+fn list_width(app: &App) -> u16 {
+    let file = |e: &Entry| {
+        let note = if e.group == Group::Conflicts { super::conflict::what(e.conflict).len() + 2 } else { 0 };
+        e.item().row().width() + note
+    };
+    let header = |g: Group| {
+        let items: Vec<changes::Item> = app.entries.iter().filter(|e| e.group == g).map(|e| e.item()).collect();
+        changes::header(format!("{} {}", g.title(), items.len()), &items).width()
+    };
+    // Entries come grouped, so each group's header is measured once.
+    let mut groups: Vec<Group> = app.entries.iter().map(|e| e.group).collect();
+    groups.dedup();
+    let widest = app.entries.iter().map(file).chain(groups.into_iter().map(header)).max().unwrap_or(0);
+    // The selection bar, then the panel's padding: 2 left, 1 right.
+    (widest + 2 + 3).min(u16::MAX as usize) as u16
 }
 
 fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {

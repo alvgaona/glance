@@ -1,29 +1,18 @@
-//! The diff screen's options, kept between runs in `~/.local/state/glance/diff`
-//! (or under `$XDG_STATE_HOME`). Side by side isn't kept: it follows the window.
-
-use std::path::PathBuf;
+//! The diff screen's options, kept between runs in `~/.local/state/glance/diff`.
+//! Side by side isn't kept: it follows the window. The sidebar is kept for every
+//! screen, in `crate::tui::state`.
 
 use super::App;
-
-fn path() -> Option<PathBuf> {
-    let state = std::env::var_os("XDG_STATE_HOME")
-        .filter(|d| !d.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))?;
-    Some(state.join("glance/diff"))
-}
+use crate::tui::state;
 
 pub(super) fn load(app: &mut App) {
-    if let Some(text) = path().and_then(|p| std::fs::read_to_string(p).ok()) {
+    if let Some(text) = state::read("diff") {
         read(&text, app);
     }
 }
 
-/// Best effort: options not kept are no reason to fail.
 pub(super) fn save(app: &App) {
-    let Some(p) = path() else { return };
-    let _ = p.parent().map(std::fs::create_dir_all);
-    let _ = std::fs::write(p, text(app));
+    state::write("diff", &text(app));
 }
 
 fn text(app: &App) -> String {

@@ -85,6 +85,7 @@ asks first.
 | `a` / `u` | stage / unstage everything |
 | `d` | discard the file's changes (delete, if untracked) |
 | `e` | open the file in your editor |
+| `i` | on wide screens: the sidebar with the file's hunks and the next commit |
 
 **`glance diff`**
 
@@ -96,6 +97,7 @@ asks first.
 | `n` / `N` | next / previous hunk |
 | `+` / `-` / `f` | more / less context, or the whole file |
 | `z` | hide the file list |
+| `i` | on wide screens: the sidebar with the file's hunks and history |
 | `/` | filter files |
 | `e` / `y` | open the file in your editor, at the hunk / copy its path |
 
@@ -107,6 +109,7 @@ Options are remembered between runs, in `~/.local/state/glance/diff`.
 | --- | --- |
 | `/` | search commits |
 | `tab` | show or hide details |
+| `i` | on wide screens: the sidebar with the message and files; the details keep the diff |
 | `y` | copy the commit id |
 | `enter` | copy the commit id and quit |
 
@@ -158,6 +161,8 @@ Options are remembered between runs, in `~/.local/state/glance/diff`.
 | `p` `r` `e` `s` `f` `d` | pick, reword, edit, squash, fixup, drop |
 | `shift+↑` / `shift+↓` | move a commit |
 | `o` | newest or oldest first (`git config glance.rebaseOrder oldest`) |
+| `i` | on wide screens: the commit's diff, with its message and files on the side; each file says which other commits change it |
+| `ctrl+d` / `ctrl+u` | scroll that diff |
 | `ctrl+s` | run the rebase |
 | `esc` | abort |
 

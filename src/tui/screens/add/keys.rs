@@ -65,6 +65,7 @@ impl App {
                 KeyCode::Char('p') if ctrl => self.palette = Some(Palette::new(commands())),
                 KeyCode::Char(':') => self.palette = Some(Palette::new(commands())),
                 KeyCode::Char('y') => return self.run(Cmd::Copy),
+                KeyCode::Char('i') => return self.run(Cmd::Side),
                 KeyCode::Char('e') => return self.run(Cmd::Edit),
                 KeyCode::Char('c') => return self.run(Cmd::Commit),
                 KeyCode::Char('C') => return self.run(Cmd::Amend),
@@ -104,6 +105,7 @@ impl App {
             KeyCode::Char('u') => Cmd::UnstageAll,
             KeyCode::Char('d') => Cmd::Discard,
             KeyCode::Char('y') => Cmd::Copy,
+            KeyCode::Char('i') => Cmd::Side,
             KeyCode::Char('e') => Cmd::Edit,
             KeyCode::Char('c') => Cmd::Commit,
             KeyCode::Char('C') => Cmd::Amend,
@@ -117,6 +119,10 @@ impl App {
         let effect = match cmd {
             Cmd::Quit => return Flow::Done(()),
             Cmd::Reload => Some(Effect::Reload),
+            Cmd::Side => {
+                self.side = !self.side;
+                None
+            }
             Cmd::Toggle => self.toggle(),
             Cmd::Hunks => {
                 self.enter_hunks();

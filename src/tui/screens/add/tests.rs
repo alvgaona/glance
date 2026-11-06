@@ -189,3 +189,33 @@ fn unstaging_a_rename_takes_back_both_halves() {
     assert!(app.entries.iter().all(|e| e.group != Group::Staged));
     assert_eq!(group_of(&app, "c.txt"), Group::Untracked);
 }
+
+#[test]
+fn the_list_is_as_wide_as_its_rows() {
+    let s = scratch("add-width");
+    let mut app = start(s.repo()).unwrap();
+    let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(200, 30)).unwrap();
+    t.draw(|f| app.draw(f)).unwrap();
+    // Short paths: the minimum, not two fifths of the screen.
+    assert_eq!(app.list_area.width, 28 - 3);
+}
+
+#[test]
+fn the_sidebar_shows_hunks_and_the_next_commit_on_wide_screens() {
+    let s = scratch("add-side");
+    let mut app = start(s.repo()).unwrap();
+    let screen = |app: &mut App, w: u16| {
+        let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(w, 24)).unwrap();
+        app.tick().unwrap();
+        t.draw(|f| app.draw(f)).unwrap();
+        let cells: Vec<&str> = t.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+        cells.concat()
+    };
+    let wide = screen(&mut app, 200);
+    for want in ["hunks   1", "top of the file", "next commit", "nothing staged yet", "last commit", "b.txt"] {
+        assert!(wide.contains(want), "{want}: {wide}");
+    }
+    assert!(!screen(&mut app, 150).contains("next commit"));
+    key(&mut app, KeyCode::Char('i'));
+    assert!(!screen(&mut app, 200).contains("next commit"));
+}

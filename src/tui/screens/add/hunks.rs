@@ -22,6 +22,11 @@ impl View {
         !self.ranges.is_empty()
     }
 
+    /// Each hunk's first line in the new file and what it's in, for the sidebar.
+    pub(super) fn outline(&self) -> Vec<(u32, String)> {
+        self.hunks.iter().map(|h| (h.new_start, h.context.clone())).collect()
+    }
+
     /// The hunk drawn on `line`, if any.
     pub(super) fn hunk_at(&self, line: usize) -> Option<usize> {
         self.ranges.iter().position(|r| r.contains(&line))

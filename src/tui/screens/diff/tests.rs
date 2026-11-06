@@ -29,9 +29,10 @@ fn draw(app: &mut App, w: u16, h: u16) -> String {
     let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
     t.draw(|f| app.draw(f)).unwrap();
     app.tick().unwrap();
-    while app.job.is_some() {
+    while app.job.is_some() || app.history_job.is_some() {
         std::thread::sleep(Duration::from_millis(5));
         app.poll();
+        app.load_history();
     }
     t.draw(|f| app.draw(f)).unwrap();
     let cells: Vec<&str> = t.backend().buffer().content().iter().map(|c| c.symbol()).collect();
@@ -73,10 +74,10 @@ fn jumps_between_hunks_and_edits_there() {
     let (_s, mut app) = screen("diff-hunks");
     draw(&mut app, 100, 12);
     let hunks = app.on_screen().unwrap().hunks.clone();
-    assert_eq!(hunks.iter().map(|h| h.1).collect::<Vec<_>>(), [1, 22]);
+    assert_eq!(hunks.iter().map(|h| h.line).collect::<Vec<_>>(), [1, 22]);
     assert!(matches!(key(&mut app, KeyCode::Char('e')), Flow::Run(Effect::Edit(p, Some(1))) if p == "a.txt"));
     key(&mut app, KeyCode::Char('n'));
-    assert_eq!(app.detail_scroll.top() as usize, hunks[1].0);
+    assert_eq!(app.detail_scroll.top() as usize, hunks[1].at);
     assert!(matches!(key(&mut app, KeyCode::Char('e')), Flow::Run(Effect::Edit(_, Some(22)))));
     key(&mut app, KeyCode::Char('N'));
     assert_eq!(app.detail_scroll.top(), 0);
@@ -123,4 +124,17 @@ fn filters_copies_and_edits() {
     assert!(matches!(key(&mut app, KeyCode::Char('w')), Flow::Run(Effect::Load)));
     assert!(matches!(app.key(ctrl('r')), Flow::Run(Effect::Load)));
     assert!(matches!(key(&mut app, KeyCode::Char('q')), Flow::Done(())));
+}
+
+#[test]
+fn the_sidebar_shows_hunks_and_history_on_wide_screens() {
+    let (_s, mut app) = screen("diff-side");
+    assert!(!draw(&mut app, 150, 30).contains("history"));
+    let wide = draw(&mut app, 200, 30);
+    assert!(app.side_open);
+    assert!(wide.contains("hunks   2"), "{wide}");
+    // The commit that made a.txt, by `Scratch::commit`.
+    assert!(wide.lines().any(|l| l.contains("history")) && wide.contains(" a.txt"), "{wide}");
+    key(&mut app, KeyCode::Char('i'));
+    assert!(!draw(&mut app, 200, 30).contains("history"));
 }

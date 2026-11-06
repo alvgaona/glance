@@ -7,6 +7,7 @@ mod app;
 mod kit;
 mod panels;
 pub mod screens;
+mod state;
 mod term;
 pub mod theme;
 

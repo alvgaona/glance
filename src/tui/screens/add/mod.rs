@@ -46,6 +46,7 @@ enum Cmd {
     Discard,
     Edit,
     Copy,
+    Side,
     Reload,
     Quit,
 }
@@ -218,10 +219,20 @@ struct App {
     commit: Option<CommitBox>,
     draft: Option<String>,
     repo_name: String,
+    /// The sidebar, on wide screens.
+    side: bool,
+    /// The sidebar's hunk rows, for clicks.
+    outline_area: Rect,
+    /// HEAD's subject, for the sidebar: what an amend would change.
+    last_commit: Option<String>,
 }
 
 pub fn run(repo: gix::Repository) -> Result<()> {
-    app::run(&mut start(repo)?)
+    let mut app = start(repo)?;
+    app.side = crate::tui::state::sidebar();
+    app::run(&mut app)?;
+    crate::tui::state::set_sidebar(app.side);
+    Ok(())
 }
 
 /// The screen as it opens, before the first draw.
@@ -246,6 +257,9 @@ fn start(repo: gix::Repository) -> Result<App> {
         confirm: None,
         commit: None,
         draft: None,
+        side: true,
+        outline_area: Rect::default(),
+        last_commit: None,
     };
     app.reload()?;
     // Start on the first file not staged yet: that's usually the next thing to look at.
@@ -330,6 +344,7 @@ fn commands() -> Vec<Command<Cmd>> {
         Command { label: "Discard changes to file", keys: "d", action: Cmd::Discard },
         Command { label: "Open file in the editor", keys: "e", action: Cmd::Edit },
         Command { label: "Copy path", keys: "y", action: Cmd::Copy },
+        Command { label: "Sidebar: show or hide (wide screens)", keys: "i", action: Cmd::Side },
         Command { label: "Reload", keys: "ctrl+r", action: Cmd::Reload },
         Command { label: "Quit", keys: "q", action: Cmd::Quit },
     ]
@@ -341,6 +356,7 @@ impl App {
         self.st = crate::git::status::read(&self.repo, true)?;
         let conflicts = if self.st.conflicted.is_empty() { Default::default() } else { stage::conflicts(&self.repo)? };
         self.entries = entries(&self.repo, &self.st, &conflicts);
+        self.last_commit = self.repo.head_commit().ok().and_then(|c| Some(c.message().ok()?.summary().to_string()));
         self.selected = self.selected.min(self.entries.len().saturating_sub(1));
         self.diff = None;
         // Entry indexes may point at other files now.
@@ -485,6 +501,15 @@ impl App {
             MouseEventKind::ScrollUp if in_details => self.detail_scroll.wheel(false),
             MouseEventKind::ScrollDown => self.step(1),
             MouseEventKind::ScrollUp => self.step(-1),
+            MouseEventKind::Down(MouseButton::Left) if list::inside(self.outline_area, &m) => {
+                let h = (m.row - self.outline_area.y) as usize;
+                if let Some(start) = self.view().ranges.get(h).map(|r| r.start) {
+                    self.focus = Focus::Hunks;
+                    self.hunk = h;
+                    self.pick = None;
+                    self.detail_scroll.to(start);
+                }
+            }
             MouseEventKind::Down(MouseButton::Left) => {
                 if let Some(row) = list::row_at(self.list_area, 0, &m)
                     && let Some(Some(i)) = self.shown.get(row)

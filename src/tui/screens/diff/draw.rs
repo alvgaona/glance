@@ -9,6 +9,7 @@ use ratatui::{
 
 use super::*;
 use crate::git::diff::Size;
+use crate::tui::kit::sidebar::{self, Section};
 use crate::tui::kit::{self, footer};
 use crate::tui::panels::changes::{self, Item};
 
@@ -26,24 +27,20 @@ pub(super) fn draw(f: &mut Frame, app: &mut App) {
     .areas(area);
 
     draw_header(f, app, header);
-    if app.hide_files || app.files.is_empty() {
-        app.list_area = Rect::default();
-        draw_diff(f, app, body);
-    } else if body.width >= 100 {
-        // As wide as the longest row, within a third or so of the screen.
-        let longest = app.files.iter().map(|f| Item::stat(f).row().width() as u16 + 4).max().unwrap_or(0);
-        let w = longest.min(body.width * 2 / 5).max(28);
-        let [l, _, r] =
-            Layout::horizontal([Constraint::Length(w), Constraint::Length(1), Constraint::Min(40)]).areas(body);
-        draw_list(f, app, l);
-        draw_diff(f, app, r);
-    } else {
-        let h = (app.visible.len() as u16 + 2).min(body.height / 3).max(4);
-        let [t, _, b] =
-            Layout::vertical([Constraint::Length(h), Constraint::Length(1), Constraint::Min(3)]).areas(body);
-        draw_list(f, app, t);
-        draw_diff(f, app, b);
+    // The list as wide as its longest row; the sidebar on wide screens.
+    let want = (!app.hide_files && !app.files.is_empty())
+        .then(|| app.files.iter().map(|f| Item::stat(f).row().width() as u16 + 4).max().unwrap_or(0));
+    let p = kit::panes(body, want, app.visible.len() as u16 + 2, app.side && !app.files.is_empty());
+    app.side_open = p.side.is_some();
+    app.outline_area = Rect::default();
+    if let Some(side) = p.side {
+        draw_side(f, app, side);
     }
+    app.list_area = Rect::default();
+    if want.is_some() {
+        draw_list(f, app, p.list);
+    }
+    draw_diff(f, app, p.main);
     draw_footer(f, app, foot);
 
     if let Some(p) = &app.palette {
@@ -142,6 +139,54 @@ fn draw_diff(f: &mut Frame, app: &mut App, area: Rect) {
         .collect();
     f.render_widget(Paragraph::new(shown), body);
     app.detail_scroll.draw_more(f, area);
+}
+
+/// The commit (for `glance show`), the file's hunks, and the commits that changed it.
+fn draw_side(f: &mut Frame, app: &mut App, area: Rect) {
+    let w = (area.width as usize).saturating_sub(4);
+    let now = crate::fmt::now();
+    let mut sections = Vec::new();
+
+    if let Some(d) = &app.details {
+        let mut lines: Vec<Line> =
+            kit::wrap(&d.subject, w).into_iter().map(|l| Line::styled(l, theme::bold())).collect();
+        lines.push(Line::styled(format!("{} · {}", d.author, crate::fmt::relative_time(d.time, now)), theme::muted()));
+        if !d.body.is_empty() {
+            lines.push(Line::raw(""));
+            let body = kit::reflow(&d.body, w).into_iter().take(12);
+            lines.extend(body.map(|l| Line::styled(l, theme::muted())));
+        }
+        sections.push(Section { title: "", count: None, lines });
+    }
+
+    let hunks = app.on_screen().map(|r| r.hunks.clone()).unwrap_or_default();
+    let here = app.hunk_here();
+    let outline =
+        hunks.iter().enumerate().map(|(i, h)| sidebar::outline_row(h.line, &h.context, here == Some(i))).collect();
+    sections.push(Section { title: "hunks", count: Some(hunks.len()), lines: outline });
+
+    let history = match app.current().and_then(|c| app.history.get(&c.path)) {
+        None => vec![Line::styled("reading…", theme::faint())],
+        Some(h) if h.is_empty() => vec![Line::styled("Not committed yet", theme::faint())],
+        Some(h) => h
+            .iter()
+            .flat_map(|t| {
+                let when = crate::fmt::relative_time(t.time, now);
+                [
+                    Line::from(vec![
+                        Span::styled(format!("{}  ", t.id), Style::new().fg(theme::ACCENT)),
+                        Span::styled(t.subject.clone(), theme::text()),
+                    ]),
+                    Line::styled(format!("{}{} · {when}", " ".repeat(t.id.len() + 2), t.author), theme::faint()),
+                ]
+            })
+            .collect(),
+    };
+    sections.push(Section { title: "history", count: None, lines: history });
+
+    let at = sidebar::draw(f, area, sections);
+    // The hunks are the second to last section.
+    app.outline_area = at[at.len() - 2];
 }
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {

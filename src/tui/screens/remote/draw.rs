@@ -16,17 +16,8 @@ pub(super) fn draw(f: &mut Frame, app: &mut App) {
     .areas(area);
 
     draw_header(f, app, header);
-    let (list, details) = if body.width >= 120 {
-        let [l, _, r] =
-            Layout::horizontal([Constraint::Percentage(50), Constraint::Length(1), Constraint::Min(40)]).areas(body);
-        (l, r)
-    } else {
-        // Not `clamp`: it panics when a short terminal makes the upper bound the smaller one.
-        let rows = (app.remotes.len() as u16 + 2).min(body.height / 2).max(4);
-        let [t, _, b] =
-            Layout::vertical([Constraint::Length(rows), Constraint::Length(1), Constraint::Min(5)]).areas(body);
-        (t, b)
-    };
+    let p = kit::panes(body, Some(list_width(app)), app.remotes.len() as u16 + 2, false);
+    let (list, details) = (p.list, p.main);
     draw_list(f, app, list);
     draw_details(f, app, details);
     draw_footer(f, app, footer);
@@ -66,6 +57,17 @@ fn fetched_text(r: &Remote, now: i64) -> String {
         Some(t) => relative_time(t, now),
         None => "never".into(),
     }
+}
+
+/// The list's width that fits its columns as `draw_list` lays them out: bar, dot,
+/// name and URL on the left; branch count and last fetch on the right.
+fn list_width(app: &App) -> u16 {
+    let w = |f: &dyn Fn(&Remote) -> usize| app.remotes.iter().map(f).max().unwrap_or(0);
+    let name = w(&|r| crate::fmt::width(&r.name));
+    let url = w(&|r| r.url.as_deref().map_or(0, |u| crate::fmt::width(&url::short(u))));
+    let push = if app.remotes.iter().any(|r| r.push_url.is_some()) { 16 } else { 0 };
+    let count = w(&|r| plural(r.branches.len(), "branch").len());
+    (4 + name + 2 + url + push + count + 11 + 2).min(u16::MAX as usize) as u16
 }
 
 fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {

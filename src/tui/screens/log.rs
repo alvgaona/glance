@@ -17,6 +17,7 @@ use crate::fmt::{now, relative_time};
 use crate::git::commit::{self, Details};
 use crate::git::log::{Commit, RefLabel};
 use crate::tui::app::{self, Flow, Screen};
+use crate::tui::kit::sidebar::{self, Section};
 use crate::tui::kit::{self, Command, Palette, PaletteEvent, Scroll, Toast, footer, list};
 use crate::tui::panels::{changes, diff};
 use crate::tui::theme;
@@ -41,6 +42,7 @@ enum Cmd {
     Copy,
     ToggleAll,
     Details,
+    Side,
     Choose,
     Quit,
 }
@@ -65,11 +67,16 @@ struct App<'r> {
     searching: bool,
     details: bool,
     detail_scroll: Scroll,
-    /// Rendered details by commit id, filled in `tick`.
-    /// Details by (commit, panel width): delta draws diffs to fit.
-    cache: HashMap<(gix::ObjectId, u16), Rc<Vec<Line<'static>>>>,
+    /// Each commit read so far, for the details and the sidebar.
+    meta: HashMap<gix::ObjectId, Rc<Details>>,
+    /// The details panel by (commit, width, sidebar open), filled in `tick`: delta
+    /// draws diffs to fit, and with the sidebar open the panel is only the diff.
+    cache: HashMap<(gix::ObjectId, u16, bool), Rc<Vec<Line<'static>>>>,
     /// The details panel's inner width at the last draw.
     detail_width: u16,
+    /// The sidebar, on wide screens, and whether the last draw had room for it.
+    side: bool,
+    side_open: bool,
     toast: Option<Toast>,
     palette: Option<Palette<Cmd>>,
     list_area: Rect,
@@ -85,7 +92,11 @@ enum Effect {
 
 /// Returns the chosen commit's short id, or `None` if the user quit.
 pub fn run(repo: &gix::Repository, opts: Options) -> Result<Option<String>> {
-    app::run(&mut start(repo, opts)?)
+    let mut app = start(repo, opts)?;
+    app.side = crate::tui::state::sidebar();
+    let out = app::run(&mut app)?;
+    crate::tui::state::set_sidebar(app.side);
+    Ok(out)
 }
 
 /// The screen as it opens, before the first draw.
@@ -100,8 +111,11 @@ fn start(repo: &gix::Repository, opts: Options) -> Result<App<'_>> {
         searching: false,
         details: true,
         detail_scroll: Scroll::default(),
+        meta: HashMap::new(),
         cache: HashMap::new(),
         detail_width: 0,
+        side: true,
+        side_open: false,
         toast: None,
         palette: None,
         list_area: Rect::default(),
@@ -226,6 +240,7 @@ impl App<'_> {
             Mode::Pick => c.push(Command { label: "Rebase from this commit", keys: "enter", action: Cmd::Choose }),
         }
         c.push(Command { label: "Show or hide details", keys: "tab", action: Cmd::Details });
+        c.push(Command { label: "Sidebar: show or hide (wide screens)", keys: "i", action: Cmd::Side });
         c.push(Command { label: "Quit", keys: "esc", action: Cmd::Quit });
         c
     }
@@ -310,6 +325,7 @@ impl App<'_> {
             KeyCode::Char('y') if self.opts.mode == Mode::Browse => Cmd::Copy,
             KeyCode::Char('a') if self.opts.mode == Mode::Browse => Cmd::ToggleAll,
             KeyCode::Tab => Cmd::Details,
+            KeyCode::Char('i') => Cmd::Side,
             KeyCode::Enter => Cmd::Choose,
             KeyCode::Esc if !self.query.is_empty() => {
                 self.query.clear();
@@ -332,6 +348,7 @@ impl App<'_> {
             }
             Cmd::ToggleAll => return Flow::Run(Effect::ToggleAll),
             Cmd::Details => self.details = !self.details,
+            Cmd::Side => self.side = !self.side,
             Cmd::Choose => return Flow::Done(self.selected_commit().map(|c| c.id.clone())),
             Cmd::Quit => return Flow::Done(None),
         }
@@ -367,19 +384,30 @@ impl App<'_> {
     fn load_detail(&mut self) {
         let Some(oid) = self.selected_commit().map(|c| c.oid) else { return };
         // Zero until the first draw has measured the panel.
-        let width = self.detail_width;
-        if width == 0 || self.cache.contains_key(&(oid, width)) {
+        let key = (oid, self.detail_width, self.side_open);
+        if key.1 == 0 || self.cache.contains_key(&key) {
             return;
         }
-        let lines = match commit::read(self.repo, &oid.to_string()) {
-            Ok(s) => detail_lines(self.repo, &s, width),
-            Err(e) => vec![Line::styled(format!("Couldn't read this commit: {e}"), theme::muted())],
-        };
-        self.cache.insert((oid, width), Rc::new(lines));
+        if !self.meta.contains_key(&oid) {
+            match commit::read(self.repo, &oid.to_string()) {
+                Ok(d) => {
+                    self.meta.insert(oid, Rc::new(d));
+                }
+                Err(e) => {
+                    let lines = vec![Line::styled(format!("Couldn't read this commit: {e}"), theme::muted())];
+                    self.cache.insert(key, Rc::new(lines));
+                    return;
+                }
+            }
+        }
+        let d = &self.meta[&oid];
+        // The sidebar has the message and the files; the panel keeps the diff.
+        let lines = if key.2 { diff::patches(self.repo, &d.files, key.1) } else { detail_lines(self.repo, d, key.1) };
+        self.cache.insert(key, Rc::new(lines));
     }
 
     fn detail(&self) -> Option<Rc<Vec<Line<'static>>>> {
-        self.cache.get(&(self.selected_commit()?.oid, self.detail_width)).cloned()
+        self.cache.get(&(self.selected_commit()?.oid, self.detail_width, self.side_open)).cloned()
     }
 }
 
@@ -410,16 +438,16 @@ fn draw(f: &mut Frame, app: &mut App) {
     .areas(area);
 
     draw_header(f, app, header);
+    app.side_open = false;
     let (list, details) = if !app.details {
         (body, None)
-    } else if body.width >= 110 {
-        let [l, _, r] =
-            Layout::horizontal([Constraint::Percentage(50), Constraint::Length(1), Constraint::Min(30)]).areas(body);
-        (l, Some(r))
     } else {
-        let [t, _, b] =
-            Layout::vertical([Constraint::Percentage(45), Constraint::Length(1), Constraint::Min(5)]).areas(body);
-        (t, Some(b))
+        let p = kit::panes(body, Some(list_width(app)), app.visible.len() as u16 + 2, app.side);
+        if let Some(side) = p.side {
+            app.side_open = true;
+            draw_side(f, app, side);
+        }
+        (p.list, Some(p.main))
     };
     draw_list(f, app, list);
     app.detail_area = details.unwrap_or_default();
@@ -455,6 +483,13 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         ]),
     };
     f.render_widget(Paragraph::new(left), area);
+}
+
+/// The list's width that fits its widest commit row: bar, id, subject, then author
+/// and age as `draw_list` lays them out.
+fn list_width(app: &App) -> u16 {
+    let widest = app.commits.iter().map(|c| c.id.len() + crate::fmt::width(&c.summary)).max().unwrap_or(0);
+    (2 + 2 + widest + 22).min(u16::MAX as usize) as u16
 }
 
 fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {
@@ -562,6 +597,41 @@ fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
     app.detail_scroll.draw_more(f, area);
 }
 
+/// The sidebar: the commit's id, author, refs and message, then its files.
+fn draw_side(f: &mut Frame, app: &App, area: Rect) {
+    let w = (area.width as usize).saturating_sub(4);
+    let Some(d) = app.selected_commit().and_then(|c| app.meta.get(&c.oid)) else {
+        let reading = Section { title: "", count: None, lines: vec![Line::styled("reading…", theme::faint())] };
+        sidebar::draw(f, area, vec![reading]);
+        return;
+    };
+    let mut lines = vec![
+        Line::from(vec![
+            Span::styled(d.id.clone(), Style::new().fg(theme::ACCENT)),
+            Span::styled(format!("  {}", d.author), theme::muted()),
+        ]),
+        Line::styled(format!("{} · {}", d.email, relative_time(d.time, now())), theme::faint()),
+    ];
+    if !d.refs.is_empty() {
+        lines.push(Line::from(d.refs.iter().flat_map(|r| [ref_pill(r), Span::raw(" ")]).collect::<Vec<_>>()));
+    }
+    if d.parents.len() > 1 {
+        lines.push(Line::styled(format!("merge of {}", d.parents.join(" + ")), theme::faint()));
+    }
+    lines.push(Line::raw(""));
+    lines.extend(kit::wrap(&d.subject, w).into_iter().map(|l| Line::styled(l, theme::bold())));
+    if !d.body.is_empty() {
+        lines.push(Line::raw(""));
+        lines.extend(kit::reflow(&d.body, w).into_iter().map(|l| Line::styled(l, theme::muted())));
+    }
+    let files = d.files.iter().map(|f| changes::Item::stat(f).row()).collect();
+    let sections = vec![
+        Section { title: "", count: None, lines },
+        Section { title: "files", count: Some(d.files.len()), lines: files },
+    ];
+    sidebar::draw(f, area, sections);
+}
+
 fn detail_lines(repo: &gix::Repository, s: &Details, width: u16) -> Vec<Line<'static>> {
     let mut out = vec![Line::from(vec![
         Span::styled(s.id.clone(), Style::new().fg(theme::ACCENT)),
@@ -620,5 +690,30 @@ mod tests {
         let head = repo.head_id().unwrap().to_string();
         let Flow::Run(Effect::Copy(id)) = app.key(press(KeyCode::Char('y'))) else { panic!("y should copy") };
         assert!(!id.is_empty() && head.starts_with(&id));
+    }
+
+    #[test]
+    fn the_sidebar_takes_the_message_and_files_on_wide_screens() {
+        let s = crate::git::run::Scratch::new("log-side");
+        s.commit("a.txt", "one\n");
+        let repo = s.repo();
+        let mut app = start(&repo, Options { mode: Mode::Browse, all: false, count: 10 }).unwrap();
+        // Draw, read the details for that width, draw again: the event loop's order.
+        let screen = |app: &mut App, w: u16| {
+            let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(w, 24)).unwrap();
+            t.draw(|f| app.draw(f)).unwrap();
+            app.tick().unwrap();
+            t.draw(|f| app.draw(f)).unwrap();
+            let cells: Vec<&str> = t.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+            cells.concat()
+        };
+        let wide = screen(&mut app, 200);
+        assert!(app.side_open && wide.contains("files   1"), "{wide}");
+        // The panel is the diff only: the subject `a.txt` shows in the list and the sidebar.
+        let panel = app.detail().unwrap();
+        assert!(!panel.iter().any(|l| l.to_string() == "a.txt"), "{panel:?}");
+        app.key(press(KeyCode::Char('i')));
+        screen(&mut app, 200);
+        assert!(!app.side_open && app.detail().unwrap().iter().any(|l| l.to_string() == "a.txt"));
     }
 }

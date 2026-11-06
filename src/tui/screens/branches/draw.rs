@@ -45,14 +45,9 @@ pub(super) fn draw(f: &mut Frame, app: &mut App) {
     draw_header(f, app, header);
     let (list, details) = if !app.details {
         (body, None)
-    } else if body.width >= 110 {
-        let [l, _, r] =
-            Layout::horizontal([Constraint::Percentage(50), Constraint::Length(1), Constraint::Min(30)]).areas(body);
-        (l, Some(r))
     } else {
-        let [t, _, b] =
-            Layout::vertical([Constraint::Percentage(50), Constraint::Length(1), Constraint::Min(5)]).areas(body);
-        (t, Some(b))
+        let p = kit::panes(body, Some(list_width(app)), app.visible.len() as u16 + 2, false);
+        (p.list, Some(p.main))
     };
     draw_list(f, app, list);
     if let Some(d) = details {
@@ -108,6 +103,14 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         Prs::Ready(_) | Prs::Off => {}
     }
     f.render_widget(Paragraph::new(kit::truncate(Line::from(spans), area.width)), area);
+}
+
+/// The list's width that fits its widest branch: bar, mark, dot and name, then the
+/// columns `draw_list` puts on the right (PR, remotes, tracking, merged, age).
+fn list_width(app: &App) -> u16 {
+    let name = app.data.list.iter().map(|b| crate::fmt::width(&b.name)).max().unwrap_or(0);
+    let pr = if app.pr_of.is_empty() { 0 } else { 10 };
+    (6 + name + pr + 4 + 9 + 9 + 9 + 2).min(u16::MAX as usize) as u16
 }
 
 fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {

@@ -49,6 +49,17 @@ mod tests {
     }
 
     #[test]
+    fn hunks_know_what_they_are_in() {
+        let old = "fn a() {\n    1\n}\n\nimpl B {\n    fn c() {\n        2\n        3\n        4\n    }\n}\n";
+        let new = old.replace("        3\n", "        three\n");
+        let h = hunks(old.as_bytes(), new.as_bytes(), 1).unwrap();
+        assert_eq!(h[0].context, "impl B {");
+        assert!(String::from_utf8(h[0].text()).unwrap().starts_with("@@ -7,3 +7,3 @@ impl B {\n"));
+        let h = hunks(b"x\n", b"y\n", 3).unwrap();
+        assert_eq!(h[0].context, "");
+    }
+
+    #[test]
     fn close_changes_share_a_hunk() {
         let old = "a\nb\nc\nd\ne\n";
         let new = "A\nb\nc\nD\ne\n";
@@ -94,6 +105,9 @@ pub struct Hunk {
     pub old_start: u32,
     pub new_start: u32,
     pub lines: Vec<HunkLine>,
+    /// What it's in, found the way git finds the text after `@@ … @@`: the nearest
+    /// line above it that starts with a letter, `_` or `$`. Empty at the top.
+    pub context: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,7 +141,8 @@ impl Hunk {
         // An empty side starts at the line before it: `-0,0` for a new file.
         let old_start = if old_len == 0 { self.old_start - 1 } else { self.old_start };
         let new_start = if new_len == 0 { self.new_start - 1 } else { self.new_start };
-        let mut out = format!("@@ -{old_start},{old_len} +{new_start},{new_len} @@\n").into_bytes();
+        let context = if self.context.is_empty() { String::new() } else { format!(" {}", self.context) };
+        let mut out = format!("@@ -{old_start},{old_len} +{new_start},{new_len} @@{context}\n").into_bytes();
         for l in &self.lines {
             out.push(match l.op {
                 Op::Context => b' ',
@@ -180,7 +195,14 @@ pub fn hunks(old: &[u8], new: &[u8], context: u32) -> Option<Vec<Hunk>> {
         let first = &g[0];
         let lead = first.before.start.min(context);
         let (mut o, mut n) = (first.before.start - lead, first.after.start - lead);
-        let mut hunk = Hunk { old_start: o + 1, new_start: n + 1, lines: Vec::new() };
+        let inside = input.before[..o as usize]
+            .iter()
+            .rev()
+            .map(|&t| String::from_utf8_lossy(input.interner[t]).into_owned())
+            .find(|l| l.starts_with(|c: char| c.is_alphabetic() || c == '_' || c == '$'))
+            .map(|l| l.trim_end().replace('\t', "    ").chars().take(80).collect())
+            .unwrap_or_default();
+        let mut hunk = Hunk { old_start: o + 1, new_start: n + 1, lines: Vec::new(), context: inside };
         let mut push = |op, old, new, b| hunk.lines.push(HunkLine { op, old, new, bytes: b });
         for h in &g {
             while o < h.before.start {

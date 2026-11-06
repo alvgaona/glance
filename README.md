@@ -44,7 +44,7 @@ Or download a binary for macOS or Linux from the
 | [`git`](https://git-scm.com) | required | every change glance makes (stage, commit, fetch, rebase…) |
 | [`gh`](https://cli.github.com) | optional | pull request status and links in `glance branches` |
 | [`fzf`](https://github.com/junegunn/fzf) | optional | picking where `glance rebase -p` starts |
-| [`delta`](https://github.com/dandavison/delta) | optional | the diffs in `glance diff`, and nicer `fzf` previews |
+| [`delta`](https://github.com/dandavison/delta) | optional | the diffs in `glance diff`, `glance show`, the log and stash details, and the `fzf` previews |
 
 Without an optional tool, only the feature that uses it is missing. Copying with `y`
 works on macOS only for now.
@@ -58,6 +58,7 @@ Like a shorter name? `alias gg=glance`.
 | `glance status` | `st` | Branch, upstream and changed files, grouped. Printed, like `git status` but easier to scan. |
 | `glance add` | | Stage on a full screen, with each file next to its diff. Stage files, hunks or single lines, commit and amend, resolve conflicts. `glance add <path>…` stages directly. |
 | `glance diff` | `d` | Changed files on the left, the picked one's diff on the right, drawn by delta when it's installed. Switch between unstaged, staged and since HEAD, and change the layout on the screen. Takes any `git diff` arguments; piped, it is plain `git diff`. |
+| `glance show` | | One commit's files and diffs on the same screen. Piped, it is plain `git show`. |
 | `glance log` | `l` | Commit history with details and refs. Full screen in a terminal, a compact list when piped. |
 | `glance branches` | `br` | Local and remote branches by last commit, with ahead/behind, merged or gone, and pull request status. |
 | `glance stash` | `sh` | Browse stashes with their changes. Apply, pop, drop, turn one into a branch, or stash just the files you pick. |
@@ -92,10 +93,13 @@ asks first.
 | `1` / `2` / `3` | unstaged / staged / everything since HEAD |
 | `s` / `l` | side by side / line numbers, on or off |
 | `w` | ignore whitespace |
+| `n` / `N` | next / previous hunk |
 | `+` / `-` / `f` | more / less context, or the whole file |
 | `z` | hide the file list |
 | `/` | filter files |
-| `e` / `y` | open the file in your editor / copy its path |
+| `e` / `y` | open the file in your editor, at the hunk / copy its path |
+
+Options are remembered between runs, in `~/.local/state/glance/diff`.
 
 **`glance log`**
 

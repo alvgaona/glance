@@ -42,6 +42,13 @@ pub enum Command {
         args: Vec<String>,
     },
 
+    /// One commit's files and diffs, on the `glance diff` screen.
+    ///
+    ///   glance show             the last commit
+    ///   glance show <rev>       any commit; piped, it is plain `git show`
+    #[command(verbatim_doc_comment)]
+    Show { rev: Option<String> },
+
     /// Commit history: full screen in a terminal, a compact list when piped.
     #[command(visible_alias = "l")]
     Log {

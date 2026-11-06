@@ -66,7 +66,10 @@ struct App<'r> {
     details: bool,
     detail_scroll: Scroll,
     /// Rendered details by commit id, filled in `tick`.
-    cache: HashMap<gix::ObjectId, Rc<Vec<Line<'static>>>>,
+    /// Details by (commit, panel width): delta draws diffs to fit.
+    cache: HashMap<(gix::ObjectId, u16), Rc<Vec<Line<'static>>>>,
+    /// The details panel's inner width at the last draw.
+    detail_width: u16,
     toast: Option<Toast>,
     palette: Option<Palette<Cmd>>,
     list_area: Rect,
@@ -98,6 +101,7 @@ fn start(repo: &gix::Repository, opts: Options) -> Result<App<'_>> {
         details: true,
         detail_scroll: Scroll::default(),
         cache: HashMap::new(),
+        detail_width: 0,
         toast: None,
         palette: None,
         list_area: Rect::default(),
@@ -362,18 +366,20 @@ impl App<'_> {
     /// Reads the selected commit's details into the cache, unless they're there.
     fn load_detail(&mut self) {
         let Some(oid) = self.selected_commit().map(|c| c.oid) else { return };
-        if self.cache.contains_key(&oid) {
+        // Zero until the first draw has measured the panel.
+        let width = self.detail_width;
+        if width == 0 || self.cache.contains_key(&(oid, width)) {
             return;
         }
         let lines = match commit::read(self.repo, &oid.to_string()) {
-            Ok(s) => detail_lines(self.repo, &s),
+            Ok(s) => detail_lines(self.repo, &s, width),
             Err(e) => vec![Line::styled(format!("Couldn't read this commit: {e}"), theme::muted())],
         };
-        self.cache.insert(oid, Rc::new(lines));
+        self.cache.insert((oid, width), Rc::new(lines));
     }
 
     fn detail(&self) -> Option<Rc<Vec<Line<'static>>>> {
-        self.cache.get(&self.selected_commit()?.oid).cloned()
+        self.cache.get(&(self.selected_commit()?.oid, self.detail_width)).cloned()
     }
 }
 
@@ -544,7 +550,9 @@ fn ref_pill(r: &RefLabel) -> Span<'static> {
 
 fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
     let block = kit::panel(theme::PANEL);
-    let inner_h = block.inner(area).height;
+    let inner = block.inner(area);
+    let inner_h = inner.height;
+    app.detail_width = inner.width;
     let Some(d) = app.detail() else {
         f.render_widget(block, area);
         return;
@@ -554,7 +562,7 @@ fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
     app.detail_scroll.draw_more(f, area);
 }
 
-fn detail_lines(repo: &gix::Repository, s: &Details) -> Vec<Line<'static>> {
+fn detail_lines(repo: &gix::Repository, s: &Details, width: u16) -> Vec<Line<'static>> {
     let mut out = vec![Line::from(vec![
         Span::styled(s.id.clone(), Style::new().fg(theme::ACCENT)),
         Span::styled("  ·  ", theme::faint()),
@@ -579,7 +587,7 @@ fn detail_lines(repo: &gix::Repository, s: &Details) -> Vec<Line<'static>> {
 
     out.push(Line::raw(""));
     out.extend(changes::files(&s.files, None));
-    out.extend(diff::patches(repo, &s.files));
+    out.extend(diff::patches(repo, &s.files, width));
     out
 }
 

@@ -69,6 +69,10 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         Span::styled(format!(" · {n} file{}  ", if n == 1 { "" } else { "s" }), theme::muted()),
     ];
     spans.extend(changes::counts(Some(Size::Lines { added, removed })));
+    // `git diff` leaves new files out; say so, or they look lost.
+    if app.untracked > 0 {
+        spans.push(Span::styled(format!(" · {} untracked, not shown", app.untracked), theme::faint()));
+    }
     f.render_widget(Paragraph::new(kit::truncate(Line::from(spans), area.width)), area);
 }
 
@@ -124,7 +128,7 @@ fn draw_diff(f: &mut Frame, app: &mut App, area: Rect) {
     // Until a new option's render is in, the last one of this file stays up.
     let want = app.key_for(inner.width).filter(|k| app.cache.contains_key(k));
     let key = want.or_else(|| app.shown.clone().filter(|k| app.detail_for.as_ref() == Some(&k.path)));
-    let Some(lines) = key.as_ref().and_then(|k| app.cache.get(k)) else {
+    let Some(lines) = key.as_ref().and_then(|k| app.cache.get(k)).map(|r| &r.lines) else {
         f.render_widget(Paragraph::new(Span::styled("loading…", theme::faint())), body);
         return;
     };
@@ -166,6 +170,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     pairs.extend([
         ("w", "whitespace"),
         ("+ -", "context"),
+        ("n N", "hunks"),
         ("f", "whole file"),
         ("z", "files"),
         ("e", "edit"),

@@ -36,6 +36,13 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
+        Command::Show { rev } => {
+            let code = cmd::diff::show(rev.as_deref().unwrap_or("HEAD"))?;
+            if code != 0 {
+                std::process::exit(code);
+            }
+            Ok(())
+        }
         Command::Log { count, interactive, all } => cmd::log::run(count, interactive, all, &paint),
         Command::Branches => cmd::branches::run(&paint),
         Command::Stash => cmd::stash::run(&paint),

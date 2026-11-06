@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 
 use super::diff::{PatchLine, Size};
 use super::run::{args, top};
@@ -22,6 +22,8 @@ pub enum Target {
     Head,
     /// Anything else the user typed (`main..`, `-- src/`), as given.
     Args(Vec<String>),
+    /// One commit against its first parent: `glance show`.
+    Commit { id: String, parent: String, subject: String },
 }
 
 impl Target {
@@ -40,6 +42,7 @@ impl Target {
             Target::Staged => args(&["--staged"]),
             Target::Head => args(&["HEAD"]),
             Target::Args(a) => a.clone(),
+            Target::Commit { id, parent, .. } => vec![parent.clone(), id.clone()],
         }
     }
 
@@ -55,8 +58,18 @@ impl Target {
             Target::Staged => "staged".into(),
             Target::Head => "since HEAD".into(),
             Target::Args(a) => a.join(" "),
+            Target::Commit { id, subject, .. } => format!("{} {subject}", &id[..7.min(id.len())]),
         }
     }
+}
+
+/// `rev` as a [`Target::Commit`]. A first commit is compared with the empty tree.
+pub fn commit(repo: &gix::Repository, rev: &str) -> Result<Target> {
+    let id = repo.rev_parse_single(rev).with_context(|| format!("unknown revision `{rev}`"))?;
+    let c = id.object()?.peel_to_commit().with_context(|| format!("`{rev}` is not a commit"))?;
+    let parent = c.parent_ids().next().map_or_else(|| repo.empty_tree().id, |p| p.detach());
+    let subject = c.message()?.summary().to_string();
+    Ok(Target::Commit { id: c.id.to_string(), parent: parent.to_string(), subject })
 }
 
 /// How each file's diff is cut.
@@ -98,6 +111,12 @@ fn stdout(dir: Option<&Path>, a: &[String]) -> Result<String> {
 pub fn files(dir: Option<&Path>, target: &Target, whitespace: bool) -> Result<Vec<FileStat>> {
     let run = |flag: &str| stdout(dir, &[base(whitespace), args(&["-z", flag]), target.args()].concat());
     Ok(parse(&run("--name-status")?, &run("--numstat")?))
+}
+
+/// How many new files git doesn't track (and doesn't ignore), in the whole repo.
+pub fn untracked(dir: Option<&Path>) -> usize {
+    let a = args(&["ls-files", "--others", "--exclude-standard", "-z", "--", ":/"]);
+    stdout(dir, &a).map_or(0, |s| s.split('\0').filter(|p| !p.is_empty()).count())
 }
 
 /// `--name-status -z` and `--numstat -z` joined: kind and names from the first, sizes
@@ -223,6 +242,15 @@ mod tests {
         assert!(p.contains("rename from old.txt"), "{p}");
         let p = patch(dir, &Target::Unstaged, &unstaged[0], Cut { full: true, ..Cut::default() }).unwrap();
         assert!(p.ends_with("+3\n"), "{p}");
+
+        s.write("loose.txt", "x\n");
+        assert_eq!(untracked(dir), 1);
+        // The first commit, against nothing.
+        let repo = s.repo();
+        let first = commit(&repo, "HEAD~1").unwrap();
+        assert!(matches!(&first, Target::Commit { subject, .. } if subject.contains("a.txt")), "{first:?}");
+        let added = files(dir, &first, false).unwrap();
+        assert_eq!(added[0].kind, ChangeKind::Added);
     }
 
     #[test]

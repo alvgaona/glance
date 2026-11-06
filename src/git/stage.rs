@@ -103,25 +103,9 @@ pub enum HunkAction {
 
 /// The patch `git apply` needs for one hunk of `path`.
 pub fn hunk_patch(path: &str, h: &Hunk) -> Vec<u8> {
-    let (old_len, new_len) = h.lens();
-    // An empty side starts at the line before it: `-0,0` for a new file.
-    let old_start = if old_len == 0 { h.old_start - 1 } else { h.old_start };
-    let new_start = if new_len == 0 { h.new_start - 1 } else { h.new_start };
     let (a, b) = (quoted(&format!("a/{path}")), quoted(&format!("b/{path}")));
-    let mut out =
-        format!("diff --git {a} {b}\n--- {a}\n+++ {b}\n@@ -{old_start},{old_len} +{new_start},{new_len} @@\n")
-            .into_bytes();
-    for l in &h.lines {
-        out.push(match l.op {
-            Op::Context => b' ',
-            Op::Removed => b'-',
-            Op::Added => b'+',
-        });
-        out.extend_from_slice(&l.bytes);
-        if !l.bytes.ends_with(b"\n") {
-            out.extend_from_slice(b"\n\\ No newline at end of file\n");
-        }
-    }
+    let mut out = format!("diff --git {a} {b}\n--- {a}\n+++ {b}\n").into_bytes();
+    out.extend(h.text());
     out
 }
 

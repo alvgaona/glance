@@ -4,6 +4,7 @@
 
 mod draw;
 mod keys;
+mod saved;
 #[cfg(test)]
 mod tests;
 
@@ -16,8 +17,9 @@ use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{Frame, style::Style, text::Line};
 
-use crate::delta::{self, Look};
+use crate::delta;
 use crate::git::compare::{self, Cut, Target};
+use crate::git::diff::PatchLine;
 use crate::git::tree::FileStat;
 use crate::tui::app::{self, Flow, Screen};
 use crate::tui::kit::{Command, Palette, PaletteEvent, Scroll, Toast, ansi, list};
@@ -33,6 +35,8 @@ enum Cmd {
     More,
     Less,
     Full,
+    /// To the next hunk, or the one before.
+    Hunk(bool),
     Files,
     Edit,
     Copy,
@@ -46,8 +50,23 @@ enum Effect {
     /// Read the changed files again.
     Load,
     Copy(String),
-    Edit(String),
-    EditOnTerminal(String),
+    /// A file to open in the editor, at this line.
+    Edit(String, Option<u32>),
+    EditOnTerminal(String, Option<u32>),
+}
+
+/// What the screen controls in delta's layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct Look {
+    split: bool,
+    numbers: bool,
+}
+
+/// One file's diff, drawn.
+struct Rendered {
+    lines: Vec<Line<'static>>,
+    /// Per hunk: the line to scroll to for it, and its first line in the new file.
+    hunks: Vec<(usize, u32)>,
 }
 
 /// One rendered diff: a file, cut and drawn one way, at one width.
@@ -76,15 +95,19 @@ struct App {
     selected: usize,
     scroll: usize,
     cut: Cut,
-    /// Side by side; `None` decides by the pane's width.
+    /// Side by side, as set with `s`; `None` decides by the pane's width.
     split: Option<bool>,
+    /// `delta.side-by-side` from git config.
+    prefer_split: Option<bool>,
     numbers: bool,
     hide_files: bool,
     /// delta is installed; without it the diff is drawn here.
     delta: bool,
-    cache: HashMap<Key, Vec<Line<'static>>>,
-    /// The render running in the background.
-    job: Option<(Key, mpsc::Receiver<Vec<Line<'static>>>)>,
+    /// New files git doesn't diff, counted for the header.
+    untracked: usize,
+    cache: HashMap<Key, Rendered>,
+    /// The render running in the background, and whether `tick` waited for it yet.
+    job: Option<(Key, mpsc::Receiver<Rendered>, bool)>,
     /// The diff pane's width at the last draw.
     width: u16,
     /// The render drawn last: shown while the next one for the same file runs.
@@ -97,13 +120,18 @@ struct App {
     palette: Option<Palette<Cmd>>,
 }
 
-pub fn run(args: &[String]) -> Result<()> {
-    let repo = crate::git::open()?;
-    let (split, numbers) = (delta::setting("side-by-side"), delta::setting("line-numbers"));
-    let mut app = start(repo, None, Target::from_args(args), delta::available())?;
-    app.split = split;
-    app.numbers = numbers.unwrap_or(true);
-    app::run(&mut app)
+pub fn run(repo: gix::Repository, target: Target) -> Result<()> {
+    let mut app = start(repo, None, target, delta::available())?;
+    app.prefer_split = delta::setting("side-by-side");
+    app.numbers = delta::setting("line-numbers").unwrap_or(true);
+    // What was on last time wins over delta's settings.
+    saved::load(&mut app);
+    if app.cut.whitespace {
+        app.reload()?;
+    }
+    app::run(&mut app)?;
+    saved::save(&app);
+    Ok(())
 }
 
 /// The screen as it opens, before the first draw.
@@ -121,9 +149,11 @@ fn start(repo: gix::Repository, dir: Option<PathBuf>, target: Target, delta: boo
         scroll: 0,
         cut: Cut::default(),
         split: None,
+        prefer_split: None,
         numbers: true,
         hide_files: false,
         delta,
+        untracked: 0,
         cache: HashMap::new(),
         job: None,
         width: 0,
@@ -159,14 +189,14 @@ impl Screen for App {
                 crate::clipboard::copy(&path);
                 self.toast = Some(Toast::new(format!("Copied {path}"), theme::ACCENT));
             }
-            Effect::Edit(path) => {
+            Effect::Edit(path, line) => {
                 if self.repo.workdir().is_some_and(|d| d.join(&path).is_file()) {
-                    return Ok(Flow::Run(Effect::EditOnTerminal(path)));
+                    return Ok(Flow::Run(Effect::EditOnTerminal(path, line)));
                 }
                 self.toast = Some(Toast::new("It's not in the working tree", theme::YELLOW));
             }
-            Effect::EditOnTerminal(path) => {
-                if let Err(out) = crate::git::run::edit(&self.repo, &path) {
+            Effect::EditOnTerminal(path, line) => {
+                if let Err(out) = crate::git::run::edit(&self.repo, &path, line) {
                     let why = if out.is_empty() { "The editor failed".into() } else { first_lines(&out) };
                     self.toast = Some(Toast::new(why, theme::RED));
                 }
@@ -176,7 +206,7 @@ impl Screen for App {
         Ok(Flow::Stay)
     }
     fn in_terminal(e: &Effect) -> bool {
-        matches!(e, Effect::EditOnTerminal(_))
+        matches!(e, Effect::EditOnTerminal(..))
     }
     fn tick(&mut self) -> Result<()> {
         self.poll();
@@ -184,24 +214,34 @@ impl Screen for App {
         if self.width == 0 {
             return Ok(());
         }
-        let (Some(file), Some(key)) = (self.current().cloned(), self.key_for(self.width)) else { return Ok(()) };
-        if self.cache.contains_key(&key) || self.job.as_ref().is_some_and(|(k, _)| *k == key) {
-            return Ok(());
+        // The picked file first, then the next one, so `j` finds it ready.
+        let todo = [self.selected, self.selected + 1]
+            .into_iter()
+            .filter_map(|i| Some((i, self.key_at(i, self.width)?)))
+            .find(|(_, k)| !self.cache.contains_key(k));
+        let Some((i, key)) = todo else { return Ok(()) };
+        if !self.job.as_ref().is_some_and(|(k, ..)| *k == key) {
+            // A newer pick replaces the job; the old thread's answer is dropped.
+            let (tx, rx) = mpsc::channel();
+            let (dir, target, delta, k) = (self.dir.clone(), self.target.clone(), self.delta, key.clone());
+            let file = self.files[self.visible[i]].clone();
+            std::thread::spawn(move || {
+                let _ = tx.send(render(dir, &target, &file, &k, delta));
+            });
+            self.job = Some((key, rx, false));
         }
-        // A newer pick replaces the job; the old thread's answer is dropped.
-        let (tx, rx) = mpsc::channel();
-        let (dir, target, delta, k) = (self.dir.clone(), self.target.clone(), self.delta, key.clone());
-        std::thread::spawn(move || {
-            let _ = tx.send(render(dir, &target, &file, &k, delta));
-        });
-        self.job = Some((key, rx));
-        // A render takes tens of milliseconds: wait for it, so it shows the moment it's
-        // done rather than at the next wake. Slower ones finish in the background.
-        if let Some((_, rx)) = &self.job
-            && let Ok(lines) = rx.recv_timeout(Duration::from_millis(250))
+        // A render takes tens of milliseconds: wait for the one on screen, once, so it
+        // shows the moment it's done rather than at the next wake.
+        if i == self.selected
+            && let Some((_, rx, waited @ false)) = &mut self.job
         {
-            let (key, _) = self.job.take().unwrap();
-            self.cache.insert(key, lines);
+            *waited = true;
+            if let Ok(r) = rx.recv_timeout(Duration::from_millis(250)) {
+                let (key, ..) = self.job.take().unwrap();
+                self.store(key, r);
+                // Now the next file.
+                return self.tick();
+            }
         }
         Ok(())
     }
@@ -213,26 +253,52 @@ impl Screen for App {
     }
 }
 
-/// One file's diff as lines: delta's, or drawn here without it.
-fn render(dir: Option<PathBuf>, target: &Target, f: &FileStat, key: &Key, delta: bool) -> Vec<Line<'static>> {
+/// One file's diff: delta's, or drawn here without it.
+fn render(dir: Option<PathBuf>, target: &Target, f: &FileStat, key: &Key, delta: bool) -> Rendered {
     let red = Style::new().fg(theme::RED);
     let patch = match compare::patch(dir.as_deref(), target, f, key.cut) {
         Ok(p) => p,
-        Err(e) => return vec![Line::styled(format!("git diff failed: {}", first_lines(&e.to_string())), red)],
+        Err(e) => {
+            let lines = vec![Line::styled(format!("git diff failed: {}", first_lines(&e.to_string())), red)];
+            return Rendered { lines, hunks: Vec::new() };
+        }
     };
-    let mut out = Vec::new();
+    let parsed = compare::lines(&patch);
+    let starts = parsed.iter().filter_map(|l| match l {
+        PatchLine::Hunk { new_start, .. } => Some(*new_start),
+        _ => None,
+    });
+    let mut lines = Vec::new();
     if delta {
-        match delta::render(&patch, key.width, key.look) {
-            Ok(text) => return ansi::lines(&text),
-            Err(e) => out.push(Line::styled(format!("delta failed: {}", first_lines(&e)), red)),
+        let set = [
+            ("side-by-side", if key.look.split { "true" } else { "false" }),
+            ("line-numbers", if key.look.numbers { "true" } else { "false" }),
+            // The pane's title already names the file.
+            ("file-style", "omit"),
+            ("file-decoration-style", "none"),
+        ];
+        match delta::render(&patch, key.width, &set) {
+            // The line above the header: the top of its box.
+            Ok(d) => {
+                let hunks = d.hunks.into_iter().map(|i| i.saturating_sub(1)).zip(starts).collect();
+                return Rendered { lines: ansi::lines(&d.text), hunks };
+            }
+            Err(e) => lines.push(Line::styled(format!("delta failed: {}", first_lines(&e)), red)),
         }
     }
-    let before = out.len();
-    out.extend(compare::lines(&patch).into_iter().map(diff::line));
-    if out.len() == before {
-        out.push(Line::styled("Binary file, or only its mode changed", theme::faint()));
+    let at = lines.len();
+    let hunks = parsed
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| matches!(l, PatchLine::Hunk { .. }))
+        .map(|(i, _)| at + i)
+        .zip(starts)
+        .collect();
+    lines.extend(parsed.into_iter().map(diff::line));
+    if lines.len() == at {
+        lines.push(Line::styled("Binary file, or only its mode changed", theme::faint()));
     }
-    out
+    Rendered { lines, hunks }
 }
 
 fn commands() -> Vec<Command<Cmd>> {
@@ -245,9 +311,11 @@ fn commands() -> Vec<Command<Cmd>> {
         Command { label: "Ignore whitespace: on or off", keys: "w", action: Cmd::Whitespace },
         Command { label: "More context", keys: "+", action: Cmd::More },
         Command { label: "Less context", keys: "-", action: Cmd::Less },
+        Command { label: "Next hunk", keys: "n", action: Cmd::Hunk(true) },
+        Command { label: "Previous hunk", keys: "N", action: Cmd::Hunk(false) },
         Command { label: "Whole file: on or off", keys: "f", action: Cmd::Full },
         Command { label: "File list: show or hide", keys: "z", action: Cmd::Files },
-        Command { label: "Edit file", keys: "e", action: Cmd::Edit },
+        Command { label: "Edit file at this hunk", keys: "e", action: Cmd::Edit },
         Command { label: "Copy file path", keys: "y", action: Cmd::Copy },
         Command { label: "Filter files", keys: "/", action: Cmd::Search },
         Command { label: "Reload", keys: "ctrl+r", action: Cmd::Reload },
@@ -265,6 +333,8 @@ impl App {
             self.toast = Some(Toast::new(first_lines(&e.to_string()), theme::RED));
             Vec::new()
         });
+        let worktree = matches!(self.target, Target::Unstaged | Target::Head);
+        self.untracked = if worktree { compare::untracked(self.dir.as_deref()) } else { 0 };
         self.filter();
         if let Some(p) = keep.and_then(|k| self.visible.iter().position(|&i| self.files[i].path == k)) {
             self.selected = p;
@@ -287,24 +357,66 @@ impl App {
         self.selected = (self.selected as isize + n).clamp(0, last) as usize;
     }
 
-    /// Side by side at this pane width.
+    /// Side by side at this pane width. With delta set to side by side, from 100
+    /// columns; narrower, its lines would wrap.
     fn split_at(&self, width: u16) -> bool {
-        self.split.unwrap_or(width >= 120)
+        self.split.unwrap_or(match self.prefer_split {
+            Some(false) => false,
+            Some(true) => width >= 100,
+            None => width >= 120,
+        })
     }
 
-    /// The cache key for the current file at `width`.
-    fn key_for(&self, width: u16) -> Option<Key> {
+    /// The cache key for the `i`th visible file at `width`.
+    fn key_at(&self, i: usize, width: u16) -> Option<Key> {
         let look = Look { split: self.split_at(width), numbers: self.numbers };
-        Some(Key { path: self.current()?.path.clone(), cut: self.cut, look, width })
+        Some(Key { path: self.files[*self.visible.get(i)?].path.clone(), cut: self.cut, look, width })
+    }
+
+    fn key_for(&self, width: u16) -> Option<Key> {
+        self.key_at(self.selected, width)
+    }
+
+    /// Keeps a render. Each option and width makes its own, so past 64 only the one on
+    /// screen stays.
+    fn store(&mut self, key: Key, r: Rendered) {
+        if self.cache.len() >= 64 {
+            let shown = self.shown.clone();
+            self.cache.retain(|k, _| Some(k) == shown.as_ref());
+        }
+        self.cache.insert(key, r);
+    }
+
+    /// The render on screen.
+    fn on_screen(&self) -> Option<&Rendered> {
+        self.cache.get(self.shown.as_ref()?)
+    }
+
+    /// Scrolls to the next hunk below the top of the pane, or the one above.
+    fn jump(&mut self, down: bool) {
+        let Some(r) = self.on_screen() else { return };
+        let top = self.detail_scroll.top() as usize;
+        let mut at = r.hunks.iter().map(|&(i, _)| i);
+        let to = if down { at.find(|&i| i > top) } else { at.rfind(|&i| i < top) };
+        if let Some(i) = to {
+            self.detail_scroll.to(i);
+        }
+    }
+
+    /// The new file's line at the top of the pane's hunk, for the editor.
+    fn line_here(&self) -> Option<u32> {
+        let r = self.on_screen()?;
+        let top = self.detail_scroll.top() as usize;
+        r.hunks.iter().rev().find(|&&(i, _)| i <= top).or(r.hunks.first()).map(|&(_, line)| line)
     }
 
     /// Takes a finished render, if there is one.
     fn poll(&mut self) {
-        let Some((_, rx)) = &self.job else { return };
+        let Some((_, rx, _)) = &self.job else { return };
         match rx.try_recv() {
-            Ok(lines) => {
-                let (key, _) = self.job.take().unwrap();
-                self.cache.insert(key, lines);
+            Ok(r) => {
+                let (key, ..) = self.job.take().unwrap();
+                self.store(key, r);
             }
             Err(mpsc::TryRecvError::Empty) => {}
             Err(mpsc::TryRecvError::Disconnected) => self.job = None,

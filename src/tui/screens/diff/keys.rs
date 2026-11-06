@@ -88,6 +88,8 @@ impl App {
             KeyCode::Char('+' | '=') => Cmd::More,
             KeyCode::Char('-') => Cmd::Less,
             KeyCode::Char('f') => Cmd::Full,
+            KeyCode::Char('n') => Cmd::Hunk(true),
+            KeyCode::Char('N') => Cmd::Hunk(false),
             KeyCode::Char('z') => Cmd::Files,
             KeyCode::Char('e') => Cmd::Edit,
             KeyCode::Char('y') => Cmd::Copy,
@@ -127,8 +129,9 @@ impl App {
                 self.cut = Cut { context: CONTEXT[i], full: false, ..self.cut };
             }
             Cmd::Full => self.cut.full = !self.cut.full,
+            Cmd::Hunk(down) => self.jump(down),
             Cmd::Files => self.hide_files = !self.hide_files,
-            Cmd::Edit => return path.map_or(Flow::Stay, |p| Flow::Run(Effect::Edit(p))),
+            Cmd::Edit => return path.map_or(Flow::Stay, |p| Flow::Run(Effect::Edit(p, self.line_here()))),
             Cmd::Copy => return path.map_or(Flow::Stay, |p| Flow::Run(Effect::Copy(p))),
             Cmd::Search => {
                 self.hide_files = false;

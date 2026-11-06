@@ -14,8 +14,14 @@ use crate::tui::theme;
 /// Stop drawing diffs after this many lines; huge commits would make the panel slow.
 const MAX_DIFF_LINES: usize = 4000;
 
-/// A header bar per file and its diff, added lines on green and removed on red.
-pub fn patches(repo: &gix::Repository, files: &[FileStat]) -> Vec<Line<'static>> {
+/// Each file's diff, `width` columns wide: drawn by delta when it's installed, else a
+/// header bar per file and its lines, added on green and removed on red.
+pub fn patches(repo: &gix::Repository, files: &[FileStat], width: u16) -> Vec<Line<'static>> {
+    if crate::delta::available()
+        && let Some(lines) = by_delta(repo, files, width)
+    {
+        return lines;
+    }
     let mut out = Vec::new();
     let mut shown = 0;
     for f in files {
@@ -44,6 +50,29 @@ pub fn patches(repo: &gix::Repository, files: &[FileStat]) -> Vec<Line<'static>>
         out.extend(lines.into_iter().map(line));
     }
     out
+}
+
+/// All the files in one delta run; `None` if delta failed.
+fn by_delta(repo: &gix::Repository, files: &[FileStat], width: u16) -> Option<Vec<Line<'static>>> {
+    let mut text = Vec::new();
+    let (mut left, mut lines) = (files.len(), 0);
+    for f in files {
+        if lines >= MAX_DIFF_LINES {
+            break;
+        }
+        let t = tree::file_text(repo, f);
+        lines += t.iter().filter(|&&b| b == b'\n').count();
+        text.extend(t);
+        left -= 1;
+    }
+    // The panel is too narrow for side by side.
+    let drawn = crate::delta::render(&String::from_utf8_lossy(&text), width, &[("side-by-side", "false")]).ok()?;
+    let mut out = vec![Line::raw("")];
+    out.extend(crate::tui::kit::ansi::lines(&drawn.text));
+    if left > 0 {
+        out.push(Line::styled(format!("   {left} more files not shown: too many changes"), theme::faint()));
+    }
+    Some(out)
 }
 
 /// One diff line: line number, `+`/`-`, text; added lines on green, removed on red.

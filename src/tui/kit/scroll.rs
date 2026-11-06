@@ -24,6 +24,11 @@ impl Scroll {
         self.top = 0;
     }
 
+    /// Puts line `top` first; [`Scroll::fit`] keeps it in bounds.
+    pub fn to(&mut self, top: usize) {
+        self.top = top.min(u16::MAX as usize) as u16;
+    }
+
     /// Scrolls just enough to show lines `first..=last` in a panel `height` rows tall
     /// (the top of them, if they don't all fit).
     pub fn show(&mut self, first: usize, last: usize, height: u16) {

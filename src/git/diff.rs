@@ -121,6 +121,27 @@ impl Hunk {
         (old, new)
     }
 
+    /// As in a patch: its `@@` line, then each line after its `+`, `-` or space.
+    pub fn text(&self) -> Vec<u8> {
+        let (old_len, new_len) = self.lens();
+        // An empty side starts at the line before it: `-0,0` for a new file.
+        let old_start = if old_len == 0 { self.old_start - 1 } else { self.old_start };
+        let new_start = if new_len == 0 { self.new_start - 1 } else { self.new_start };
+        let mut out = format!("@@ -{old_start},{old_len} +{new_start},{new_len} @@\n").into_bytes();
+        for l in &self.lines {
+            out.push(match l.op {
+                Op::Context => b' ',
+                Op::Removed => b'-',
+                Op::Added => b'+',
+            });
+            out.extend_from_slice(&l.bytes);
+            if !l.bytes.ends_with(b"\n") {
+                out.extend_from_slice(b"\n\\ No newline at end of file\n");
+            }
+        }
+        out
+    }
+
     /// For drawing: its `@@` line, then its lines as text (tabs expanded, no endings).
     pub fn patch_lines(&self) -> Vec<PatchLine> {
         let text = |b: &[u8]| String::from_utf8_lossy(b).trim_end_matches(['\n', '\r']).replace('\t', "    ");

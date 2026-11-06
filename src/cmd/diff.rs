@@ -25,13 +25,26 @@ pub fn show(rev: &str) -> Result<i32> {
     git("show", &[rev.to_string()])
 }
 
-pub fn blame(path: &str) -> Result<i32> {
+pub fn blame(rev: Option<&str>, path: &str) -> Result<i32> {
     #[cfg(feature = "tui")]
     if super::screen_for_stdout() {
-        crate::tui::screens::blame::run(crate::git::open()?, path)?;
+        let repo = crate::git::open()?;
+        // Said here, not on an empty screen.
+        match rev {
+            Some(rev) if repo.rev_parse_single(rev).is_err() => anyhow::bail!("unknown revision `{rev}`"),
+            None if !std::path::Path::new(path).is_file() => {
+                if repo.rev_parse_single(path).is_ok() {
+                    anyhow::bail!("`{path}` is a commit; blame takes a file: glance blame [<rev>] <path>");
+                }
+                anyhow::bail!("no such file: {path}");
+            }
+            _ => {}
+        }
+        crate::tui::screens::blame::run(repo, rev, path)?;
         return Ok(0);
     }
-    git("blame", &[path.to_string()])
+    let args: Vec<String> = rev.into_iter().chain(["--", path]).map(String::from).collect();
+    git("blame", &args)
 }
 
 fn git(command: &str, args: &[String]) -> Result<i32> {

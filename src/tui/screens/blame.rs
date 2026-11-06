@@ -1,4 +1,4 @@
-//! `glance blame <path>`: the file's lines, each with the commit that last changed it.
+//! `glance blame [<rev>] <path>`: the file's lines, each with the commit that last changed it.
 //! Enter opens that commit on the `glance show` screen.
 
 use std::collections::HashMap;
@@ -27,6 +27,7 @@ use crate::tui::theme;
 struct App {
     repo: gix::Repository,
     path: String,
+    rev: Option<String>,
     /// The blame running in the background, until it's in.
     job: Option<mpsc::Receiver<Result<Blame, String>>>,
     blame: Option<Result<Blame, String>>,
@@ -45,8 +46,8 @@ enum Effect {
     Show(String),
 }
 
-pub fn run(repo: gix::Repository, path: &str) -> Result<()> {
-    let mut app = start(repo, None, path);
+pub fn run(repo: gix::Repository, rev: Option<&str>, path: &str) -> Result<()> {
+    let mut app = start(repo, None, rev, path);
     app.side = crate::tui::state::sidebar();
     app::run(&mut app)?;
     crate::tui::state::set_sidebar(app.side);
@@ -55,13 +56,14 @@ pub fn run(repo: gix::Repository, path: &str) -> Result<()> {
 
 /// The screen as it opens: the blame starts on another thread, as big files take a while.
 /// It runs in `dir` (`None`: here).
-fn start(repo: gix::Repository, dir: Option<PathBuf>, path: &str) -> App {
+fn start(repo: gix::Repository, dir: Option<PathBuf>, rev: Option<&str>, path: &str) -> App {
     let (tx, rx) = mpsc::channel();
-    let p = path.to_string();
-    std::thread::spawn(move || tx.send(blame::read(dir.as_deref(), &p)));
+    let (r, p) = (rev.map(String::from), path.to_string());
+    std::thread::spawn(move || tx.send(blame::read(dir.as_deref(), r.as_deref(), &p)));
     App {
         repo,
         path: path.to_string(),
+        rev: rev.map(String::from),
         job: Some(rx),
         blame: None,
         selected: 0,
@@ -233,6 +235,7 @@ fn draw(f: &mut Frame, app: &mut App) {
         Span::styled(crate::git::repo_name(&app.repo), theme::bold()),
         Span::raw("  "),
         Span::styled(app.path.clone(), theme::muted()),
+        Span::styled(app.rev.as_ref().map(|r| format!("  at {r}")).unwrap_or_default(), theme::faint()),
     ]);
     f.render_widget(Paragraph::new(title), header);
 
@@ -355,7 +358,7 @@ mod tests {
         s.commit("a.txt", "one\ntwo\nthree\n");
         s.commit("a.txt", "one\ntwo\n3\n");
         s.write("a.txt", "one\ntwo\n3\nfour\n");
-        let mut app = start(s.repo(), Some(s.0.clone()), "a.txt");
+        let mut app = start(s.repo(), Some(s.0.clone()), None, "a.txt");
         while app.job.is_some() {
             std::thread::sleep(std::time::Duration::from_millis(5));
             app.tick().unwrap();

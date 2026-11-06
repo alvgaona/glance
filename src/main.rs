@@ -43,8 +43,12 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
-        Command::Blame { path } => {
-            let code = cmd::diff::blame(&path)?;
+        Command::Blame { args } => {
+            let (rev, path) = match args.as_slice() {
+                [rev, path] => (Some(rev.as_str()), path.as_str()),
+                _ => (None, args[0].as_str()),
+            };
+            let code = cmd::diff::blame(rev, path)?;
             if code != 0 {
                 std::process::exit(code);
             }

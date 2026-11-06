@@ -26,10 +26,11 @@ pub struct Blame {
     pub commits: HashMap<String, Who>,
 }
 
-/// Blames `path` in `dir` (or here) as it is in the working tree. Nothing on stdin, so
-/// it can run behind a full screen.
-pub fn read(dir: Option<&Path>, path: &str) -> Result<Blame, String> {
-    let args = ["blame", "--porcelain", "--", path].map(String::from);
+/// Blames `path` in `dir` (or here), as it is in the working tree or at `rev`. Nothing
+/// on stdin, so it can run behind a full screen.
+pub fn read(dir: Option<&Path>, rev: Option<&str>, path: &str) -> Result<Blame, String> {
+    let args: Vec<String> =
+        ["blame", "--porcelain"].into_iter().chain(rev).chain(["--", path]).map(String::from).collect();
     match crate::process::run_with_input("git", &args, dir, b"", &[]) {
         Ok(out) if out.ok() => Ok(parse(&out.stdout)),
         Ok(out) => Err(out.stderr.trim().to_string()),
@@ -80,7 +81,7 @@ mod tests {
         s.commit("a.txt", "one\ntwo\n");
         s.commit("a.txt", "one\n2\tx\n");
         s.write("a.txt", "one\n2\tx\nthree\n");
-        let b = read(Some(&s.0), "a.txt").unwrap();
+        let b = read(Some(&s.0), None, "a.txt").unwrap();
         let texts: Vec<&str> = b.lines.iter().map(|l| l.text.as_str()).collect();
         assert_eq!(texts, ["one", "2    x", "three"]);
         assert_eq!(b.commits[&b.lines[0].id].path, "a.txt");
@@ -89,6 +90,10 @@ mod tests {
         assert!(uncommitted(&b.lines[2].id));
         assert_eq!(b.commits[&b.lines[1].id].summary, "a.txt");
         assert!(b.commits[&b.lines[0].id].time > 0);
-        assert!(read(Some(&s.0), "missing.txt").is_err());
+        assert!(read(Some(&s.0), None, "missing.txt").is_err());
+        // At the first commit: its two lines, both from it.
+        let old = read(Some(&s.0), Some("HEAD~1"), "a.txt").unwrap();
+        assert_eq!(old.lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), ["one", "two"]);
+        assert!(old.lines.iter().all(|l| l.id == b.lines[0].id));
     }
 }

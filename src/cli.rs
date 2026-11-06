@@ -51,9 +51,14 @@ pub enum Command {
 
     /// Each line of a file with the commit that last changed it.
     ///
-    ///   glance blame <path>     enter opens the line's commit; piped, it is plain `git blame`
+    ///   glance blame <path>         enter opens the line's commit; piped, it is plain `git blame`
+    ///   glance blame <rev> <path>   the file as it was at that commit
     #[command(verbatim_doc_comment)]
-    Blame { path: String },
+    Blame {
+        /// A file; or a commit, then the file.
+        #[arg(required = true, num_args = 1..=2, value_name = "[REV] PATH")]
+        args: Vec<String>,
+    },
 
     /// Commit history: full screen in a terminal, a compact list when piped.
     #[command(visible_alias = "l")]

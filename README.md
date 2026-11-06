@@ -59,7 +59,7 @@ Like a shorter name? `alias gg=glance`.
 | `glance add` | | Stage on a full screen, with each file next to its diff, drawn by delta when it's installed. Stage files, hunks or single lines, commit and amend, resolve conflicts. `glance add <path>…` stages directly. |
 | `glance diff` | `d` | Changed files on the left, the picked one's diff on the right, drawn by delta when it's installed. Switch between unstaged, staged and since HEAD, and change the layout on the screen. Takes any `git diff` arguments; piped, it is plain `git diff`. |
 | `glance show` | | One commit's files and diffs on the same screen. Piped, it is plain `git show`. |
-| `glance blame` | | Each line of a file with the commit that last changed it. `enter` opens that commit on the `glance show` screen. Piped, it is plain `git blame`. |
+| `glance blame` | | Each line of a file with the commit that last changed it; `glance blame <rev> <path>` for the file at a commit. `enter` opens that commit on the `glance show` screen. Piped, it is plain `git blame`. |
 | `glance log` | `l` | Commit history with details and refs. Full screen in a terminal, a compact list when piped. |
 | `glance branches` | `br` | Local and remote branches by last commit, with ahead/behind, merged or gone, and pull request status. |
 | `glance stash` | `sh` | Browse stashes with their changes. Apply, pop, drop, turn one into a branch, or stash just the files you pick. |

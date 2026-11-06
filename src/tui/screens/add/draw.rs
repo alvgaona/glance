@@ -238,6 +238,8 @@ fn draw_diff(f: &mut Frame, app: &mut App, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
     app.detail_area = area;
+    // Two columns for the bar that marks the hunk.
+    app.diff_width = inner.width.saturating_sub(2);
     if app.entries.is_empty() {
         return;
     }

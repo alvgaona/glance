@@ -56,7 +56,7 @@ Like a shorter name? `alias gg=glance`.
 | Command | Alias | What it does |
 | --- | --- | --- |
 | `glance status` | `st` | Branch, upstream and changed files, grouped. Printed, like `git status` but easier to scan. |
-| `glance add` | | Stage on a full screen, with each file next to its diff. Stage files, hunks or single lines, commit and amend, resolve conflicts. `glance add <path>…` stages directly. |
+| `glance add` | | Stage on a full screen, with each file next to its diff, drawn by delta when it's installed. Stage files, hunks or single lines, commit and amend, resolve conflicts. `glance add <path>…` stages directly. |
 | `glance diff` | `d` | Changed files on the left, the picked one's diff on the right, drawn by delta when it's installed. Switch between unstaged, staged and since HEAD, and change the layout on the screen. Takes any `git diff` arguments; piped, it is plain `git diff`. |
 | `glance show` | | One commit's files and diffs on the same screen. Piped, it is plain `git show`. |
 | `glance log` | `l` | Commit history with details and refs. Full screen in a terminal, a compact list when piped. |

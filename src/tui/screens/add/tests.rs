@@ -221,3 +221,25 @@ fn the_sidebar_shows_hunks_and_the_next_commit_on_wide_screens() {
     key(&mut app, KeyCode::Char('i'));
     assert!(!screen(&mut app, 200).contains("next commit"));
 }
+
+#[test]
+fn delta_rows_line_up_with_the_hunk_lines() {
+    let s = scratch("add-delta");
+    let old: String = (1..=30).map(|i| format!("{i}\n")).collect();
+    s.commit("c.rs", &old);
+    // Two hunks, the second on a last line without an ending.
+    s.write("c.rs", &old.replace("\n2\n", "\ntwo\n").replace("30\n", "thirty"));
+    let mut app = start(s.repo()).unwrap();
+    select(&mut app, "c.rs");
+    app.tick().unwrap();
+    let plain: Vec<_> = app.view().ranges.clone();
+    app.diff_width = 80;
+    app.tick().unwrap();
+    // With or without delta: a header row and a row per line, in the same places.
+    assert_eq!(app.view().ranges, plain);
+    if crate::delta::available() {
+        let text: Vec<String> = app.view().lines.iter().map(|l| l.to_string()).collect();
+        assert!(text[plain[1].end - 1].contains("thirty"), "{text:#?}");
+        assert!(!text.iter().any(|l| l.contains("No newline")), "{text:#?}");
+    }
+}

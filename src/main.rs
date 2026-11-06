@@ -1,6 +1,8 @@
 mod cli;
 mod clipboard;
 mod cmd;
+#[cfg(feature = "tui")]
+mod delta;
 mod fmt;
 // The commit picker when built without the full-screen views.
 #[cfg_attr(feature = "tui", allow(dead_code))]
@@ -27,6 +29,13 @@ fn main() -> Result<()> {
     match cli.command {
         Command::Status => cmd::status::run(&paint),
         Command::Add { paths } => cmd::add::run(&paths, &paint),
+        Command::Diff { args } => {
+            let code = cmd::diff::run(&args)?;
+            if code != 0 {
+                std::process::exit(code);
+            }
+            Ok(())
+        }
         Command::Log { count, interactive, all } => cmd::log::run(count, interactive, all, &paint),
         Command::Branches => cmd::branches::run(&paint),
         Command::Stash => cmd::stash::run(&paint),

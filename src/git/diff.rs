@@ -1,7 +1,7 @@
 use gix::diff::blob::{Algorithm, Diff, InternedInput, sources::byte_lines};
 
 /// How much a file changed.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Size {
     Lines { added: u32, removed: u32 },
     Binary,

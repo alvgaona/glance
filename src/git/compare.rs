@@ -1,0 +1,242 @@
+//! `git diff` for the diff screen: what to compare, which files changed, and one file's
+//! patch. Runs in the folder glance was started from, so paths the user typed mean what
+//! they meant to git.
+
+use std::path::Path;
+
+use anyhow::{Result, bail};
+
+use super::diff::{PatchLine, Size};
+use super::run::{args, top};
+use super::status::ChangeKind;
+use super::tree::FileStat;
+
+/// What the diff is between.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Target {
+    /// Working tree vs index: `git diff`.
+    Unstaged,
+    /// Index vs HEAD: `git diff --staged`.
+    Staged,
+    /// Working tree vs HEAD: `git diff HEAD`.
+    Head,
+    /// Anything else the user typed (`main..`, `-- src/`), as given.
+    Args(Vec<String>),
+}
+
+impl Target {
+    pub fn from_args(a: &[String]) -> Self {
+        match a {
+            [] => Target::Unstaged,
+            [s] if s == "--staged" || s == "--cached" => Target::Staged,
+            [h] if h == "HEAD" => Target::Head,
+            _ => Target::Args(a.to_vec()),
+        }
+    }
+
+    fn args(&self) -> Vec<String> {
+        match self {
+            Target::Unstaged => Vec::new(),
+            Target::Staged => args(&["--staged"]),
+            Target::Head => args(&["HEAD"]),
+            Target::Args(a) => a.clone(),
+        }
+    }
+
+    /// The user's args without their paths (`main.. -- src/` → `main..`): for one file,
+    /// that file is the only path.
+    fn revs(&self) -> Vec<String> {
+        self.args().into_iter().take_while(|a| a != "--").collect()
+    }
+
+    pub fn label(&self) -> String {
+        match self {
+            Target::Unstaged => "unstaged".into(),
+            Target::Staged => "staged".into(),
+            Target::Head => "since HEAD".into(),
+            Target::Args(a) => a.join(" "),
+        }
+    }
+}
+
+/// How each file's diff is cut.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Cut {
+    /// Ignore whitespace changes (`-w`).
+    pub whitespace: bool,
+    /// Lines of context around each change.
+    pub context: u32,
+    /// The whole file, not just the changes.
+    pub full: bool,
+}
+
+impl Default for Cut {
+    fn default() -> Self {
+        Cut { whitespace: false, context: 3, full: false }
+    }
+}
+
+/// `git diff` with options that make the output the same whatever the user's config.
+fn base(whitespace: bool) -> Vec<String> {
+    let mut a = args(&["diff", "--no-color", "--no-ext-diff", "-M"]);
+    if whitespace {
+        a.push("-w".into());
+    }
+    a
+}
+
+/// git's stdout (not trimmed: a patch's spacing matters), or its complaint.
+fn stdout(dir: Option<&Path>, a: &[String]) -> Result<String> {
+    let out = crate::process::run("git", a, dir)?;
+    if !out.ok() {
+        bail!("{}", out.stderr.trim());
+    }
+    Ok(out.stdout)
+}
+
+/// The changed files, in git's order, with lines added and removed.
+pub fn files(dir: Option<&Path>, target: &Target, whitespace: bool) -> Result<Vec<FileStat>> {
+    let run = |flag: &str| stdout(dir, &[base(whitespace), args(&["-z", flag]), target.args()].concat());
+    Ok(parse(&run("--name-status")?, &run("--numstat")?))
+}
+
+/// `--name-status -z` and `--numstat -z` joined: kind and names from the first, sizes
+/// from the second.
+fn parse(names: &str, nums: &str) -> Vec<FileStat> {
+    let mut sizes = std::collections::HashMap::new();
+    let mut t = nums.split('\0');
+    while let Some(row) = t.next().filter(|r| !r.is_empty()) {
+        let mut cols = row.splitn(3, '\t');
+        let (added, removed, path) = (cols.next(), cols.next(), cols.next().unwrap_or_default());
+        // A rename has an empty path here, then old and new as their own fields.
+        let path = if path.is_empty() { t.nth(1).unwrap_or_default() } else { path };
+        let size = match (added.and_then(|a| a.parse().ok()), removed.and_then(|r| r.parse().ok())) {
+            (Some(added), Some(removed)) => Size::Lines { added, removed },
+            _ => Size::Binary,
+        };
+        sizes.insert(path.to_string(), size);
+    }
+
+    let mut out = Vec::new();
+    let mut t = names.split('\0');
+    while let Some(status) = t.next().filter(|s| !s.is_empty()) {
+        let kind = match status.as_bytes()[0] {
+            b'A' => ChangeKind::Added,
+            b'D' => ChangeKind::Deleted,
+            b'R' => ChangeKind::Renamed,
+            b'C' => ChangeKind::Copied,
+            b'T' => ChangeKind::TypeChange,
+            _ => ChangeKind::Modified,
+        };
+        let from =
+            matches!(kind, ChangeKind::Renamed | ChangeKind::Copied).then(|| t.next().unwrap_or_default().to_string());
+        let path = t.next().unwrap_or_default().to_string();
+        out.push(FileStat { kind, size: sizes.get(&path).copied(), path, from, old: None, new: None });
+    }
+    out
+}
+
+/// One file's `git diff` text, cut as asked.
+pub fn patch(dir: Option<&Path>, target: &Target, f: &FileStat, cut: Cut) -> Result<String> {
+    let mut a = base(cut.whitespace);
+    // As much context as the file has: the whole file.
+    a.push(format!("-U{}", if cut.full { 1_000_000 } else { cut.context }));
+    a.extend(target.revs());
+    a.push("--".into());
+    // Both names of a rename, so git pairs them up again.
+    a.extend(f.from.iter().chain([&f.path]).map(|p| top(p)));
+    stdout(dir, &a)
+}
+
+/// A patch's lines for drawing without delta: headers dropped, line numbers counted
+/// from each `@@ -a,b +c,d @@`, tabs expanded.
+pub fn lines(patch: &str) -> Vec<PatchLine> {
+    let (mut old, mut new) = (0, 0);
+    let mut out = Vec::new();
+    let mut in_hunk = false;
+    for l in patch.lines() {
+        let text = |t: &str| t.replace('\t', "    ");
+        if let Some(h) = l.strip_prefix("@@ -") {
+            let start = |s: &str| s.split(',').next().and_then(|n| n.parse().ok()).unwrap_or(1);
+            let mut sides = h.split(' ');
+            old = start(sides.next().unwrap_or_default());
+            new = start(sides.next().unwrap_or_default().trim_start_matches('+'));
+            out.push(PatchLine::Hunk { old_start: old, new_start: new });
+            in_hunk = true;
+        } else if !in_hunk {
+            // `diff --git`, `index`, `---`, `+++` and the like.
+        } else if let Some(t) = l.strip_prefix('+') {
+            out.push(PatchLine::Added { new, text: text(t) });
+            new += 1;
+        } else if let Some(t) = l.strip_prefix('-') {
+            out.push(PatchLine::Removed { old, text: text(t) });
+            old += 1;
+        } else if let Some(t) = l.strip_prefix(' ') {
+            out.push(PatchLine::Context { old, new, text: text(t) });
+            old += 1;
+            new += 1;
+        } else if l.starts_with("diff ") {
+            in_hunk = false;
+        }
+        // `\ No newline at end of file` is skipped.
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::git::run::Scratch;
+
+    #[test]
+    fn reads_the_args_as_a_target() {
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        assert_eq!(Target::from_args(&[]), Target::Unstaged);
+        assert_eq!(Target::from_args(&s(&["--cached"])), Target::Staged);
+        assert_eq!(Target::from_args(&s(&["HEAD"])), Target::Head);
+        let t = Target::from_args(&s(&["main..", "--", "src/"]));
+        assert_eq!(t.revs(), ["main.."]);
+    }
+
+    #[test]
+    fn lists_changes_renames_and_binaries() {
+        let s = Scratch::new("compare-files");
+        s.commit("a.txt", "1\n2\n");
+        s.commit("old.txt", "same\n");
+        s.write("a.txt", "1\n2\n3\n");
+        s.git(&["mv", "old.txt", "new name.txt"]);
+        s.write("bin.dat", "a\0b");
+        s.git(&["add", "bin.dat"]);
+        let dir = Some(s.0.as_path());
+
+        let unstaged = files(dir, &Target::Unstaged, false).unwrap();
+        assert_eq!(unstaged.len(), 1);
+        assert_eq!(unstaged[0].size, Some(Size::Lines { added: 1, removed: 0 }));
+
+        let head = files(dir, &Target::Head, false).unwrap();
+        let by = |p: &str| head.iter().find(|f| f.path == p).unwrap();
+        assert_eq!(by("new name.txt").kind, ChangeKind::Renamed);
+        assert_eq!(by("new name.txt").from.as_deref(), Some("old.txt"));
+        assert_eq!(by("bin.dat").size, Some(Size::Binary));
+
+        let p = patch(dir, &Target::Head, by("new name.txt"), Cut::default()).unwrap();
+        assert!(p.contains("rename from old.txt"), "{p}");
+        let p = patch(dir, &Target::Unstaged, &unstaged[0], Cut { full: true, ..Cut::default() }).unwrap();
+        assert!(p.ends_with("+3\n"), "{p}");
+    }
+
+    #[test]
+    fn numbers_patch_lines() {
+        let p = "diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -4,3 +4,3 @@ fn x\n a\n-b\n+\tB\n c\n\\ No newline at end of file\n";
+        let got: Vec<String> = lines(p)
+            .into_iter()
+            .map(|l| match l {
+                PatchLine::Hunk { old_start, new_start } => format!("@{old_start},{new_start}"),
+                PatchLine::Context { old, new, text } => format!("{old},{new} {text}"),
+                PatchLine::Removed { old, text } => format!("{old}- {text}"),
+                PatchLine::Added { new, text } => format!("{new}+ {text}"),
+            })
+            .collect();
+        assert_eq!(got, ["@4,4", "4,4 a", "5- b", "5+     B", "6,6 c"]);
+    }
+}

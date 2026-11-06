@@ -7,7 +7,7 @@ use gix::object::tree::diff::ChangeDetached;
 use super::diff::{self, Size};
 use super::status::ChangeKind;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FileStat {
     pub kind: ChangeKind,
     pub path: String,

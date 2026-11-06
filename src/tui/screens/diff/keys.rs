@@ -91,6 +91,7 @@ impl App {
             KeyCode::Char('n') => Cmd::Hunk(true),
             KeyCode::Char('N') => Cmd::Hunk(false),
             KeyCode::Char('z') => Cmd::Files,
+            KeyCode::Char('i') => Cmd::Side,
             KeyCode::Char('e') => Cmd::Edit,
             KeyCode::Char('y') => Cmd::Copy,
             KeyCode::Char('/') => Cmd::Search,
@@ -131,6 +132,7 @@ impl App {
             Cmd::Full => self.cut.full = !self.cut.full,
             Cmd::Hunk(down) => self.jump(down),
             Cmd::Files => self.hide_files = !self.hide_files,
+            Cmd::Side => self.side = !self.side,
             Cmd::Edit => return path.map_or(Flow::Stay, |p| Flow::Run(Effect::Edit(p, self.line_here()))),
             Cmd::Copy => return path.map_or(Flow::Stay, |p| Flow::Run(Effect::Copy(p))),
             Cmd::Search => {

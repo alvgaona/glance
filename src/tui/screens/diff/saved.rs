@@ -28,8 +28,8 @@ pub(super) fn save(app: &App) {
 
 fn text(app: &App) -> String {
     format!(
-        "numbers={}\nwhitespace={}\ncontext={}\nfull={}\nhide_files={}\n",
-        app.numbers, app.cut.whitespace, app.cut.context, app.cut.full, app.hide_files
+        "numbers={}\nwhitespace={}\ncontext={}\nfull={}\nhide_files={}\nside={}\n",
+        app.numbers, app.cut.whitespace, app.cut.context, app.cut.full, app.hide_files, app.side
     )
 }
 
@@ -42,6 +42,7 @@ fn read(text: &str, app: &mut App) {
             "whitespace" => app.cut.whitespace = on,
             "full" => app.cut.full = on,
             "hide_files" => app.hide_files = on,
+            "side" => app.side = on,
             "context" => {
                 if let Ok(n) = value.trim().parse::<u32>() {
                     app.cut.context = n.min(1000);
@@ -63,7 +64,7 @@ mod tests {
         let s = Scratch::new("diff-saved");
         s.commit("a.txt", "1\n");
         let mut app = super::super::start(s.repo(), Some(s.0.clone()), Target::Unstaged, false).unwrap();
-        (app.numbers, app.cut.whitespace, app.cut.context, app.hide_files) = (false, true, 10, true);
+        (app.numbers, app.cut.whitespace, app.cut.context, app.hide_files, app.side) = (false, true, 10, true, false);
         let saved = text(&app);
         let mut back = super::super::start(s.repo(), Some(s.0.clone()), Target::Unstaged, false).unwrap();
         read(&format!("{saved}junk\ncontext=lots\n"), &mut back);

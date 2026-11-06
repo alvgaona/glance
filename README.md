@@ -96,6 +96,7 @@ asks first.
 | `n` / `N` | next / previous hunk |
 | `+` / `-` / `f` | more / less context, or the whole file |
 | `z` | hide the file list |
+| `i` | on wide screens: the sidebar with the file's hunks and history |
 | `/` | filter files |
 | `e` / `y` | open the file in your editor, at the hunk / copy its path |
 

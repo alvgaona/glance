@@ -173,6 +173,45 @@ pub fn patch(dir: Option<&Path>, target: &Target, f: &FileStat, cut: Cut) -> Res
     stdout(dir, &a)
 }
 
+/// Each hunk's first line in the new file, and what git says it's in: the text after
+/// `@@ … @@`, usually the function or section.
+pub fn headers(patch: &str) -> Vec<(u32, String)> {
+    patch
+        .lines()
+        .filter_map(|l| l.strip_prefix("@@ -"))
+        .map(|h| {
+            let (ranges, context) = h.split_once(" @@").unwrap_or((h, ""));
+            let new = ranges.split(" +").nth(1).unwrap_or_default();
+            let line = new.split(',').next().and_then(|n| n.parse().ok()).unwrap_or(1);
+            (line, context.trim().replace('\t', "    "))
+        })
+        .collect()
+}
+
+/// A commit that changed a file.
+#[derive(Debug, Clone)]
+pub struct Touch {
+    pub id: String,
+    pub author: String,
+    pub time: i64,
+    pub subject: String,
+}
+
+/// The last `n` commits that changed `path` (following renames), up to `from` or HEAD.
+pub fn history(dir: Option<&Path>, from: Option<&str>, path: &str, n: usize) -> Vec<Touch> {
+    let mut a = args(&["log", &format!("-{n}"), "--follow", "--format=%h%x00%an%x00%at%x00%s"]);
+    a.extend(from.map(String::from));
+    a.extend(["--".into(), top(path)]);
+    let Ok(out) = stdout(dir, &a) else { return Vec::new() };
+    out.lines()
+        .filter_map(|l| {
+            let mut f = l.splitn(4, '\0');
+            let (id, author, time) = (f.next()?, f.next()?, f.next()?.parse().ok()?);
+            Some(Touch { id: id.into(), author: author.into(), time, subject: f.next()?.into() })
+        })
+        .collect()
+}
+
 /// A patch's lines for drawing without delta: headers dropped, line numbers counted
 /// from each `@@ -a,b +c,d @@`, tabs expanded.
 pub fn lines(patch: &str) -> Vec<PatchLine> {
@@ -254,6 +293,9 @@ mod tests {
         let ws = files(dir, &Target::Unstaged, true).unwrap();
         assert_eq!(ws.len(), 1, "{ws:?}");
 
+        let h = history(dir, None, "a.txt", 5);
+        assert_eq!(h.iter().map(|t| t.subject.as_str()).collect::<Vec<_>>(), ["a.txt"]);
+
         s.write("loose.txt", "x\n");
         assert_eq!(untracked(dir), 1);
         // The first commit, against nothing.
@@ -262,6 +304,12 @@ mod tests {
         assert!(matches!(&first, Target::Commit { subject, .. } if subject.contains("a.txt")), "{first:?}");
         let added = files(dir, &first, false).unwrap();
         assert_eq!(added[0].kind, ChangeKind::Added);
+    }
+
+    #[test]
+    fn reads_hunk_headers() {
+        let p = "--- a/x\n+++ b/x\n@@ -1,2 +1,3 @@\n a\n@@ -40 +41,2 @@ impl Store {\n b\n";
+        assert_eq!(headers(p), [(1, String::new()), (41, "impl Store {".into())]);
     }
 
     #[test]

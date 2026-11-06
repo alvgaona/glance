@@ -38,6 +38,7 @@ enum Cmd {
     /// To the next hunk, or the one before.
     Hunk(bool),
     Files,
+    Side,
     Edit,
     Copy,
     Search,
@@ -65,9 +66,22 @@ struct Look {
 /// One file's diff, drawn.
 struct Rendered {
     lines: Vec<Line<'static>>,
-    /// Per hunk: the line to scroll to for it, and its first line in the new file.
-    hunks: Vec<(usize, u32)>,
+    hunks: Vec<HunkAt>,
 }
+
+/// Where a hunk is.
+#[derive(Debug, Clone)]
+struct HunkAt {
+    /// The line in the drawn diff to scroll to for it.
+    at: usize,
+    /// Its first line in the new file.
+    line: u32,
+    /// What git says it's in: a function, a section.
+    context: String,
+}
+
+/// The sidebar shows from this many columns.
+const SIDE_FROM: u16 = 180;
 
 /// One rendered diff: a file, cut and drawn one way, at one width.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -101,6 +115,17 @@ struct App {
     prefer_split: Option<bool>,
     numbers: bool,
     hide_files: bool,
+    /// The sidebar, on wide screens.
+    side: bool,
+    /// Whether the last draw had room for it: only then is history read.
+    side_open: bool,
+    /// Commits that changed each file, read in the background.
+    history: HashMap<String, Vec<compare::Touch>>,
+    history_job: Option<(String, mpsc::Receiver<Vec<compare::Touch>>)>,
+    /// The commit `glance show` is on.
+    details: Option<crate::git::commit::Details>,
+    /// The sidebar's hunk rows, for clicks.
+    outline_area: ratatui::layout::Rect,
     /// delta is installed; without it the diff is drawn here.
     delta: bool,
     /// New files git doesn't diff, counted for the header.
@@ -152,6 +177,12 @@ fn start(repo: gix::Repository, dir: Option<PathBuf>, target: Target, delta: boo
         prefer_split: None,
         numbers: true,
         hide_files: false,
+        side: true,
+        side_open: false,
+        history: HashMap::new(),
+        history_job: None,
+        details: None,
+        outline_area: Default::default(),
         delta,
         untracked: 0,
         cache: HashMap::new(),
@@ -210,6 +241,7 @@ impl Screen for App {
     }
     fn tick(&mut self) -> Result<()> {
         self.poll();
+        self.load_history();
         // Zero until the first draw has measured the pane.
         if self.width == 0 {
             return Ok(());
@@ -264,10 +296,13 @@ fn render(dir: Option<PathBuf>, target: &Target, f: &FileStat, key: &Key, delta:
         }
     };
     let parsed = compare::lines(&patch);
-    let starts = parsed.iter().filter_map(|l| match l {
-        PatchLine::Hunk { new_start, .. } => Some(*new_start),
-        _ => None,
-    });
+    let headers = compare::headers(&patch);
+    let place = |at: Vec<usize>| -> Vec<HunkAt> {
+        at.into_iter()
+            .zip(&headers)
+            .map(|(at, (line, context))| HunkAt { at, line: *line, context: context.clone() })
+            .collect()
+    };
     let mut lines = Vec::new();
     if delta {
         let set = [
@@ -280,20 +315,16 @@ fn render(dir: Option<PathBuf>, target: &Target, f: &FileStat, key: &Key, delta:
         match delta::render(&patch, key.width, &set) {
             // The line above the header: the top of its box.
             Ok(d) => {
-                let hunks = d.hunks.into_iter().map(|i| i.saturating_sub(1)).zip(starts).collect();
+                let hunks = place(d.hunks.into_iter().map(|i| i.saturating_sub(1)).collect());
                 return Rendered { lines: ansi::lines(&d.text), hunks };
             }
             Err(e) => lines.push(Line::styled(format!("delta failed: {}", first_lines(&e)), red)),
         }
     }
     let at = lines.len();
-    let hunks = parsed
-        .iter()
-        .enumerate()
-        .filter(|(_, l)| matches!(l, PatchLine::Hunk { .. }))
-        .map(|(i, _)| at + i)
-        .zip(starts)
-        .collect();
+    let hunks = place(
+        parsed.iter().enumerate().filter(|(_, l)| matches!(l, PatchLine::Hunk { .. })).map(|(i, _)| at + i).collect(),
+    );
     lines.extend(parsed.into_iter().map(diff::line));
     if lines.len() == at {
         lines.push(Line::styled("Binary file, or only its mode changed", theme::faint()));
@@ -315,6 +346,7 @@ fn commands() -> Vec<Command<Cmd>> {
         Command { label: "Previous hunk", keys: "N", action: Cmd::Hunk(false) },
         Command { label: "Whole file: on or off", keys: "f", action: Cmd::Full },
         Command { label: "File list: show or hide", keys: "z", action: Cmd::Files },
+        Command { label: "Sidebar: show or hide (wide screens)", keys: "i", action: Cmd::Side },
         Command { label: "Edit file at this hunk", keys: "e", action: Cmd::Edit },
         Command { label: "Copy file path", keys: "y", action: Cmd::Copy },
         Command { label: "Filter files", keys: "/", action: Cmd::Search },
@@ -333,6 +365,12 @@ impl App {
             self.toast = Some(Toast::new(first_lines(&e.to_string()), theme::RED));
             Vec::new()
         });
+        self.history.clear();
+        self.history_job = None;
+        self.details = match &self.target {
+            Target::Commit { id, .. } => crate::git::commit::read(&self.repo, id).ok(),
+            _ => None,
+        };
         let worktree = matches!(self.target, Target::Unstaged | Target::Head);
         self.untracked = if worktree { compare::untracked(self.dir.as_deref()) } else { 0 };
         self.filter();
@@ -396,18 +434,51 @@ impl App {
     fn jump(&mut self, down: bool) {
         let Some(r) = self.on_screen() else { return };
         let top = self.detail_scroll.top() as usize;
-        let mut at = r.hunks.iter().map(|&(i, _)| i);
+        let mut at = r.hunks.iter().map(|h| h.at);
         let to = if down { at.find(|&i| i > top) } else { at.rfind(|&i| i < top) };
         if let Some(i) = to {
             self.detail_scroll.to(i);
         }
     }
 
-    /// The new file's line at the top of the pane's hunk, for the editor.
-    fn line_here(&self) -> Option<u32> {
+    /// The hunk at the top of the pane: the last one starting there or above.
+    fn hunk_here(&self) -> Option<usize> {
         let r = self.on_screen()?;
         let top = self.detail_scroll.top() as usize;
-        r.hunks.iter().rev().find(|&&(i, _)| i <= top).or(r.hunks.first()).map(|&(_, line)| line)
+        let n = r.hunks.iter().take_while(|h| h.at <= top).count();
+        (!r.hunks.is_empty()).then(|| n.saturating_sub(1))
+    }
+
+    /// The new file's line at the top of the pane's hunk, for the editor.
+    fn line_here(&self) -> Option<u32> {
+        Some(self.on_screen()?.hunks.get(self.hunk_here()?)?.line)
+    }
+
+    /// Starts reading the current file's commits, when the sidebar shows and they
+    /// aren't read yet; takes them when they're in.
+    fn load_history(&mut self) {
+        if let Some((path, rx)) = &self.history_job
+            && let Ok(h) = rx.try_recv()
+        {
+            self.history.insert(path.clone(), h);
+            self.history_job = None;
+        }
+        let Some(path) = self.current().map(|f| f.path.clone()) else { return };
+        let running = self.history_job.as_ref().is_some_and(|(p, _)| *p == path);
+        if !self.side_open || running || self.history.contains_key(&path) {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        let dir = self.dir.clone();
+        let from = match &self.target {
+            Target::Commit { id, .. } => Some(id.clone()),
+            _ => None,
+        };
+        let p = path.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(compare::history(dir.as_deref(), from.as_deref(), &p, 5));
+        });
+        self.history_job = Some((path, rx));
     }
 
     /// Takes a finished render, if there is one.
@@ -434,6 +505,12 @@ impl App {
                     && i < self.visible.len()
                 {
                     self.selected = i;
+                }
+            }
+            MouseEventKind::Down(MouseButton::Left) if inside(self.outline_area) => {
+                let row = (m.row - self.outline_area.y) as usize;
+                if let Some(at) = self.on_screen().and_then(|r| r.hunks.get(row)).map(|h| h.at) {
+                    self.detail_scroll.to(at);
                 }
             }
             MouseEventKind::ScrollDown if inside(self.detail_area) => self.detail_scroll.wheel(true),

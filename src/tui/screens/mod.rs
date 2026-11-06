@@ -1,6 +1,7 @@
 //! One full-screen view per command.
 
 pub mod add;
+pub mod blame;
 pub mod branches;
 pub mod diff;
 pub mod log;

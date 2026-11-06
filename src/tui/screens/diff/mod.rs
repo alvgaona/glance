@@ -145,8 +145,12 @@ struct App {
     palette: Option<Palette<Cmd>>,
 }
 
-pub fn run(repo: gix::Repository, target: Target) -> Result<()> {
+/// `on`: the file to start on (from the repository's top), when it's in the list.
+pub fn run(repo: gix::Repository, target: Target, on: Option<&str>) -> Result<()> {
     let mut app = start(repo, None, target, delta::available())?;
+    if let Some(p) = app.visible.iter().position(|&i| Some(app.files[i].path.as_str()) == on) {
+        app.selected = p;
+    }
     app.prefer_split = delta::setting("side-by-side");
     app.numbers = delta::setting("line-numbers").unwrap_or(true);
     // What was on last time wins over delta's settings.

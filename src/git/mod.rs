@@ -1,6 +1,9 @@
 //! Everything that reads or writes the repository. Never prints or draws.
 
 // Remotes, deletes and details are only used by the interactive view.
+// Blame is only shown by the full-screen view.
+#[cfg(feature = "tui")]
+pub mod blame;
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub mod branches;
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]

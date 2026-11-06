@@ -43,6 +43,13 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
+        Command::Blame { path } => {
+            let code = cmd::diff::blame(&path)?;
+            if code != 0 {
+                std::process::exit(code);
+            }
+            Ok(())
+        }
         Command::Log { count, interactive, all } => cmd::log::run(count, interactive, all, &paint),
         Command::Branches => cmd::branches::run(&paint),
         Command::Stash => cmd::stash::run(&paint),

@@ -10,6 +10,7 @@ pub mod screens;
 mod state;
 mod term;
 pub mod theme;
+mod watch;
 
 /// First two non-empty lines of git's output, for a toast.
 pub(crate) fn first_lines(s: &str) -> String {

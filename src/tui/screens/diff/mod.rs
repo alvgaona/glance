@@ -285,6 +285,17 @@ impl Screen for App {
         }
         Ok(())
     }
+    fn watched(&self) -> Option<(&gix::Repository, bool)> {
+        match self.target {
+            // A commit can't change; the index alone has no edits.
+            Target::Commit { .. } => None,
+            Target::Staged => Some((&self.repo, false)),
+            _ => Some((&self.repo, true)),
+        }
+    }
+    fn refresh(&mut self) -> Result<()> {
+        self.reload()
+    }
     fn toast(&mut self) -> &mut Option<Toast> {
         &mut self.toast
     }

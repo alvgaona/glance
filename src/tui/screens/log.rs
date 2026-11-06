@@ -165,6 +165,12 @@ impl Screen for App<'_> {
     fn mouse(&mut self, m: MouseEvent) {
         self.on_mouse(m)
     }
+    fn watched(&self) -> Option<(&gix::Repository, bool)> {
+        Some((self.repo, false))
+    }
+    fn refresh(&mut self) -> Result<()> {
+        self.load()
+    }
     fn toast(&mut self) -> &mut Option<Toast> {
         &mut self.toast
     }

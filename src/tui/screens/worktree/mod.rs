@@ -203,6 +203,12 @@ impl Screen for App<'_> {
         self.poll_states();
         Ok(())
     }
+    fn watched(&self) -> Option<(&gix::Repository, bool)> {
+        Some((self.repo, true))
+    }
+    fn refresh(&mut self) -> Result<()> {
+        self.reload(None)
+    }
     fn toast(&mut self) -> &mut Option<Toast> {
         &mut self.toast
     }

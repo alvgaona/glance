@@ -1,7 +1,7 @@
 //! The event loop every screen runs in: expire the toast, do background work, draw,
 //! wait for a key or a click, repeat until the screen is done.
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyEvent, KeyEventKind, MouseEvent};
@@ -49,6 +49,15 @@ pub(crate) trait Screen {
         Ok(())
     }
     fn toast(&mut self) -> &mut Option<Toast>;
+    /// The repository to reload on when it changes outside glance, and whether edits in
+    /// the working tree count too. `None`: never.
+    fn watched(&self) -> Option<(&gix::Repository, bool)> {
+        None
+    }
+    /// Reads the repository again after it changed outside glance.
+    fn refresh(&mut self) -> Result<()> {
+        Ok(())
+    }
     /// True while a text field or search has the keys: only then is a paste typed in.
     fn typing(&self) -> bool {
         false
@@ -57,10 +66,25 @@ pub(crate) trait Screen {
 
 pub(crate) fn run<S: Screen>(screen: &mut S) -> Result<S::Out> {
     let mut terminal = enter();
+    let watch = screen.watched().map(|(repo, edits)| super::watch::start(repo, edits));
+    // The last stamp, and when this screen last wrote: a stamp begun before that may
+    // have caught the write halfway, so it only sets the next baseline.
+    let (mut seen, mut wrote) = (None, Instant::now());
     let result = (|| -> Result<S::Out> {
         loop {
             if screen.toast().as_ref().is_some_and(Toast::expired) {
                 *screen.toast() = None;
+            }
+            for (at, stamp) in watch.iter().flat_map(|rx| rx.try_iter()) {
+                if at < wrote {
+                    continue;
+                }
+                if seen.is_some_and(|s| s != stamp) {
+                    screen.refresh()?;
+                    (seen, wrote) = (None, Instant::now());
+                } else {
+                    seen = Some(stamp);
+                }
             }
             screen.tick()?;
             terminal.draw(|f| screen.draw(f))?;
@@ -93,6 +117,7 @@ pub(crate) fn run<S: Screen>(screen: &mut S) -> Result<S::Out> {
                     }
                     Flow::Run(e) => screen.apply(e)?,
                 };
+                (seen, wrote) = (None, Instant::now());
             }
         }
     })();

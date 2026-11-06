@@ -328,6 +328,15 @@ impl Screen for App {
         self.load_view();
         Ok(())
     }
+    fn watched(&self) -> Option<(&gix::Repository, bool)> {
+        Some((&self.repo, true))
+    }
+    fn refresh(&mut self) -> Result<()> {
+        match self.place() {
+            Some((g, pos)) => self.reload_at(g, pos),
+            None => self.reload(),
+        }
+    }
     fn toast(&mut self) -> &mut Option<Toast> {
         &mut self.toast
     }

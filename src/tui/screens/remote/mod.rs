@@ -227,6 +227,12 @@ impl Screen for App {
     fn tick(&mut self) -> Result<()> {
         self.poll_job()
     }
+    fn watched(&self) -> Option<(&gix::Repository, bool)> {
+        Some((&self.repo, false))
+    }
+    fn refresh(&mut self) -> Result<()> {
+        self.load(None)
+    }
     fn toast(&mut self) -> &mut Option<Toast> {
         &mut self.toast
     }

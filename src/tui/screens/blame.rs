@@ -26,6 +26,8 @@ use crate::tui::theme;
 
 struct App {
     repo: gix::Repository,
+    /// Where git runs; `None` is the folder glance started in.
+    dir: Option<PathBuf>,
     path: String,
     rev: Option<String>,
     /// The blame running in the background, until it's in.
@@ -57,14 +59,12 @@ pub fn run(repo: gix::Repository, rev: Option<&str>, path: &str) -> Result<()> {
 /// The screen as it opens: the blame starts on another thread, as big files take a while.
 /// It runs in `dir` (`None`: here).
 fn start(repo: gix::Repository, dir: Option<PathBuf>, rev: Option<&str>, path: &str) -> App {
-    let (tx, rx) = mpsc::channel();
-    let (r, p) = (rev.map(String::from), path.to_string());
-    std::thread::spawn(move || tx.send(blame::read(dir.as_deref(), r.as_deref(), &p)));
     App {
         repo,
+        job: Some(spawn(dir.clone(), rev, path)),
+        dir,
         path: path.to_string(),
         rev: rev.map(String::from),
-        job: Some(rx),
         blame: None,
         selected: 0,
         scroll: 0,
@@ -74,6 +74,14 @@ fn start(repo: gix::Repository, dir: Option<PathBuf>, rev: Option<&str>, path: &
         list_area: Rect::default(),
         toast: None,
     }
+}
+
+/// Blames `path` on another thread.
+fn spawn(dir: Option<PathBuf>, rev: Option<&str>, path: &str) -> mpsc::Receiver<Result<Blame, String>> {
+    let (tx, rx) = mpsc::channel();
+    let (r, p) = (rev.map(String::from), path.to_string());
+    std::thread::spawn(move || tx.send(blame::read(dir.as_deref(), r.as_deref(), &p)));
+    rx
 }
 
 impl Screen for App {
@@ -126,6 +134,7 @@ impl Screen for App {
         {
             self.blame = Some(b);
             self.job = None;
+            self.selected = self.selected.min(self.len().saturating_sub(1));
         }
         // The sidebar's commit, read once.
         if self.side_open
@@ -135,6 +144,14 @@ impl Screen for App {
             let d = commit::read(&self.repo, &id).ok();
             self.details.insert(id, d);
         }
+        Ok(())
+    }
+    fn watched(&self) -> Option<(&gix::Repository, bool)> {
+        // Blame at a commit can't change.
+        self.rev.is_none().then_some((&self.repo, true))
+    }
+    fn refresh(&mut self) -> Result<()> {
+        self.job = Some(spawn(self.dir.clone(), None, &self.path));
         Ok(())
     }
     fn toast(&mut self) -> &mut Option<Toast> {

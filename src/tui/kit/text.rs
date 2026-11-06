@@ -94,9 +94,46 @@ pub fn pill(text: &str, bg: Color, fg: Color) -> Span<'static> {
     Span::styled(format!(" {text} "), Style::new().bg(bg).fg(fg))
 }
 
+/// Drops a line's first `cols` columns, to scroll it sideways.
+pub fn skip(line: Line<'static>, cols: u16) -> Line<'static> {
+    use unicode_width::UnicodeWidthChar;
+    let style = line.style;
+    let mut left = cols as usize;
+    let mut out = Vec::new();
+    for span in line.spans {
+        let w = span.width();
+        if left >= w {
+            left -= w;
+            continue;
+        }
+        // A wide character cut in half goes whole.
+        let kept: String = span
+            .content
+            .chars()
+            .skip_while(|c| {
+                let gone = left > 0;
+                left = left.saturating_sub(c.width().unwrap_or(0));
+                gone
+            })
+            .collect();
+        out.push(Span::styled(kept, span.style));
+    }
+    Line::from(out).style(style)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{reflow, wrap};
+    use super::{reflow, skip, wrap};
+    use ratatui::text::{Line, Span};
+
+    #[test]
+    fn skips_columns_across_spans() {
+        let line = Line::from(vec![Span::raw("  12 "), Span::raw("hello"), Span::raw(" world")]);
+        assert_eq!(skip(line.clone(), 7).to_string(), "llo world");
+        assert_eq!(skip(line.clone(), 0).to_string(), "  12 hello world");
+        assert_eq!(skip(line, 99).to_string(), "");
+        assert_eq!(skip(Line::raw("日本語"), 1).to_string(), "本語");
+    }
 
     #[test]
     fn reflows_paragraphs_and_keeps_lists() {

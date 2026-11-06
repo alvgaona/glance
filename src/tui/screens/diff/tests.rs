@@ -138,3 +138,23 @@ fn the_sidebar_shows_hunks_and_history_on_wide_screens() {
     key(&mut app, KeyCode::Char('i'));
     assert!(!draw(&mut app, 200, 30).contains("history"));
 }
+
+#[test]
+fn long_lines_scroll_sideways() {
+    let (s, mut app) = screen("diff-sideways");
+    let text = draw(&mut app, 80, 20);
+    assert_eq!(app.over, 0);
+    assert!(!text.contains("long lines"), "{text}");
+    s.write("a.txt", &format!("{}\n", "x".repeat(200)));
+    app.reload().unwrap();
+    let text = draw(&mut app, 160, 20);
+    assert!(app.over > 50 && text.contains("long lines"), "{text}");
+    key(&mut app, KeyCode::Right);
+    key(&mut app, KeyCode::Right);
+    assert_eq!(app.left, 16);
+    key(&mut app, KeyCode::Left);
+    assert_eq!(app.left, 8);
+    // Never past the end of the longest line.
+    (0..50).for_each(|_| drop(key(&mut app, KeyCode::Right)));
+    assert_eq!(app.left, app.over);
+}

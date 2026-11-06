@@ -95,6 +95,7 @@ asks first.
 | `s` / `l` | side by side / line numbers, on or off |
 | `w` | ignore whitespace |
 | `n` / `N` | next / previous hunk |
+| `←` / `→` | scroll long lines sideways |
 | `+` / `-` / `f` | more / less context, or the whole file |
 | `z` | hide the file list |
 | `i` | on wide screens: the sidebar with the file's hunks and history |

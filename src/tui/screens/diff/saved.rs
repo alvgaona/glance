@@ -1,35 +1,24 @@
-//! The diff screen's options, kept between runs in `~/.local/state/glance/diff`
-//! (or under `$XDG_STATE_HOME`). Side by side isn't kept: it follows the window.
-
-use std::path::PathBuf;
+//! The diff screen's options, kept between runs in `~/.local/state/glance/diff`.
+//! Side by side isn't kept: it follows the window. The sidebar is kept for every
+//! screen, in `crate::tui::state`.
 
 use super::App;
-
-fn path() -> Option<PathBuf> {
-    let state = std::env::var_os("XDG_STATE_HOME")
-        .filter(|d| !d.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state")))?;
-    Some(state.join("glance/diff"))
-}
+use crate::tui::state;
 
 pub(super) fn load(app: &mut App) {
-    if let Some(text) = path().and_then(|p| std::fs::read_to_string(p).ok()) {
+    if let Some(text) = state::read("diff") {
         read(&text, app);
     }
 }
 
-/// Best effort: options not kept are no reason to fail.
 pub(super) fn save(app: &App) {
-    let Some(p) = path() else { return };
-    let _ = p.parent().map(std::fs::create_dir_all);
-    let _ = std::fs::write(p, text(app));
+    state::write("diff", &text(app));
 }
 
 fn text(app: &App) -> String {
     format!(
-        "numbers={}\nwhitespace={}\ncontext={}\nfull={}\nhide_files={}\nside={}\n",
-        app.numbers, app.cut.whitespace, app.cut.context, app.cut.full, app.hide_files, app.side
+        "numbers={}\nwhitespace={}\ncontext={}\nfull={}\nhide_files={}\n",
+        app.numbers, app.cut.whitespace, app.cut.context, app.cut.full, app.hide_files
     )
 }
 
@@ -42,7 +31,6 @@ fn read(text: &str, app: &mut App) {
             "whitespace" => app.cut.whitespace = on,
             "full" => app.cut.full = on,
             "hide_files" => app.hide_files = on,
-            "side" => app.side = on,
             "context" => {
                 if let Ok(n) = value.trim().parse::<u32>() {
                     app.cut.context = n.min(1000);
@@ -64,7 +52,7 @@ mod tests {
         let s = Scratch::new("diff-saved");
         s.commit("a.txt", "1\n");
         let mut app = super::super::start(s.repo(), Some(s.0.clone()), Target::Unstaged, false).unwrap();
-        (app.numbers, app.cut.whitespace, app.cut.context, app.hide_files, app.side) = (false, true, 10, true, false);
+        (app.numbers, app.cut.whitespace, app.cut.context, app.hide_files) = (false, true, 10, true);
         let saved = text(&app);
         let mut back = super::super::start(s.repo(), Some(s.0.clone()), Target::Unstaged, false).unwrap();
         read(&format!("{saved}junk\ncontext=lots\n"), &mut back);

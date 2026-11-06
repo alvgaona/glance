@@ -9,6 +9,7 @@ mod layout;
 pub mod list;
 mod palette;
 mod scroll;
+pub mod sidebar;
 mod text;
 mod textarea;
 mod toast;

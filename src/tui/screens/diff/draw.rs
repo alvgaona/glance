@@ -9,6 +9,7 @@ use ratatui::{
 
 use super::*;
 use crate::git::diff::Size;
+use crate::tui::kit::sidebar::{self, Section};
 use crate::tui::kit::{self, footer};
 use crate::tui::panels::changes::{self, Item};
 
@@ -142,66 +143,50 @@ fn draw_diff(f: &mut Frame, app: &mut App, area: Rect) {
 
 /// The commit (for `glance show`), the file's hunks, and the commits that changed it.
 fn draw_side(f: &mut Frame, app: &mut App, area: Rect) {
-    let block = kit::panel(theme::PANEL);
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-    let w = inner.width as usize;
-    let title = |t: String| Line::styled(t, theme::bold());
+    let w = (area.width as usize).saturating_sub(4);
     let now = crate::fmt::now();
-    let mut lines: Vec<Line> = Vec::new();
+    let mut sections = Vec::new();
 
     if let Some(d) = &app.details {
-        lines.extend(kit::wrap(&d.subject, w).into_iter().map(|l| Line::styled(l, theme::bold())));
+        let mut lines: Vec<Line> =
+            kit::wrap(&d.subject, w).into_iter().map(|l| Line::styled(l, theme::bold())).collect();
         lines.push(Line::styled(format!("{} · {}", d.author, crate::fmt::relative_time(d.time, now)), theme::muted()));
         if !d.body.is_empty() {
             lines.push(Line::raw(""));
             let body = d.body.lines().flat_map(|l| kit::wrap(l, w)).take(12);
             lines.extend(body.map(|l| Line::styled(l, theme::muted())));
         }
-        lines.push(Line::raw(""));
+        sections.push(Section { title: "", count: None, lines });
     }
 
     let hunks = app.on_screen().map(|r| r.hunks.clone()).unwrap_or_default();
     let here = app.hunk_here();
-    lines.push(Line::from(vec![
-        Span::styled("hunks", theme::bold()),
-        Span::styled(format!("   {}", hunks.len()), theme::muted()),
-    ]));
-    lines.push(Line::raw(""));
-    let first = lines.len() as u16;
-    for (i, h) in hunks.iter().enumerate() {
-        let on = here == Some(i);
-        let bar = if on { Span::styled("┃ ", Style::new().fg(theme::ACCENT)) } else { Span::raw("  ") };
-        let context = if h.context.is_empty() { "top of the file".to_string() } else { h.context.clone() };
-        lines.push(Line::from(vec![
-            bar,
-            Span::styled(format!("{:>5}  ", h.line), theme::faint()),
-            Span::styled(context, if on { theme::text() } else { theme::muted() }),
-        ]));
-    }
-    let shown = (hunks.len() as u16).min(inner.height.saturating_sub(first));
-    app.outline_area = Rect { y: inner.y + first, height: shown, ..inner };
+    let outline =
+        hunks.iter().enumerate().map(|(i, h)| sidebar::outline_row(h.line, &h.context, here == Some(i))).collect();
+    sections.push(Section { title: "hunks", count: Some(hunks.len()), lines: outline });
 
-    lines.push(Line::raw(""));
-    lines.push(title("history".into()));
-    lines.push(Line::raw(""));
-    match app.current().and_then(|c| app.history.get(&c.path)) {
-        None => lines.push(Line::styled("reading…", theme::faint())),
-        Some(h) if h.is_empty() => lines.push(Line::styled("Not committed yet", theme::faint())),
-        Some(h) => {
-            for t in h {
-                lines.push(Line::from(vec![
-                    Span::styled(format!("{}  ", t.id), Style::new().fg(theme::ACCENT)),
-                    Span::styled(t.subject.clone(), theme::text()),
-                ]));
+    let history = match app.current().and_then(|c| app.history.get(&c.path)) {
+        None => vec![Line::styled("reading…", theme::faint())],
+        Some(h) if h.is_empty() => vec![Line::styled("Not committed yet", theme::faint())],
+        Some(h) => h
+            .iter()
+            .flat_map(|t| {
                 let when = crate::fmt::relative_time(t.time, now);
-                lines
-                    .push(Line::styled(format!("{}{} · {when}", " ".repeat(t.id.len() + 2), t.author), theme::faint()));
-            }
-        }
-    }
-    let lines: Vec<Line> = lines.into_iter().map(|l| kit::truncate(l, inner.width)).collect();
-    f.render_widget(Paragraph::new(lines), inner);
+                [
+                    Line::from(vec![
+                        Span::styled(format!("{}  ", t.id), Style::new().fg(theme::ACCENT)),
+                        Span::styled(t.subject.clone(), theme::text()),
+                    ]),
+                    Line::styled(format!("{}{} · {when}", " ".repeat(t.id.len() + 2), t.author), theme::faint()),
+                ]
+            })
+            .collect(),
+    };
+    sections.push(Section { title: "history", count: None, lines: history });
+
+    let at = sidebar::draw(f, area, sections);
+    // The hunks are the second to last section.
+    app.outline_area = at[at.len() - 2];
 }
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {

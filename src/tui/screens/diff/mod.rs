@@ -148,11 +148,13 @@ pub fn run(repo: gix::Repository, target: Target) -> Result<()> {
     app.numbers = delta::setting("line-numbers").unwrap_or(true);
     // What was on last time wins over delta's settings.
     saved::load(&mut app);
+    app.side = crate::tui::state::sidebar();
     if app.cut.whitespace {
         app.reload()?;
     }
     app::run(&mut app)?;
     saved::save(&app);
+    crate::tui::state::set_sidebar(app.side);
     Ok(())
 }
 

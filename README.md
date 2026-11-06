@@ -85,6 +85,7 @@ asks first.
 | `a` / `u` | stage / unstage everything |
 | `d` | discard the file's changes (delete, if untracked) |
 | `e` | open the file in your editor |
+| `i` | on wide screens: the sidebar with the file's hunks and the next commit |
 
 **`glance diff`**
 

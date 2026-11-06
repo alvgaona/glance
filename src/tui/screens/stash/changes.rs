@@ -324,6 +324,15 @@ impl Picker {
         (4 + self.covered().len().max(1) + self.others_rows() + 1 + self.note(inner_w).0.len() + 2) as u16
     }
 
+    /// Columns the pane needs: its widest file row, or the mode tabs; padding included.
+    pub fn width(&self) -> u16 {
+        let name_w = self.files.iter().map(|f| f.path.chars().count()).max().unwrap_or(0);
+        let rows = self.files.iter().map(|f| self.row(f, Some(true), false, name_w, 0).width()).max().unwrap_or(0);
+        // " e everything ", " s staged ", " u unstaged " and " t untracked off ", with gaps.
+        let tabs = 57;
+        (rows.max(tabs) + 4).min(u16::MAX as usize) as u16
+    }
+
     /// The pane: title, mode tabs, the files, and a note on what enter does.
     pub fn draw(&mut self, f: &mut Frame, area: Rect, focused: bool) {
         let block = kit::panel(theme::PANEL);

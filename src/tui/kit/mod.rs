@@ -15,7 +15,7 @@ mod toast;
 
 pub use dialog::Confirm;
 pub use input::{Input, InputEvent};
-pub use layout::{centered, panel};
+pub use layout::{centered, panel, panes};
 pub use palette::{Command, Palette, PaletteEvent};
 pub use scroll::Scroll;
 pub use text::{pill, truncate, wrap};

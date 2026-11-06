@@ -332,17 +332,9 @@ fn draw(f: &mut Frame, app: &mut App) {
 
     let (list, details) = if !app.details {
         (body, None)
-    } else if body.width >= 110 {
-        let [l, _, r] =
-            Layout::horizontal([Constraint::Percentage(58), Constraint::Length(1), Constraint::Min(30)]).areas(body);
-        (l, Some(r))
     } else {
-        // Stacked: the list takes only the rows it needs, details get the rest.
-        let needed = app.lines.len() as u16 + 2;
-        let list_h = needed.min(body.height * 3 / 5);
-        let [t, _, b] =
-            Layout::vertical([Constraint::Length(list_h), Constraint::Length(1), Constraint::Min(5)]).areas(body);
-        (t, Some(b))
+        let p = kit::panes(body, Some(list_width(app)), app.lines.len() as u16 + 2, false);
+        (p.list, Some(p.main))
     };
     draw_list(f, app, list);
     if let Some(d) = details {
@@ -392,6 +384,21 @@ fn action_colors(a: Action) -> (Color, Color) {
         Action::Fixup => (Color::Rgb(108, 88, 150), theme::TEXT),
         Action::Drop => (theme::RED, theme::BG),
     }
+}
+
+/// The list's width that fits its widest row: bar, action pill, hash, subject, and the
+/// `+a −d` on the right, as `draw_list` lays them out.
+fn list_width(app: &App) -> u16 {
+    let widest = app
+        .lines
+        .iter()
+        .map(|l| match l {
+            Todo::Commit { hash, subject, .. } => hash.len() + 2 + 2 + crate::fmt::width(subject) + 16,
+            Todo::Other(raw) => crate::fmt::width(raw),
+        })
+        .max()
+        .unwrap_or(0);
+    (2 + 8 + 2 + widest).min(u16::MAX as usize) as u16
 }
 
 fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {

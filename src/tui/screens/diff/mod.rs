@@ -80,9 +80,6 @@ struct HunkAt {
     context: String,
 }
 
-/// The sidebar shows from this many columns.
-const SIDE_FROM: u16 = 180;
-
 /// One rendered diff: a file, cut and drawn one way, at one width.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct Key {

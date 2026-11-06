@@ -16,19 +16,8 @@ pub(super) fn draw(f: &mut Frame, app: &mut App) {
     .areas(area);
 
     draw_header(f, app, header);
-    let (list, details) = if body.width >= 110 {
-        // As wide as the longest row, so the diff gets the rest; within two fifths.
-        let w = list_width(app).min(body.width * 2 / 5).max(28);
-        let [l, _, r] =
-            Layout::horizontal([Constraint::Length(w), Constraint::Length(1), Constraint::Min(40)]).areas(body);
-        (l, r)
-    } else {
-        // Not `clamp`: it panics when a short terminal makes the upper bound the smaller one.
-        let rows = (display(app).len() as u16 + 2).min(body.height / 2).max(4);
-        let [t, _, b] =
-            Layout::vertical([Constraint::Length(rows), Constraint::Length(1), Constraint::Min(5)]).areas(body);
-        (t, b)
-    };
+    let p = kit::panes(body, Some(list_width(app)), display(app).len() as u16 + 2, false);
+    let (list, details) = (p.list, p.main);
     draw_list(f, app, list);
     draw_diff(f, app, details);
     draw_footer(f, app, footer);

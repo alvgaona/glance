@@ -412,14 +412,9 @@ fn draw(f: &mut Frame, app: &mut App) {
     draw_header(f, app, header);
     let (list, details) = if !app.details {
         (body, None)
-    } else if body.width >= 110 {
-        let [l, _, r] =
-            Layout::horizontal([Constraint::Percentage(50), Constraint::Length(1), Constraint::Min(30)]).areas(body);
-        (l, Some(r))
     } else {
-        let [t, _, b] =
-            Layout::vertical([Constraint::Percentage(45), Constraint::Length(1), Constraint::Min(5)]).areas(body);
-        (t, Some(b))
+        let p = kit::panes(body, Some(list_width(app)), app.visible.len() as u16 + 2, false);
+        (p.list, Some(p.main))
     };
     draw_list(f, app, list);
     app.detail_area = details.unwrap_or_default();
@@ -455,6 +450,13 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         ]),
     };
     f.render_widget(Paragraph::new(left), area);
+}
+
+/// The list's width that fits its widest commit row: bar, id, subject, then author
+/// and age as `draw_list` lays them out.
+fn list_width(app: &App) -> u16 {
+    let widest = app.commits.iter().map(|c| c.id.len() + crate::fmt::width(&c.summary)).max().unwrap_or(0);
+    (2 + 2 + widest + 22).min(u16::MAX as usize) as u16
 }
 
 fn draw_list(f: &mut Frame, app: &mut App, area: Rect) {

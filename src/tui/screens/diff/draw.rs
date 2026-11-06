@@ -26,35 +26,20 @@ pub(super) fn draw(f: &mut Frame, app: &mut App) {
     .areas(area);
 
     draw_header(f, app, header);
-    // Wide: the sidebar on the right, the rest as usual.
-    app.side_open = app.side && body.width >= SIDE_FROM && !app.files.is_empty();
+    // The list as wide as its longest row; the sidebar on wide screens.
+    let want = (!app.hide_files && !app.files.is_empty())
+        .then(|| app.files.iter().map(|f| Item::stat(f).row().width() as u16 + 4).max().unwrap_or(0));
+    let p = kit::panes(body, want, app.visible.len() as u16 + 2, app.side && !app.files.is_empty());
+    app.side_open = p.side.is_some();
     app.outline_area = Rect::default();
-    let body = if app.side_open {
-        let [main, _, side] =
-            Layout::horizontal([Constraint::Min(80), Constraint::Length(1), Constraint::Length(44)]).areas(body);
+    if let Some(side) = p.side {
         draw_side(f, app, side);
-        main
-    } else {
-        body
-    };
-    if app.hide_files || app.files.is_empty() {
-        app.list_area = Rect::default();
-        draw_diff(f, app, body);
-    } else if body.width >= 100 {
-        // As wide as the longest row, within a third or so of the screen.
-        let longest = app.files.iter().map(|f| Item::stat(f).row().width() as u16 + 4).max().unwrap_or(0);
-        let w = longest.min(body.width * 2 / 5).max(28);
-        let [l, _, r] =
-            Layout::horizontal([Constraint::Length(w), Constraint::Length(1), Constraint::Min(40)]).areas(body);
-        draw_list(f, app, l);
-        draw_diff(f, app, r);
-    } else {
-        let h = (app.visible.len() as u16 + 2).min(body.height / 3).max(4);
-        let [t, _, b] =
-            Layout::vertical([Constraint::Length(h), Constraint::Length(1), Constraint::Min(3)]).areas(body);
-        draw_list(f, app, t);
-        draw_diff(f, app, b);
     }
+    app.list_area = Rect::default();
+    if want.is_some() {
+        draw_list(f, app, p.list);
+    }
+    draw_diff(f, app, p.main);
     draw_footer(f, app, foot);
 
     if let Some(p) = &app.palette {

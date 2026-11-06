@@ -1,5 +1,8 @@
 use clap::builder::styling::{Color, Effects, RgbColor, Style, Styles};
-use clap::{Parser, Subcommand, ValueEnum};
+use std::ffi::OsString;
+
+use clap::error::ErrorKind;
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 
 // Four colours from the full screens' palette (`tui::theme`).
 const RED: Color = Color::Rgb(RgbColor(224, 108, 117));
@@ -48,16 +51,85 @@ fn top_help() -> String {
         ("glance blame src/main.rs", "who last changed each line"),
         ("cd \"$(glance wt)\"", "jump to a worktree"),
         ("glance rb 3", "reword, squash or reorder the last 3 commits"),
+        ("glance commit -m \"fix\"", "anything else is git's: git commit -m \"fix\""),
     ]) + &note(
         "In a terminal most commands open a full screen, and q quits it.\n\
          Piped, they print plain text, or run the git command they stand for.\n\
+         Any other command, or an option glance doesn't know, goes to git as typed.\n\
          `glance <command> --help` has the details and examples for each.",
     )
 }
 
+/// Who runs a command line: glance, or git with the arguments as given.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Route {
+    Glance,
+    Git(Vec<OsString>),
+}
+
+/// glance commands git has no command for: their mistakes are glance's to report.
+const GLANCE_ONLY: [&str; 4] = ["branches", "worktrees", "repos", "__rebase-editor"];
+
+/// Options that change what `git diff` and `git show` print, not what they compare: the
+/// screen can't draw them, so git does.
+const GIT_OUTPUT: [&str; 13] = [
+    "--stat",
+    "--numstat",
+    "--shortstat",
+    "--dirstat",
+    "--name-only",
+    "--name-status",
+    "--check",
+    "--word-diff",
+    "--color-words",
+    "--raw",
+    "--summary",
+    "--exit-code",
+    "--quiet",
+];
+
+/// glance runs its own commands, when it understands every argument; anything else goes
+/// to git untouched, so `g push` or `g log --oneline` work with `alias g=glance`.
+/// `args` come without the program's name.
+pub fn route(args: &[OsString]) -> Route {
+    let git = || Route::Git(args.to_vec());
+    let Some(first) = args.first().map(|a| a.to_string_lossy()) else { return Route::Glance };
+    let cli = Cli::command();
+    // The command a name or alias stands for.
+    let command = |name: &str| {
+        cli.get_subcommands()
+            .find(|c| c.get_name() == name || c.get_all_aliases().any(|a| a == name))
+            .map(|c| c.get_name().to_string())
+    };
+    if first.starts_with('-') {
+        // glance's own flags; git's (`-C dir`, `-c k=v`, `--no-pager`) go to git.
+        let ours = ["-h", "--help", "-V", "--version", "--color"];
+        return if ours.contains(&first.as_ref()) || first.starts_with("--color=") { Route::Glance } else { git() };
+    }
+    if first == "help" {
+        let about = args.get(1).map(|a| a.to_string_lossy());
+        return if about.is_none_or(|a| command(&a).is_some()) { Route::Glance } else { git() };
+    }
+    let Some(name) = command(&first) else { return git() };
+    if GLANCE_ONLY.contains(&name.as_str()) {
+        return Route::Glance;
+    }
+    let output = |a: &OsString| GIT_OUTPUT.iter().any(|o| a.to_string_lossy().split('=').next() == Some(o));
+    if matches!(name.as_str(), "diff" | "show") && args.iter().any(output) {
+        return git();
+    }
+    let full = std::iter::once(OsString::from("glance")).chain(args.iter().cloned());
+    match Cli::try_parse_from(full) {
+        Ok(_) => Route::Glance,
+        // `g log --help` is glance's help.
+        Err(e) if matches!(e.kind(), ErrorKind::DisplayHelp | ErrorKind::DisplayVersion) => Route::Glance,
+        Err(_) => git(),
+    }
+}
+
 /// `--color` from the raw arguments: clap draws the help before it parses them.
-pub fn help_color(args: impl IntoIterator<Item = String>) -> clap::ColorChoice {
-    let args: Vec<String> = args.into_iter().collect();
+pub fn help_color(args: impl IntoIterator<Item = OsString>) -> clap::ColorChoice {
+    let args: Vec<String> = args.into_iter().map(|a| a.to_string_lossy().into_owned()).collect();
     let value = args.iter().enumerate().find_map(|(i, a)| match a.strip_prefix("--color") {
         Some("") => args.get(i + 1).map(String::as_str),
         Some(v) => v.strip_prefix('='),
@@ -307,9 +379,80 @@ mod tests {
 
     #[test]
     fn color_never_reaches_the_help() {
-        assert_eq!(help_color(["glance", "--color", "never", "-h"].map(String::from)), clap::ColorChoice::Never);
-        assert_eq!(help_color(["glance", "log", "--color=always"].map(String::from)), clap::ColorChoice::Always);
-        assert_eq!(help_color(["glance", "-h"].map(String::from)), clap::ColorChoice::Auto);
+        assert_eq!(help_color(["glance", "--color", "never", "-h"].map(OsString::from)), clap::ColorChoice::Never);
+        assert_eq!(help_color(["glance", "log", "--color=always"].map(OsString::from)), clap::ColorChoice::Always);
+        assert_eq!(help_color(["glance", "-h"].map(OsString::from)), clap::ColorChoice::Auto);
+    }
+
+    #[test]
+    fn glance_runs_what_it_understands_and_git_the_rest() {
+        let glance = [
+            "",
+            "-h",
+            "--version",
+            "--color never st",
+            "help",
+            "help log",
+            "help st",
+            "st",
+            "status",
+            "add",
+            "add src/x.rs",
+            "d",
+            "d --staged",
+            "diff main.. -- src/",
+            "show HEAD~2",
+            "blame src/x.rs",
+            "blame HEAD~1 src/x.rs",
+            "l -a",
+            "log -n 10",
+            "log --help",
+            "sh",
+            "remote",
+            "remotes -l",
+            "rb 5",
+            "rebase --continue",
+            "rebase main",
+            "br",
+            "wt -l",
+            "repos ~/code",
+            // glance-only: glance's own error, nothing to forward to.
+            "br --bogus",
+            "wt -x",
+        ];
+        let git = [
+            "push",
+            "commit -m x",
+            "lg",
+            "pussh",
+            "-C ../x status",
+            "-c k=v commit",
+            "--no-pager log",
+            "help commit",
+            "status -s",
+            "st -s",
+            "log --oneline",
+            "log -p",
+            "log --bogus",
+            "add -p",
+            "stash pop",
+            "stash list",
+            "remote add origin URL",
+            "show --stat",
+            "show HEAD --name-only",
+            "diff --stat",
+            "d --name-status main",
+            "diff --word-diff=color",
+            "blame -L 10,20 f",
+            "blame",
+        ];
+        let args = |line: &str| line.split_whitespace().map(OsString::from).collect::<Vec<_>>();
+        for line in glance {
+            assert_eq!(route(&args(line)), Route::Glance, "{line}");
+        }
+        for line in git {
+            assert_eq!(route(&args(line)), Route::Git(args(line)), "{line}");
+        }
     }
 
     #[test]

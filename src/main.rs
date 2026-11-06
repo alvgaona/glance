@@ -24,8 +24,12 @@ use clap::{CommandFactory, FromArgMatches};
 use cli::{Cli, Command};
 
 fn main() -> Result<()> {
+    // Anything glance doesn't run is git's, as typed: `g push` with `alias g=glance`.
+    if let cli::Route::Git(args) = cli::route(&std::env::args_os().skip(1).collect::<Vec<_>>()) {
+        git::run::exec_git(&args);
+    }
     // The help and errors follow `--color` too.
-    let matches = Cli::command().color(cli::help_color(std::env::args())).get_matches();
+    let matches = Cli::command().color(cli::help_color(std::env::args_os())).get_matches();
     let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
     let paint = print::Paint::detect(cli.color);
     match cli.command {

@@ -12,6 +12,18 @@ fn ran(out: std::io::Result<crate::process::Output>, what: &str) -> Ran {
     }
 }
 
+/// Hands the rest of the run to git with `args`: git takes the terminal, the pager, the
+/// prompts, ctrl+c and the exit code. Never returns.
+pub fn exec_git(args: &[std::ffi::OsString]) -> ! {
+    let e = crate::process::exec("git", args);
+    if e.kind() == std::io::ErrorKind::NotFound {
+        eprintln!("glance: git isn't installed or isn't on PATH");
+        std::process::exit(127);
+    }
+    eprintln!("glance: could not run git: {e}");
+    std::process::exit(1);
+}
+
 /// Runs git here. Prompts for credentials still reach the terminal: ssh and git ask on /dev/tty.
 pub fn git(args: &[String]) -> Ran {
     git_in(None, args)

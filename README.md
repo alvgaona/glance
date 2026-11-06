@@ -60,6 +60,19 @@ abbr -a g glance      # fish: ~/.config/fish/config.fish
 
 The command aliases still work after it: `g st`, `g d`, `g l`, `g rb`.
 
+`g` can stand in for `git` too: glance runs its own commands, and passes anything else
+to git exactly as typed, with git's output, prompts and exit code.
+
+```sh
+g st                 # glance's status
+g log --oneline      # git's log: glance's has no --oneline
+g commit -m "fix"    # git commit
+g push               # git push
+```
+
+A command glance has runs in glance when glance understands every option, and in git
+otherwise. glance's commands win over git aliases with the same name, like `st`.
+
 oh-my-zsh's git plugin already sets `g` to `git`. Put the alias after the line that loads
 oh-my-zsh, so yours wins.
 

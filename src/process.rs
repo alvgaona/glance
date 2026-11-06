@@ -99,6 +99,21 @@ pub fn run_attached(bin: &str, args: &[String], env: &[(&str, &str)]) -> std::io
     Ok(Command::new(bin).args(args).envs(env.iter().copied()).status()?.code())
 }
 
+/// Replaces glance with `bin args…`: it gets the terminal, signals and the exit code.
+/// Returns only if it couldn't start. Where there's no `exec`, runs it and exits with its
+/// code.
+pub fn exec(bin: &str, args: &[std::ffi::OsString]) -> std::io::Error {
+    let mut cmd = Command::new(bin);
+    cmd.args(args);
+    #[cfg(unix)]
+    return std::os::unix::process::CommandExt::exec(&mut cmd);
+    #[cfg(not(unix))]
+    match cmd.status() {
+        Ok(s) => std::process::exit(s.code().unwrap_or(1)),
+        Err(e) => e,
+    }
+}
+
 /// Opens a URL in the browser (or a file in its app). False if that didn't work.
 pub fn open(target: &str) -> bool {
     let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };

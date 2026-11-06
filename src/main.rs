@@ -19,12 +19,14 @@ mod process;
 mod tui;
 
 use anyhow::Result;
-use clap::Parser;
+use clap::{CommandFactory, FromArgMatches};
 
 use cli::{Cli, Command};
 
 fn main() -> Result<()> {
-    let cli = Cli::parse();
+    // The help and errors follow `--color` too.
+    let matches = Cli::command().color(cli::help_color(std::env::args())).get_matches();
+    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
     let paint = print::Paint::detect(cli.color);
     match cli.command {
         Command::Status => cmd::status::run(&paint),

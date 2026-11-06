@@ -2,6 +2,27 @@
 
 All notable changes to glance are listed here, newest first.
 
+## [0.2.0](https://github.com/alvgaona/glance/releases/tag/v0.2.0) - 2026-11-06
+
+### Features
+
+- **cli:** help in glance's colours, with examples for every command ([85961ff](https://github.com/alvgaona/glance/commit/85961ffbf9bc33ce1d7b59ce4e625eacb426fe8f))
+- **blame:** each line with the commit that last changed it ([0cc5773](https://github.com/alvgaona/glance/commit/0cc5773ddd497e50967c42fe6ab2285b9f383cb2))
+- **diff:** left and right arrows scroll long lines sideways ([4ffe6bc](https://github.com/alvgaona/glance/commit/4ffe6bcb2917f6e7668ae762a1fae531611444dc))
+- **add:** delta draws the diff when it's installed ([69b0dde](https://github.com/alvgaona/glance/commit/69b0ddefd9995dce73f0e736c4761ddbede3924d))
+- **log:** n/N jump between hunks, and a click on a sidebar file goes to its diff ([bff4ee5](https://github.com/alvgaona/glance/commit/bff4ee56f231ed724724cf71eaa0c81527200ffa))
+- **tui:** the footer names i for the sidebar on wide screens ([70220c7](https://github.com/alvgaona/glance/commit/70220c72c7d8a7e696c31a83dcb28d5385723197))
+- panes sized to their content, and a sidebar on wide screens (#5) ([0998192](https://github.com/alvgaona/glance/commit/099819276a821a3242479dff15c02cd3887e4653))
+- glance diff and glance show, drawn by delta (#4) ([09ea724](https://github.com/alvgaona/glance/commit/09ea724c19615b3c98ee82a9f1ade2e15152843a))
+
+### Fixes
+
+- **blame:** take a commit before the file, and say what's wrong before the screen opens ([f22c55c](https://github.com/alvgaona/glance/commit/f22c55cecb8aca84371b52f94c227aeeef2ddac9))
+
+### Refactoring
+
+- functional core, and fixes from a full audit (#3) ([b8070da](https://github.com/alvgaona/glance/commit/b8070da602c73f02626b38edc0a9a87e3f9bfdf7))
+
 ## [0.1.0](https://github.com/alvgaona/glance/releases/tag/v0.1.0) - 2026-11-05
 
 ### Features

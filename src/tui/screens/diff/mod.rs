@@ -87,6 +87,8 @@ struct App {
     job: Option<(Key, mpsc::Receiver<Vec<Line<'static>>>)>,
     /// The diff pane's width at the last draw.
     width: u16,
+    /// The render drawn last: shown while the next one for the same file runs.
+    shown: Option<Key>,
     detail_scroll: Scroll,
     detail_for: Option<String>,
     detail_area: ratatui::layout::Rect,
@@ -125,6 +127,7 @@ fn start(repo: gix::Repository, dir: Option<PathBuf>, target: Target, delta: boo
         cache: HashMap::new(),
         job: None,
         width: 0,
+        shown: None,
         detail_scroll: Scroll::default(),
         detail_for: None,
         detail_area: Default::default(),
@@ -192,9 +195,10 @@ impl Screen for App {
             let _ = tx.send(render(dir, &target, &file, &k, delta));
         });
         self.job = Some((key, rx));
-        // Most diffs take a few milliseconds: wait a little rather than flash "loading".
+        // A render takes tens of milliseconds: wait for it, so it shows the moment it's
+        // done rather than at the next wake. Slower ones finish in the background.
         if let Some((_, rx)) = &self.job
-            && let Ok(lines) = rx.recv_timeout(Duration::from_millis(60))
+            && let Ok(lines) = rx.recv_timeout(Duration::from_millis(250))
         {
             let (key, _) = self.job.take().unwrap();
             self.cache.insert(key, lines);

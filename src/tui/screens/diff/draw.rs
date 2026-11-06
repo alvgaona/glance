@@ -121,10 +121,14 @@ fn draw_diff(f: &mut Frame, app: &mut App, area: Rect) {
         app.detail_for = path;
         app.detail_scroll.reset();
     }
-    let Some(lines) = app.key_for(inner.width).and_then(|k| app.cache.get(&k)) else {
+    // Until a new option's render is in, the last one of this file stays up.
+    let want = app.key_for(inner.width).filter(|k| app.cache.contains_key(k));
+    let key = want.or_else(|| app.shown.clone().filter(|k| app.detail_for.as_ref() == Some(&k.path)));
+    let Some(lines) = key.as_ref().and_then(|k| app.cache.get(k)) else {
         f.render_widget(Paragraph::new(Span::styled("loading…", theme::faint())), body);
         return;
     };
+    app.shown = key;
     app.detail_scroll.fit(lines.len(), body.height);
     let shown: Vec<Line> = lines
         .iter()

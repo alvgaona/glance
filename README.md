@@ -44,12 +44,24 @@ Or download a binary for macOS or Linux from the
 | [`git`](https://git-scm.com) | required | every change glance makes (stage, commit, fetch, rebase…) |
 | [`gh`](https://cli.github.com) | optional | pull request status and links in `glance branches` |
 | [`fzf`](https://github.com/junegunn/fzf) | optional | picking where `glance rebase -p` starts |
-| [`delta`](https://github.com/dandavison/delta) | optional | the diffs in `glance diff`, `glance show`, the log and stash details, and the `fzf` previews |
+| [`delta`](https://github.com/dandavison/delta) | optional | the diffs in `glance diff`, `glance show`, `glance add`, the log and stash details, and the `fzf` previews |
 
 Without an optional tool, only the feature that uses it is missing. Copying with `y`
 works on macOS only for now.
 
-Like a shorter name? `alias gg=glance`.
+### A shorter name
+
+glance reads well as `g`. Add it to your shell's config:
+
+```sh
+alias g=glance        # zsh or bash: ~/.zshrc or ~/.bashrc
+abbr -a g glance      # fish: ~/.config/fish/config.fish
+```
+
+The command aliases still work after it: `g st`, `g d`, `g l`, `g rb`.
+
+oh-my-zsh's git plugin already sets `g` to `git`. Put the alias after the line that loads
+oh-my-zsh, so yours wins.
 
 ## Commands
 

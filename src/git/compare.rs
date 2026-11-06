@@ -110,7 +110,13 @@ fn stdout(dir: Option<&Path>, a: &[String]) -> Result<String> {
 /// The changed files, in git's order, with lines added and removed.
 pub fn files(dir: Option<&Path>, target: &Target, whitespace: bool) -> Result<Vec<FileStat>> {
     let run = |flag: &str| stdout(dir, &[base(whitespace), args(&["-z", flag]), target.args()].concat());
-    Ok(parse(&run("--name-status")?, &run("--numstat")?))
+    let mut files = parse(&run("--name-status")?, &run("--numstat")?);
+    // With -w, --name-status still names files whose only change is whitespace;
+    // --numstat leaves them out.
+    if whitespace {
+        files.retain(|f| f.size.is_some());
+    }
+    Ok(files)
 }
 
 /// How many new files git doesn't track (and doesn't ignore), in the whole repo.
@@ -242,6 +248,11 @@ mod tests {
         assert!(p.contains("rename from old.txt"), "{p}");
         let p = patch(dir, &Target::Unstaged, &unstaged[0], Cut { full: true, ..Cut::default() }).unwrap();
         assert!(p.ends_with("+3\n"), "{p}");
+
+        // Only whitespace: gone with -w.
+        s.write("new name.txt", "same \n");
+        let ws = files(dir, &Target::Unstaged, true).unwrap();
+        assert_eq!(ws.len(), 1, "{ws:?}");
 
         s.write("loose.txt", "x\n");
         assert_eq!(untracked(dir), 1);

@@ -31,6 +31,24 @@ pub enum Command {
     #[command(verbatim_doc_comment)]
     Add { paths: Vec<String> },
 
+    /// Changed files and their diffs, drawn by delta when it's installed.
+    ///
+    ///   glance diff             unstaged changes; 1 2 3 switch to staged or since HEAD
+    ///   glance diff --staged    any `git diff` arguments: `main..`, `-- src/`
+    ///   glance diff | less      piped, it is plain `git diff`
+    #[command(visible_alias = "d", verbatim_doc_comment)]
+    Diff {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+
+    /// One commit's files and diffs, on the `glance diff` screen.
+    ///
+    ///   glance show             the last commit
+    ///   glance show <rev>       any commit; piped, it is plain `git show`
+    #[command(verbatim_doc_comment)]
+    Show { rev: Option<String> },
+
     /// Commit history: full screen in a terminal, a compact list when piped.
     #[command(visible_alias = "l")]
     Log {

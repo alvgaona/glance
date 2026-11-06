@@ -3,6 +3,7 @@
 
 pub mod add;
 pub mod branches;
+pub mod diff;
 pub mod log;
 pub mod rebase;
 pub mod remote;

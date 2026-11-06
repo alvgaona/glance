@@ -157,7 +157,7 @@ impl App {
 
     /// Runs the editor, then shows the file as it is now.
     pub(super) fn edit_on_terminal(&mut self, path: &str) -> Result<()> {
-        let ran = crate::git::run::edit(&self.repo, path);
+        let ran = crate::git::run::edit(&self.repo, path, None);
         match self.place() {
             Some((g, pos)) => self.reload_at(g, pos)?,
             None => self.reload()?,

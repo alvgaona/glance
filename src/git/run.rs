@@ -40,13 +40,32 @@ pub fn git_on_terminal(dir: Option<&std::path::Path>, args: &[String]) -> Ran {
 
 /// Opens `path` (from the repository root) in git's editor (core.editor, $VISUAL,
 /// $EDITOR, vi), on the terminal; started the way git starts it, through the shell.
-pub fn edit(repo: &gix::Repository, path: &str) -> Ran {
+/// At `line`, for editors known to take one.
+pub fn edit(repo: &gix::Repository, path: &str, line: Option<u32>) -> Ran {
     let dir = repo.workdir();
     let editor = git_in(dir, &args(&["var", "GIT_EDITOR"]))?;
-    let script = format!("{} \"$@\"", editor.trim());
+    let editor = editor.trim();
+    let script = format!("{editor} \"$@\"");
     // `./`: a file called `-x` is a file, not an option.
     let path = format!("./{path}");
-    ran(crate::process::run_on_terminal("sh", &args(&["-c", &script, "sh", &path]), dir), "the editor")
+    let mut a = args(&["-c", &script, "sh"]);
+    a.extend(at_line(editor, &path, line));
+    ran(crate::process::run_on_terminal("sh", &a, dir), "the editor")
+}
+
+/// The editor's arguments for `path` at `line`: `+12 path` (vi, nano, emacs…),
+/// `path:12` (helix, zed, sublime), `-g path:12` (VS Code); just `path` for others.
+fn at_line(editor: &str, path: &str, line: Option<u32>) -> Vec<String> {
+    let first = editor.split_whitespace().next().unwrap_or_default();
+    let name = first.rsplit('/').next().unwrap_or_default();
+    match (line, name) {
+        (Some(n), "vi" | "vim" | "nvim" | "nano" | "emacs" | "emacsclient" | "micro" | "kak" | "mg") => {
+            vec![format!("+{n}"), path.into()]
+        }
+        (Some(n), "hx" | "helix" | "zed" | "subl") => vec![format!("{path}:{n}")],
+        (Some(n), "code" | "cursor" | "codium") => vec!["-g".into(), format!("{path}:{n}")],
+        _ => vec![path.into()],
+    }
 }
 
 /// For tests: runs `git args…` in `dir` as author "t <t@t>" and panics if it fails.
@@ -109,4 +128,18 @@ pub fn top(path: &str) -> String {
 /// `["stash", "drop", "stash@{0}"]` from string slices.
 pub fn args(parts: &[&str]) -> Vec<String> {
     parts.iter().map(|s| s.to_string()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::at_line;
+
+    #[test]
+    fn opens_editors_at_a_line() {
+        assert_eq!(at_line("/usr/bin/nvim", "./a", Some(3)), ["+3", "./a"]);
+        assert_eq!(at_line("code --wait", "./a", Some(3)), ["-g", "./a:3"]);
+        assert_eq!(at_line("hx", "./a", Some(3)), ["./a:3"]);
+        assert_eq!(at_line("ed", "./a", Some(3)), ["./a"]);
+        assert_eq!(at_line("vim", "./a", None), ["./a"]);
+    }
 }

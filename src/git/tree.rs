@@ -7,7 +7,7 @@ use gix::object::tree::diff::ChangeDetached;
 use super::diff::{self, Size};
 use super::status::ChangeKind;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FileStat {
     pub kind: ChangeKind,
     pub path: String,
@@ -22,6 +22,24 @@ pub struct FileStat {
 pub fn file_patch(repo: &gix::Repository, f: &FileStat) -> Option<Vec<diff::PatchLine>> {
     let read = |id: Option<gix::ObjectId>| id.map(|id| diff::blob(repo, id)).unwrap_or_default();
     diff::patch(&read(f.old), &read(f.new), 3)
+}
+
+/// One changed file as `git diff` text, for delta.
+pub fn file_text(repo: &gix::Repository, f: &FileStat) -> Vec<u8> {
+    let read = |id: Option<gix::ObjectId>| id.map(|id| diff::blob(repo, id)).unwrap_or_default();
+    let from = f.from.as_deref().unwrap_or(&f.path);
+    let a = if f.old.is_some() { format!("a/{from}") } else { "/dev/null".into() };
+    let b = if f.new.is_some() { format!("b/{}", f.path) } else { "/dev/null".into() };
+    let mut out = format!("diff --git a/{from} b/{}\n", f.path).into_bytes();
+    match diff::hunks(&read(f.old), &read(f.new), 3) {
+        // shortcut: huge text files say "binary" too, the same as the built-in view's "binary or very large".
+        None => out.extend(format!("Binary files {a} and {b} differ\n").into_bytes()),
+        Some(hunks) => {
+            out.extend(format!("--- {a}\n+++ {b}\n").into_bytes());
+            hunks.iter().for_each(|h| out.extend(h.text()));
+        }
+    }
+    out
 }
 
 /// Files that differ between two trees, with line counts, sorted by path.

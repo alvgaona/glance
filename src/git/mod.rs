@@ -5,6 +5,9 @@
 pub mod branches;
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub mod commit;
+// What the diff screen compares.
+#[cfg(feature = "tui")]
+pub mod compare;
 // Patches are drawn only by the interactive views.
 #[cfg_attr(not(feature = "tui"), allow(dead_code))]
 pub mod diff;

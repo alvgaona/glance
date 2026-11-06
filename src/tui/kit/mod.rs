@@ -1,6 +1,7 @@
 //! Pieces every screen is drawn with: text fitting, toast, dialogs, palette, footer,
 //! list scrolling and the details panel's scroll.
 
+pub mod ansi;
 mod dialog;
 pub mod footer;
 mod input;

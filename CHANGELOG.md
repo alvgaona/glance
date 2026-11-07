@@ -2,6 +2,23 @@
 
 All notable changes to glance are listed here, newest first.
 
+## [0.3.0](https://github.com/alvgaona/glance/releases/tag/v0.3.0) - 2026-11-07
+
+### Features
+
+- **tui:** draw diffs in glance instead of delta (#7) ([0ffc733](https://github.com/alvgaona/glance/commit/0ffc733135c008b17036f7353c59cd51853ebb48))
+- **tui:** scroll long diff lines sideways on every screen ([89f5001](https://github.com/alvgaona/glance/commit/89f50016cf4d6b119f474f50e18564702f7a0d43))
+- **tui:** refresh screens when the repo changes outside glance ([dce1002](https://github.com/alvgaona/glance/commit/dce1002aa5ec7d3fb22dab28afc2da94b92cd8d1))
+- pass unknown commands to git (#6) ([30c576d](https://github.com/alvgaona/glance/commit/30c576de4c6089b45d3c0d475ff4ca717ea57b7c))
+
+### Refactoring
+
+- drop the fzf commit picker (#8) ([15a75fd](https://github.com/alvgaona/glance/commit/15a75fd01e311bda20914041fc8d74c9b2a0fa52))
+
+### Documentation
+
+- alias glance as g ([f304d42](https://github.com/alvgaona/glance/commit/f304d42952bee4178d94af3ba1f32d59c87602b7))
+
 ## [0.2.0](https://github.com/alvgaona/glance/releases/tag/v0.2.0) - 2026-11-06
 
 ### Features

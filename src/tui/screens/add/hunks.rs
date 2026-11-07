@@ -93,7 +93,7 @@ fn build(repo: &gix::Repository, entry: usize, e: &Entry, width: u16) -> View {
                 let start = view.lines.len();
                 match &drawn {
                     Some(d) => view.lines.extend(d[i].iter().cloned()),
-                    None => view.lines.extend(h.patch_lines().into_iter().map(diff::line)),
+                    None => view.lines.extend(diff::lines(&h.patch_lines())),
                 }
                 view.ranges.push(start..view.lines.len());
             }

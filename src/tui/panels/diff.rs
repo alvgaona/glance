@@ -7,7 +7,9 @@ use ratatui::{
 };
 
 use super::changes::kind_mark;
-use crate::git::diff::PatchLine;
+use std::ops::Range;
+
+use crate::git::diff::{self, PatchLine};
 use crate::git::tree::{self, FileStat};
 use crate::tui::theme;
 
@@ -99,13 +101,13 @@ pub fn patches(repo: &gix::Repository, files: &[FileStat], width: u16) -> Patche
             continue;
         };
         shown += lines.len();
-        for l in lines {
+        for (i, l) in lines.iter().enumerate() {
             if matches!(l, PatchLine::Hunk { .. }) {
-                out.hunks.push(out.lines.len());
+                out.hunks.push(out.lines.len() + i);
             }
-            out.pins.push(pin(&l));
-            out.lines.push(line(l));
         }
+        out.pins.extend(lines.iter().map(pin));
+        out.lines.extend(self::lines(&lines));
     }
     out
 }
@@ -155,11 +157,11 @@ impl Halves {
 
     /// The removed lines next to the added ones that replace them, then the rest of
     /// whichever is longer against blank rows.
-    fn pair(&mut self, removed: &mut Vec<PatchLine>, added: &mut Vec<PatchLine>) {
+    fn pair(&mut self, removed: &mut Vec<Line<'static>>, added: &mut Vec<Line<'static>>) {
         let n = removed.len().max(added.len());
         let (mut r, mut a) = (removed.drain(..), added.drain(..));
         for _ in 0..n {
-            self.row(r.next().map(line), a.next().map(line), GUTTER);
+            self.row(r.next(), a.next(), GUTTER);
         }
     }
 }
@@ -167,26 +169,27 @@ impl Halves {
 /// `lines` side by side: removed lines on the left, added ones on the right, context on
 /// both with each side's line number.
 pub fn side_by_side(lines: Vec<PatchLine>) -> Halves {
+    let drawn = self::lines(&lines);
     let mut out = Halves::default();
     let (mut removed, mut added) = (Vec::new(), Vec::new());
-    for l in lines {
+    for (l, d) in lines.into_iter().zip(drawn) {
         match l {
             // A removal after additions starts the next change.
             PatchLine::Removed { .. } if !added.is_empty() => {
                 out.pair(&mut removed, &mut added);
-                removed.push(l);
+                removed.push(d);
             }
-            PatchLine::Removed { .. } => removed.push(l),
-            PatchLine::Added { .. } => added.push(l),
+            PatchLine::Removed { .. } => removed.push(d),
+            PatchLine::Added { .. } => added.push(d),
             PatchLine::Hunk { .. } => {
                 out.pair(&mut removed, &mut added);
                 out.hunks.push(out.old.len());
-                out.row(Some(line(l)), None, u16::MAX);
+                out.row(Some(d), None, u16::MAX);
             }
-            PatchLine::Context { old, new, text } => {
+            PatchLine::Context { old, text, .. } => {
                 out.pair(&mut removed, &mut added);
-                let left = line(PatchLine::Context { old, new: old, text: text.clone() });
-                out.row(Some(left), Some(line(PatchLine::Context { old, new, text })), GUTTER);
+                let left = line(PatchLine::Context { old, new: old, text }, &[]);
+                out.row(Some(left), Some(d), GUTTER);
             }
         }
     }
@@ -194,29 +197,79 @@ pub fn side_by_side(lines: Vec<PatchLine>) -> Halves {
     out
 }
 
-/// One diff line: line number, `+`/`-`, text; added lines on green, removed on red.
-pub fn line(l: PatchLine) -> Line<'static> {
-    let added_bg = Color::Rgb(22, 44, 30);
-    let removed_bg = Color::Rgb(52, 24, 27);
+/// Each diff line drawn, with the words that changed marked: a change's first removed
+/// line against its first added line, and so on.
+pub fn lines(lines: &[PatchLine]) -> Vec<Line<'static>> {
+    let mut marks = vec![Vec::new(); lines.len()];
+    for (r, a) in replaced(lines) {
+        if let (PatchLine::Removed { text: old, .. }, PatchLine::Added { text: new, .. }) = (&lines[r], &lines[a]) {
+            (marks[r], marks[a]) = diff::changed_words(old, new);
+        }
+    }
+    lines.iter().zip(&marks).map(|(l, m)| line(l.clone(), m)).collect()
+}
+
+/// Each removed line and the added line taking its place, by position in their change.
+fn replaced(lines: &[PatchLine]) -> Vec<(usize, usize)> {
+    let is = |i: usize, removed: bool| match lines.get(i) {
+        Some(PatchLine::Removed { .. }) => removed,
+        Some(PatchLine::Added { .. }) => !removed,
+        _ => false,
+    };
+    let (mut out, mut i) = (Vec::new(), 0);
+    while i < lines.len() {
+        let first = i;
+        while is(i, true) {
+            i += 1;
+        }
+        let added = i;
+        while is(i, false) {
+            i += 1;
+        }
+        out.extend((first..added).zip(added..i));
+        i = i.max(first + 1);
+    }
+    out
+}
+
+/// One diff line: line number, `+`/`-`, text; added lines on green, removed on red,
+/// the bytes in `marks` brighter.
+fn line(l: PatchLine, marks: &[Range<usize>]) -> Line<'static> {
+    let text = |text: String, bg: Color| {
+        let mut out = Vec::new();
+        let mut at = 0;
+        for m in marks {
+            out.push(Span::styled(text[at..m.start].to_string(), theme::text()));
+            out.push(Span::styled(text[m.clone()].to_string(), theme::text().bg(bg)));
+            at = m.end;
+        }
+        out.push(Span::styled(text[at..].to_string(), theme::text()));
+        out.retain(|s| !s.content.is_empty());
+        out
+    };
     match l {
         PatchLine::Hunk { new_start, .. } => Line::styled(format!("   ⋯ line {new_start}"), theme::faint()),
         PatchLine::Context { new, text, .. } => {
             Line::from(vec![Span::styled(format!("{new:>5}  "), theme::faint()), Span::styled(text, theme::muted())])
         }
-        PatchLine::Added { new, text } => Line::from(vec![
-            Span::styled(format!("{new:>5} "), Style::new().fg(theme::GREEN)),
-            Span::styled("+", Style::new().fg(theme::GREEN)),
-            Span::styled(text, theme::text()),
-        ])
-        .style(Style::new().bg(added_bg)),
-        PatchLine::Removed { old, text } => Line::from(vec![
-            Span::styled(format!("{old:>5} "), Style::new().fg(theme::RED)),
-            Span::styled("-", Style::new().fg(theme::RED)),
-            Span::styled(text, theme::text()),
-        ])
-        .style(Style::new().bg(removed_bg)),
+        PatchLine::Added { new, text: t } => {
+            let mut spans = vec![Span::styled(format!("{new:>5} +"), Style::new().fg(theme::GREEN))];
+            spans.extend(text(t, ADDED_MARK));
+            Line::from(spans).style(Style::new().bg(ADDED))
+        }
+        PatchLine::Removed { old, text: t } => {
+            let mut spans = vec![Span::styled(format!("{old:>5} -"), Style::new().fg(theme::RED))];
+            spans.extend(text(t, REMOVED_MARK));
+            Line::from(spans).style(Style::new().bg(REMOVED))
+        }
     }
 }
+
+/// Behind added and removed lines, and brighter behind the words that changed in them.
+const ADDED: Color = Color::Rgb(22, 44, 30);
+const ADDED_MARK: Color = Color::Rgb(38, 92, 54);
+const REMOVED: Color = Color::Rgb(52, 24, 27);
+const REMOVED_MARK: Color = Color::Rgb(112, 42, 50);
 
 #[cfg(test)]
 mod tests {
@@ -256,5 +309,23 @@ mod tests {
         assert_eq!(side(&h.new), ["", "4  a", "5 +B", "", "6  d", "7 +e"]);
         assert_eq!(h.hunks, [0]);
         assert_eq!(h.pins, [u16::MAX, 7, 7, 7, 7, 7]);
+    }
+
+    #[test]
+    fn marks_the_words_that_changed() {
+        let lines = [
+            PatchLine::Removed { old: 1, text: "let n = 2;".into() },
+            PatchLine::Added { new: 1, text: "let n = 3;".into() },
+            PatchLine::Added { new: 2, text: "more".into() },
+        ];
+        let marked = |l: &Line, bg: Color| {
+            l.spans.iter().filter(|s| s.style.bg == Some(bg)).map(|s| s.content.to_string()).collect::<Vec<_>>()
+        };
+        let drawn = super::lines(&lines);
+        assert_eq!(marked(&drawn[0], REMOVED_MARK), ["2"]);
+        assert_eq!(marked(&drawn[1], ADDED_MARK), ["3"]);
+        // Nothing it replaces: added whole, nothing marked.
+        assert!(marked(&drawn[2], ADDED_MARK).is_empty());
+        assert_eq!(drawn[1].to_string(), "    1 +let n = 3;");
     }
 }

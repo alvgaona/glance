@@ -360,7 +360,7 @@ fn render(dir: Option<PathBuf>, target: &Target, f: &FileStat, key: &Key, delta:
             .map(|(i, _)| at + i)
             .collect();
         pins.extend(parsed.iter().map(diff::pin));
-        lines.extend(parsed.into_iter().map(diff::line));
+        lines.extend(diff::lines(&parsed));
         hunks
     };
     let hunks = place(hunks);

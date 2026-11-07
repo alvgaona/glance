@@ -52,6 +52,7 @@ pub fn open() -> Result<gix::Repository> {
 }
 
 /// Folder name of the working tree, e.g. "aerostack2".
+#[cfg(feature = "tui")]
 pub fn repo_name(repo: &gix::Repository) -> String {
     // The path can be relative ("."), which has no name until resolved.
     repo.workdir()

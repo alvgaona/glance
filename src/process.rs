@@ -1,4 +1,4 @@
-//! Finding and running other programs (git, gh, fzf, pbcopy). The only place that
+//! Finding and running other programs (git, gh, pbcopy). The only place that
 //! starts a process: clippy.toml bans `Command::new` everywhere else.
 #![allow(clippy::disallowed_methods)]
 

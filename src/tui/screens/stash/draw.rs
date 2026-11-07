@@ -224,8 +224,7 @@ pub(super) fn build_detail(repo: &gix::Repository, s: &Stash, branch: Option<&st
                 out.push(Line::raw(""));
                 out.extend(panels::changes::files(&untracked, Some("untracked")));
             }
-            let patches =
-                diff::patches(repo, &tracked, width as u16).then(diff::patches(repo, &untracked, width as u16));
+            let patches = diff::patches(repo, &tracked).then(diff::patches(repo, &untracked));
             patches.below(out)
         }
         Err(e) => {

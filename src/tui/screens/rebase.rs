@@ -160,7 +160,7 @@ impl Screen for App<'_> {
         let key = (hash.clone(), self.diff_width);
         if !self.diffs.contains_key(&key) {
             let p = match self.info.get(hash).and_then(|i| i.as_ref()) {
-                Some(d) => diff::patches(self.repo, &d.files, self.diff_width),
+                Some(d) => diff::patches(self.repo, &d.files),
                 None => {
                     let lines = vec![Line::styled("Couldn't read this commit.", theme::muted())];
                     diff::Patches { lines, ..Default::default() }

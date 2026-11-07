@@ -69,8 +69,8 @@ struct App<'r> {
     detail_scroll: Scroll,
     /// Each commit read so far, for the details and the sidebar.
     meta: HashMap<gix::ObjectId, Rc<Details>>,
-    /// The details panel by (commit, width, sidebar open), filled in `tick`: delta
-    /// draws diffs to fit, and with the sidebar open the panel is only the diff.
+    /// The details panel by (commit, width, sidebar open), filled in `tick` once the
+    /// panel is measured; with the sidebar open the panel is only the diff.
     cache: HashMap<(gix::ObjectId, u16, bool), Rc<diff::Patches>>,
     /// The details panel's inner width at the last draw.
     detail_width: u16,
@@ -425,7 +425,7 @@ impl App<'_> {
         }
         let d = &self.meta[&oid];
         // The sidebar has the message and the files; the panel keeps the diff.
-        let p = if key.2 { diff::patches(self.repo, &d.files, key.1) } else { detail_lines(self.repo, d, key.1) };
+        let p = if key.2 { diff::patches(self.repo, &d.files) } else { detail_lines(self.repo, d) };
         self.cache.insert(key, Rc::new(p));
     }
 
@@ -667,7 +667,7 @@ fn draw_side(f: &mut Frame, app: &App, area: Rect) -> Rect {
     sidebar::draw(f, area, sections)[1]
 }
 
-fn detail_lines(repo: &gix::Repository, s: &Details, width: u16) -> diff::Patches {
+fn detail_lines(repo: &gix::Repository, s: &Details) -> diff::Patches {
     let mut out = vec![Line::from(vec![
         Span::styled(s.id.clone(), Style::new().fg(theme::ACCENT)),
         Span::styled("  ·  ", theme::faint()),
@@ -692,7 +692,7 @@ fn detail_lines(repo: &gix::Repository, s: &Details, width: u16) -> diff::Patche
 
     out.push(Line::raw(""));
     out.extend(changes::files(&s.files, None));
-    diff::patches(repo, &s.files, width).below(out)
+    diff::patches(repo, &s.files).below(out)
 }
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {

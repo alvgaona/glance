@@ -212,8 +212,6 @@ struct App {
     pick: Option<Pick>,
     detail_scroll: Scroll,
     detail_area: Rect,
-    /// The diff's width at the last draw, less the hunk bar; zero before it.
-    diff_width: u16,
     toast: Option<Toast>,
     palette: Option<Palette<Cmd>>,
     confirm: Option<(Confirm, Effect)>,
@@ -254,7 +252,6 @@ fn start(repo: gix::Repository) -> Result<App> {
         pick: None,
         detail_scroll: Scroll::default(),
         detail_area: Rect::default(),
-        diff_width: 0,
         toast: None,
         palette: None,
         confirm: None,

@@ -1,5 +1,4 @@
-//! Keys give effects and options; the diff is drawn without delta so the tests don't
-//! need it installed.
+//! Keys give effects and options, and what the screen draws.
 
 use ratatui::{Terminal, backend::TestBackend};
 
@@ -19,7 +18,7 @@ fn screen(name: &str) -> (Scratch, App) {
     s.write("a.txt", &old.replace("\n2\n", "\ntwo\n").replace("25\n", "twenty-five\n"));
     s.write("b.txt", "new\n");
     s.git(&["add", "b.txt"]);
-    let app = start(s.repo(), Some(s.0.clone()), Target::Unstaged, false).unwrap();
+    let app = start(s.repo(), Some(s.0.clone()), Target::Unstaged).unwrap();
     (s, app)
 }
 
@@ -103,10 +102,7 @@ fn options_and_the_next_file() {
     assert!(app.cut.full);
     assert_ne!(app.key_for(80), before);
 
-    // delta's side by side, but not where lines would wrap.
-    app.prefer_split = Some(true);
-    assert!(!app.split_at(90) && app.split_at(110));
-    app.prefer_split = None;
+    // Side by side where there's room.
     assert!(!app.split_at(110) && app.split_at(130));
     key(&mut app, KeyCode::Char('s'));
     assert_eq!(app.split, Some(true));

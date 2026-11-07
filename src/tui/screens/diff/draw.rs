@@ -107,7 +107,7 @@ fn draw_diff(f: &mut Frame, app: &mut App, area: Rect) {
         return;
     };
 
-    // The file's name on top: delta is told not to print it.
+    // The file's name on top.
     let [title, _, body] =
         Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(1)]).areas(inner);
     let mut name = Item::stat(file).row();
@@ -198,7 +198,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     } else {
         // What's on, so the toggles are visible.
         let mut on = vec![if app.split_at(app.width) { "side by side" } else { "unified" }];
-        if app.delta && app.numbers {
+        if app.numbers {
             on.push("line numbers");
         }
         if app.cut.whitespace {
@@ -208,10 +208,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         on.push(if app.cut.full { "whole file" } else { &context });
         Line::styled(on.join(" · "), theme::faint())
     };
-    let mut pairs = vec![("1 2 3", "compare"), ("s", "split")];
-    if app.delta {
-        pairs.push(("l", "numbers"));
-    }
+    let mut pairs = vec![("1 2 3", "compare"), ("s", "split"), ("l", "numbers")];
     pairs.extend([("w", "whitespace"), ("+ -", "context"), ("n N", "hunks")]);
     if app.detail_scroll.wide() {
         pairs.push(("← →", "long lines"));

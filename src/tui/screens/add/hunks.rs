@@ -9,13 +9,12 @@ use crate::git::stage::{Hunk, HunkAction};
 
 /// The diff of one entry, drawn once and kept until the cursor or the files change.
 pub(super) struct View {
-    /// The entry and the width it was built for: delta draws to fit.
+    /// The entry it was built for.
     entry: usize,
-    width: u16,
     pub(super) lines: Vec<Line<'static>>,
     /// Where each hunk is in `lines`.
     pub(super) ranges: Vec<Range<usize>>,
-    hunks: Vec<Hunk>,
+    pub(super) hunks: Vec<Hunk>,
 }
 
 impl View {
@@ -34,7 +33,7 @@ impl View {
     }
 }
 
-static EMPTY: View = View { entry: usize::MAX, width: 0, lines: Vec::new(), ranges: Vec::new(), hunks: Vec::new() };
+static EMPTY: View = View { entry: usize::MAX, lines: Vec::new(), ranges: Vec::new(), hunks: Vec::new() };
 
 /// Lines picked inside one hunk (`v`): indices into its `lines`, `anchor..=cursor`.
 /// It belongs to one entry and hunk, and lapses when either changes.
@@ -52,9 +51,8 @@ impl Pick {
     }
 }
 
-/// Title rows, then the entry's half of the change, hunk by hunk: drawn by delta at
-/// `width` when it's installed.
-fn build(repo: &gix::Repository, entry: usize, e: &Entry, width: u16) -> View {
+/// Title rows, then the entry's half of the change, hunk by hunk.
+fn build(repo: &gix::Repository, entry: usize, e: &Entry) -> View {
     let what = match e.group {
         Group::Conflicts => super::conflict::what(e.conflict),
         Group::Staged => "staged",
@@ -73,7 +71,7 @@ fn build(repo: &gix::Repository, entry: usize, e: &Entry, width: u16) -> View {
         lines.push(Line::styled(format!("renamed from {from}"), Style::new().fg(theme::BLUE)));
     }
     lines.push(Line::raw(""));
-    let mut view = View { entry, width, lines, ranges: Vec::new(), hunks: Vec::new() };
+    let mut view = View { entry, lines, ranges: Vec::new(), hunks: Vec::new() };
 
     if e.is_folder() {
         view.lines.push(Line::styled("A new folder: space stages everything in it.", theme::muted()));
@@ -88,13 +86,9 @@ fn build(repo: &gix::Repository, entry: usize, e: &Entry, width: u16) -> View {
             view.lines.push(Line::styled("No line changes (only the file mode, or an empty file).", theme::muted()))
         }
         Ok(Some(hunks)) => {
-            let drawn = by_delta(&e.path, &hunks, width);
-            for (i, h) in hunks.iter().enumerate() {
+            for h in &hunks {
                 let start = view.lines.len();
-                match &drawn {
-                    Some(d) => view.lines.extend(d[i].iter().cloned()),
-                    None => view.lines.extend(diff::lines(&h.patch_lines())),
-                }
+                view.lines.extend(diff::lines(&h.patch_lines(), true));
                 view.ranges.push(start..view.lines.len());
             }
             view.hunks = hunks;
@@ -103,35 +97,6 @@ fn build(repo: &gix::Repository, entry: usize, e: &Entry, width: u16) -> View {
         Err(err) => view.lines.push(Line::styled(format!("Couldn't read it: {err}"), Style::new().fg(theme::RED))),
     }
     view
-}
-
-/// Each hunk drawn by delta: its header row, then one row per line, as the line picks
-/// count them. `None` without delta, before the first draw, or if the rows don't line up.
-fn by_delta(path: &str, hunks: &[Hunk], width: u16) -> Option<Vec<Vec<Line<'static>>>> {
-    if width == 0 || hunks.is_empty() || !crate::delta::available() {
-        return None;
-    }
-    let mut patch = stage::hunk_patch(path, &hunks[0]);
-    hunks[1..].iter().for_each(|h| patch.extend(h.text()));
-    // No file header and no box around hunk headers: one row each.
-    let set = [("file-style", "omit"), ("hunk-header-decoration-style", "none"), ("side-by-side", "false")];
-    let drawn = crate::delta::render(&String::from_utf8_lossy(&patch), width, &set).ok()?;
-    if drawn.hunks.len() != hunks.len() {
-        return None;
-    }
-    let rows = kit::ansi::lines(&drawn.text);
-    let mut out = Vec::new();
-    for (h, &at) in hunks.iter().zip(&drawn.hunks) {
-        let mut lines = vec![rows.get(at)?.clone()];
-        let mut row = at + 1;
-        for l in &h.lines {
-            lines.push(rows.get(row)?.clone());
-            // A last line without an ending has a `\ No newline` row after it.
-            row += if l.bytes.ends_with(b"\n") { 1 } else { 2 };
-        }
-        out.push(lines);
-    }
-    Some(out)
 }
 
 /// Files that are staged or thrown away whole: one side is empty, and `git apply`
@@ -144,11 +109,11 @@ fn whole_file(e: &Entry) -> bool {
 impl App {
     /// Builds the diff of the entry under the cursor, unless it's built already.
     pub(super) fn load_view(&mut self) {
-        let (entry, width) = (self.selected, self.diff_width);
-        if self.diff.as_ref().map(|v| (v.entry, v.width)) != Some((entry, width)) {
+        let entry = self.selected;
+        if self.diff.as_ref().map(|v| v.entry) != Some(entry) {
             let view = match self.current() {
-                Some(e) => build(&self.repo, entry, e, width),
-                None => View { entry, width, lines: Vec::new(), ranges: Vec::new(), hunks: Vec::new() },
+                Some(e) => build(&self.repo, entry, e),
+                None => View { entry, lines: Vec::new(), ranges: Vec::new(), hunks: Vec::new() },
             };
             self.diff = Some(view);
         }

@@ -1,5 +1,7 @@
-//! Coloured diffs for details panels (`gg log`, `gg stash`). The file lists above them
-//! are in `changes`.
+//! Coloured diffs, for the diff screen and the details panels (`gg log`, `gg stash`).
+//! The file lists above them are in `changes`.
+
+use std::ops::Range;
 
 use ratatui::{
     style::{Color, Style},
@@ -7,8 +9,6 @@ use ratatui::{
 };
 
 use super::changes::kind_mark;
-use std::ops::Range;
-
 use crate::git::diff::{self, PatchLine};
 use crate::git::tree::{self, FileStat};
 use crate::tui::theme;
@@ -51,26 +51,23 @@ impl Patches {
     }
 }
 
-/// Columns of line number and `+`/`-` in front of each diff line.
-pub const GUTTER: u16 = 7;
+/// Columns in front of each diff line: its line number, if shown, and `+`/`-`.
+fn gutter(numbers: bool) -> u16 {
+    if numbers { 7 } else { 1 }
+}
 
 /// The columns of `l` that stay put when scrolled sideways: its gutter, or all of a
 /// hunk's header.
-pub fn pin(l: &PatchLine) -> u16 {
+pub fn pin(l: &PatchLine, numbers: bool) -> u16 {
     match l {
         PatchLine::Hunk { .. } => u16::MAX,
-        _ => GUTTER,
+        _ => gutter(numbers),
     }
 }
 
-/// Each file's diff, `width` columns wide: drawn by delta when it's installed, else a
-/// header bar per file and its lines, added on green and removed on red.
-pub fn patches(repo: &gix::Repository, files: &[FileStat], width: u16) -> Patches {
-    if crate::delta::available()
-        && let Some(p) = by_delta(repo, files, width)
-    {
-        return p;
-    }
+/// Each file's diff: a header bar per file and its lines, added on green and removed on
+/// red.
+pub fn patches(repo: &gix::Repository, files: &[FileStat]) -> Patches {
     let mut out = Patches::default();
     let mut shown = 0;
     for f in files {
@@ -106,36 +103,10 @@ pub fn patches(repo: &gix::Repository, files: &[FileStat], width: u16) -> Patche
                 out.hunks.push(out.lines.len() + i);
             }
         }
-        out.pins.extend(lines.iter().map(pin));
-        out.lines.extend(self::lines(&lines));
+        out.pins.extend(lines.iter().map(|l| pin(l, true)));
+        out.lines.extend(self::lines(&lines, true));
     }
     out
-}
-
-/// All the files in one delta run; `None` if delta failed.
-fn by_delta(repo: &gix::Repository, files: &[FileStat], width: u16) -> Option<Patches> {
-    let mut text = Vec::new();
-    let (mut left, mut lines) = (files.len(), 0);
-    for f in files {
-        if lines >= MAX_DIFF_LINES {
-            break;
-        }
-        let t = tree::file_text(repo, f);
-        lines += t.iter().filter(|&&b| b == b'\n').count();
-        text.extend(t);
-        left -= 1;
-    }
-    // The panel is too narrow for side by side.
-    let drawn = crate::delta::render(&String::from_utf8_lossy(&text), width, &[("side-by-side", "false")]).ok()?;
-    let mut out = vec![Line::raw("")];
-    out.extend(crate::tui::kit::ansi::lines(&drawn.text));
-    if left > 0 {
-        out.push(Line::styled(format!("   {left} more files not shown: too many changes"), theme::faint()));
-    }
-    // The blank line on top moves everything down one.
-    let at = |v: Vec<usize>| v.into_iter().map(|i| i + 1).collect();
-    // shortcut: nothing pinned, delta draws its own line numbers; goes with delta.
-    Some(Patches { lines: out, files: at(drawn.files), hunks: at(drawn.hunks), pins: Vec::new() })
 }
 
 /// A diff side by side: the old half and the new half of each row, the columns of each
@@ -157,56 +128,57 @@ impl Halves {
 
     /// The removed lines next to the added ones that replace them, then the rest of
     /// whichever is longer against blank rows.
-    fn pair(&mut self, removed: &mut Vec<Line<'static>>, added: &mut Vec<Line<'static>>) {
+    fn pair(&mut self, removed: &mut Vec<Line<'static>>, added: &mut Vec<Line<'static>>, pin: u16) {
         let n = removed.len().max(added.len());
         let (mut r, mut a) = (removed.drain(..), added.drain(..));
         for _ in 0..n {
-            self.row(r.next(), a.next(), GUTTER);
+            self.row(r.next(), a.next(), pin);
         }
     }
 }
 
 /// `lines` side by side: removed lines on the left, added ones on the right, context on
 /// both with each side's line number.
-pub fn side_by_side(lines: Vec<PatchLine>) -> Halves {
-    let drawn = self::lines(&lines);
+pub fn side_by_side(lines: Vec<PatchLine>, numbers: bool) -> Halves {
+    let drawn = self::lines(&lines, numbers);
+    let pin = gutter(numbers);
     let mut out = Halves::default();
     let (mut removed, mut added) = (Vec::new(), Vec::new());
     for (l, d) in lines.into_iter().zip(drawn) {
         match l {
             // A removal after additions starts the next change.
             PatchLine::Removed { .. } if !added.is_empty() => {
-                out.pair(&mut removed, &mut added);
+                out.pair(&mut removed, &mut added, pin);
                 removed.push(d);
             }
             PatchLine::Removed { .. } => removed.push(d),
             PatchLine::Added { .. } => added.push(d),
             PatchLine::Hunk { .. } => {
-                out.pair(&mut removed, &mut added);
+                out.pair(&mut removed, &mut added, pin);
                 out.hunks.push(out.old.len());
                 out.row(Some(d), None, u16::MAX);
             }
             PatchLine::Context { old, text, .. } => {
-                out.pair(&mut removed, &mut added);
-                let left = line(PatchLine::Context { old, new: old, text }, &[]);
-                out.row(Some(left), Some(d), GUTTER);
+                out.pair(&mut removed, &mut added, pin);
+                let left = line(PatchLine::Context { old, new: old, text }, &[], numbers);
+                out.row(Some(left), Some(d), pin);
             }
         }
     }
-    out.pair(&mut removed, &mut added);
+    out.pair(&mut removed, &mut added, pin);
     out
 }
 
 /// Each diff line drawn, with the words that changed marked: a change's first removed
-/// line against its first added line, and so on.
-pub fn lines(lines: &[PatchLine]) -> Vec<Line<'static>> {
+/// line against its first added line, and so on. `numbers`: with line numbers.
+pub fn lines(lines: &[PatchLine], numbers: bool) -> Vec<Line<'static>> {
     let mut marks = vec![Vec::new(); lines.len()];
     for (r, a) in replaced(lines) {
         if let (PatchLine::Removed { text: old, .. }, PatchLine::Added { text: new, .. }) = (&lines[r], &lines[a]) {
             (marks[r], marks[a]) = diff::changed_words(old, new);
         }
     }
-    lines.iter().zip(&marks).map(|(l, m)| line(l.clone(), m)).collect()
+    lines.iter().zip(&marks).map(|(l, m)| line(l.clone(), m, numbers)).collect()
 }
 
 /// Each removed line and the added line taking its place, by position in their change.
@@ -234,7 +206,8 @@ fn replaced(lines: &[PatchLine]) -> Vec<(usize, usize)> {
 
 /// One diff line: line number, `+`/`-`, text; added lines on green, removed on red,
 /// the bytes in `marks` brighter.
-fn line(l: PatchLine, marks: &[Range<usize>]) -> Line<'static> {
+fn line(l: PatchLine, marks: &[Range<usize>], numbers: bool) -> Line<'static> {
+    let gutter = |n: u32, sign: char| if numbers { format!("{n:>5} {sign}") } else { sign.to_string() };
     let text = |text: String, bg: Color| {
         let mut out = Vec::new();
         let mut at = 0;
@@ -250,15 +223,15 @@ fn line(l: PatchLine, marks: &[Range<usize>]) -> Line<'static> {
     match l {
         PatchLine::Hunk { new_start, .. } => Line::styled(format!("   ⋯ line {new_start}"), theme::faint()),
         PatchLine::Context { new, text, .. } => {
-            Line::from(vec![Span::styled(format!("{new:>5}  "), theme::faint()), Span::styled(text, theme::muted())])
+            Line::from(vec![Span::styled(gutter(new, ' '), theme::faint()), Span::styled(text, theme::muted())])
         }
         PatchLine::Added { new, text: t } => {
-            let mut spans = vec![Span::styled(format!("{new:>5} +"), Style::new().fg(theme::GREEN))];
+            let mut spans = vec![Span::styled(gutter(new, '+'), Style::new().fg(theme::GREEN))];
             spans.extend(text(t, ADDED_MARK));
             Line::from(spans).style(Style::new().bg(ADDED))
         }
         PatchLine::Removed { old, text: t } => {
-            let mut spans = vec![Span::styled(format!("{old:>5} -"), Style::new().fg(theme::RED))];
+            let mut spans = vec![Span::styled(gutter(old, '-'), Style::new().fg(theme::RED))];
             spans.extend(text(t, REMOVED_MARK));
             Line::from(spans).style(Style::new().bg(REMOVED))
         }
@@ -286,7 +259,7 @@ mod tests {
         let joined = p(2, 7).then(p(3, 9)).below(vec![Line::raw("top")]);
         assert_eq!((joined.files, joined.hunks), (vec![1, 3], vec![2, 4]));
         assert_eq!(joined.pins, [0, 7, 7, 9, 9, 9]);
-        // Without pins of its own (delta's), the next one's still line up.
+        // Without pins of its own, the next one's still line up.
         let joined = Patches { lines: vec![Line::raw("")], ..Default::default() }.then(p(1, 7));
         assert_eq!(joined.pins, [0, 7]);
     }
@@ -303,7 +276,7 @@ mod tests {
             PatchLine::Context { old: 7, new: 6, text: text("d") },
             PatchLine::Added { new: 7, text: text("e") },
         ];
-        let h = side_by_side(lines);
+        let h = side_by_side(lines, true);
         let side = |v: &[Line]| v.iter().map(|l| l.to_string().trim().to_string()).collect::<Vec<_>>();
         assert_eq!(side(&h.old), ["⋯ line 4", "4  a", "5 -b", "6 -c", "7  d", ""]);
         assert_eq!(side(&h.new), ["", "4  a", "5 +B", "", "6  d", "7 +e"]);
@@ -321,11 +294,14 @@ mod tests {
         let marked = |l: &Line, bg: Color| {
             l.spans.iter().filter(|s| s.style.bg == Some(bg)).map(|s| s.content.to_string()).collect::<Vec<_>>()
         };
-        let drawn = super::lines(&lines);
+        let drawn = super::lines(&lines, true);
         assert_eq!(marked(&drawn[0], REMOVED_MARK), ["2"]);
         assert_eq!(marked(&drawn[1], ADDED_MARK), ["3"]);
         // Nothing it replaces: added whole, nothing marked.
         assert!(marked(&drawn[2], ADDED_MARK).is_empty());
         assert_eq!(drawn[1].to_string(), "    1 +let n = 3;");
+        // Without line numbers, only the `+` stays in front.
+        assert_eq!(super::lines(&lines, false)[1].to_string(), "+let n = 3;");
+        assert_eq!(pin(&lines[1], false), 1);
     }
 }

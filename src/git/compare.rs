@@ -212,7 +212,7 @@ pub fn history(dir: Option<&Path>, from: Option<&str>, path: &str, n: usize) -> 
         .collect()
 }
 
-/// A patch's lines for drawing without delta: headers dropped, line numbers counted
+/// A patch's lines for drawing: headers dropped, line numbers counted
 /// from each `@@ -a,b +c,d @@`, tabs expanded.
 pub fn lines(patch: &str) -> Vec<PatchLine> {
     let (mut old, mut new) = (0, 0);

@@ -2,9 +2,6 @@ mod cli;
 mod clipboard;
 mod cmd;
 mod fmt;
-// The commit picker when built without the full-screen views.
-#[cfg_attr(feature = "tui", allow(dead_code))]
-mod fzf;
 mod git;
 // Pull requests via gh, shown by the branch screen.
 #[cfg(feature = "tui")]

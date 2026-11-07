@@ -265,7 +265,6 @@ pub enum Command {
         count: Option<usize>,
 
         /// Full screen even when piped: `$(glance log -i)` gives the picked commit id.
-        /// Without the TUI build, picks in fzf.
         #[arg(short, long)]
         interactive: bool,
 

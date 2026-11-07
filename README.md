@@ -43,7 +43,6 @@ Or download a binary for macOS or Linux from the
 | --- | --- | --- |
 | [`git`](https://git-scm.com) | required | every change glance makes (stage, commit, fetch, rebase…) |
 | [`gh`](https://cli.github.com) | optional | pull request status and links in `glance branches` |
-| [`fzf`](https://github.com/junegunn/fzf) | optional | `glance log -i` in a build without the full-screen views (`--no-default-features`); its diff previews use [`delta`](https://github.com/dandavison/delta) when it's installed |
 
 Without an optional tool, only the feature that uses it is missing. Copying with `y`
 works on macOS only for now.

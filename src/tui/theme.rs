@@ -1,4 +1,4 @@
-//! One colour theme for every full-screen view (and the fzf picker).
+//! One colour theme for every full-screen view.
 //! Dark, borderless: panels stand out by background, one warm accent.
 
 use ratatui::style::{Color, Modifier, Style};

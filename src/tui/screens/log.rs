@@ -622,14 +622,12 @@ fn ref_pill(r: &RefLabel) -> Span<'static> {
 fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
     let block = kit::panel(theme::PANEL);
     let inner = block.inner(area);
-    let inner_h = inner.height;
     app.detail_width = inner.width;
     let Some(d) = app.detail() else {
         f.render_widget(block, area);
         return;
     };
-    app.detail_scroll.fit(d.lines.len(), inner_h);
-    f.render_widget(Paragraph::new(d.lines.clone()).scroll((app.detail_scroll.top(), 0)).block(block), area);
+    f.render_widget(Paragraph::new(app.detail_scroll.view(&d.lines, inner)).block(block), area);
     app.detail_scroll.draw_more(f, area);
 }
 
@@ -710,6 +708,9 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         (Mode::Pick, false) => vec![("/", "search"), ("enter", "rebase from here"), ("esc", "cancel")],
     };
     if !app.searching && app.details {
+        if app.detail_scroll.wide() {
+            pairs.insert(pairs.len() - 1, ("← →", "long lines"));
+        }
         footer::sidebar(&mut pairs, area.width);
     }
     footer::draw(f, area, left, pairs);

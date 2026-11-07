@@ -236,8 +236,8 @@ impl App<'_> {
             return None;
         }
 
-        // J/K move commits here, so the diff scrolls with ctrl+d/u only.
-        if ctrl && matches!(k.code, KeyCode::Char('d' | 'u')) {
+        // J/K move commits here, so the diff scrolls with ctrl+d/u and ← → only.
+        if ctrl && matches!(k.code, KeyCode::Char('d' | 'u')) || matches!(k.code, KeyCode::Left | KeyCode::Right) {
             self.detail_scroll.key(k, self.detail_area.height);
             return None;
         }
@@ -699,10 +699,7 @@ fn draw_diff(f: &mut Frame, app: &mut App, area: Rect) {
         app.detail_scroll.reset();
     }
     let Some(diff::Patches { lines, .. }) = app.diffs.get(&(hash.clone(), inner.width)) else { return };
-    app.detail_scroll.fit(lines.len(), inner.height);
-    let shown: Vec<Line> =
-        lines.iter().skip(app.detail_scroll.top() as usize).take(inner.height as usize).cloned().collect();
-    f.render_widget(Paragraph::new(shown), inner);
+    f.render_widget(Paragraph::new(app.detail_scroll.view(lines, inner)), inner);
     app.detail_scroll.draw_more_keys(f, area, "ctrl+d/u");
 }
 
@@ -721,6 +718,9 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         }
     }
     let mut pairs = vec![("ctrl+p", "commands"), ("w", "apply"), ("esc", "abort")];
+    if app.detail_scroll.wide() {
+        pairs.insert(1, ("← →", "long lines"));
+    }
     if app.details {
         footer::sidebar(&mut pairs, area.width);
     }

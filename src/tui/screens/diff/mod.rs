@@ -135,9 +135,6 @@ struct App {
     /// The render drawn last: shown while the next one for the same file runs.
     shown: Option<Key>,
     detail_scroll: Scroll,
-    /// Columns scrolled sideways, and how far long lines let it go (at the last draw).
-    left: u16,
-    over: u16,
     detail_for: Option<String>,
     detail_area: ratatui::layout::Rect,
     list_area: ratatui::layout::Rect,
@@ -196,8 +193,6 @@ fn start(repo: gix::Repository, dir: Option<PathBuf>, target: Target, delta: boo
         width: 0,
         shown: None,
         detail_scroll: Scroll::default(),
-        left: 0,
-        over: 0,
         detail_for: None,
         detail_area: Default::default(),
         list_area: Default::default(),

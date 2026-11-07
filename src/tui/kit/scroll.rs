@@ -1,9 +1,15 @@
 //! How far a details panel is scrolled.
 //!
-//! J/K (or shift+↓/↑) move it 3 rows, ctrl+d/u half a panel, the mouse wheel 3 rows.
+//! J/K (or shift+↓/↑) move it 3 rows, ctrl+d/u half a panel, the mouse wheel 3 rows,
+//! ← → long lines 8 columns.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::{Frame, layout::Rect, text::Span, widgets::Paragraph};
+use ratatui::{
+    Frame,
+    layout::Rect,
+    text::{Line, Span},
+    widgets::Paragraph,
+};
 
 use crate::tui::theme;
 
@@ -12,7 +18,13 @@ pub struct Scroll {
     top: u16,
     /// Rows past the bottom of the panel, as of the last draw.
     below: u16,
+    /// Columns scrolled sideways, and how far long lines let it go (as of the last draw).
+    left: u16,
+    over: u16,
 }
+
+/// Columns ← and → scroll long lines by.
+const SIDEWAYS: u16 = 8;
 
 impl Scroll {
     /// The first line shown.
@@ -20,8 +32,15 @@ impl Scroll {
         self.top
     }
 
+    /// Back to the top, and the start of the lines.
     pub fn reset(&mut self) {
         self.top = 0;
+        self.left = 0;
+    }
+
+    /// Lines run past the panel's side, so ← → scroll them (as of the last draw).
+    pub fn wide(&self) -> bool {
+        self.over > 0
     }
 
     /// Puts line `top` first; [`Scroll::fit`] keeps it in bounds.
@@ -49,6 +68,8 @@ impl Scroll {
             KeyCode::Up | KeyCode::Char('k') if shift => self.up(3),
             KeyCode::Char('J') => self.down(3),
             KeyCode::Char('K') => self.up(3),
+            KeyCode::Left => self.left = self.left.saturating_sub(SIDEWAYS),
+            KeyCode::Right => self.left = (self.left + SIDEWAYS).min(self.over),
             _ => return false,
         }
         true
@@ -72,6 +93,20 @@ impl Scroll {
         let max = (lines.min(u16::MAX as usize) as u16).saturating_sub(height);
         self.top = self.top.min(max);
         self.below = max - self.top;
+    }
+
+    /// Fits it to `lines` drawn in `area` and gives the ones on screen, scrolled sideways.
+    pub fn view(&mut self, lines: &[Line<'static>], area: Rect) -> Vec<Line<'static>> {
+        self.fit(lines.len(), area.height);
+        let longest = lines.iter().map(Line::width).max().unwrap_or(0);
+        self.over = longest.saturating_sub(area.width as usize).min(u16::MAX as usize) as u16;
+        self.left = self.left.min(self.over);
+        lines
+            .iter()
+            .skip(self.top as usize)
+            .take(area.height as usize)
+            .map(|l| super::truncate(super::skip(l.clone(), self.left), area.width))
+            .collect()
     }
 
     /// "↓ 12 more · J/K" on the bottom edge of `area` while there's more, "↑ J/K" at the end.
@@ -115,5 +150,29 @@ mod tests {
         // Everything fits: back to the top.
         s.fit(5, 20);
         assert_eq!((s.top(), s.below), (0, 0));
+    }
+
+    #[test]
+    fn scrolls_long_lines_sideways() {
+        let mut s = Scroll::default();
+        let area = Rect::new(0, 0, 10, 5);
+        let lines = vec![Line::raw("0123456789abcdefghijklmnopqrstuvwxyz")];
+        assert_eq!(s.view(&lines, area), vec![Line::raw("012345678…")]);
+        assert!(s.wide());
+        let right = key(KeyCode::Right, KeyModifiers::NONE);
+        s.key(right, 5);
+        assert_eq!(s.view(&lines, area), vec![Line::raw("89abcdefg…")]);
+        // Never past the end of the longest line.
+        for _ in 0..10 {
+            s.key(right, 5);
+        }
+        assert_eq!(s.view(&lines, area), vec![Line::raw("qrstuvwxyz")]);
+        assert!(s.key(key(KeyCode::Left, KeyModifiers::NONE), 5));
+        assert_eq!(s.left, 18);
+        s.reset();
+        assert_eq!(s.left, 0);
+        // Everything fits: nothing to scroll.
+        assert_eq!(s.view(&[Line::raw("short")], area), vec![Line::raw("short")]);
+        assert!(!s.wide());
     }
 }

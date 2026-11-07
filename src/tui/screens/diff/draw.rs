@@ -121,7 +121,6 @@ fn draw_diff(f: &mut Frame, app: &mut App, area: Rect) {
     if path != app.detail_for {
         app.detail_for = path;
         app.detail_scroll.reset();
-        app.left = 0;
     }
     // Until a new option's render is in, the last one of this file stays up.
     let want = app.key_for(inner.width).filter(|k| app.cache.contains_key(k));
@@ -131,18 +130,8 @@ fn draw_diff(f: &mut Frame, app: &mut App, area: Rect) {
         return;
     };
     app.shown = key;
-    app.detail_scroll.fit(lines.len(), body.height);
     // Long lines scroll sideways (unified only: side by side wraps them).
-    let longest = lines.iter().map(Line::width).max().unwrap_or(0);
-    app.over = longest.saturating_sub(body.width as usize).min(u16::MAX as usize) as u16;
-    app.left = app.left.min(app.over);
-    let shown: Vec<Line> = lines
-        .iter()
-        .skip(app.detail_scroll.top() as usize)
-        .take(body.height as usize)
-        .map(|l| kit::truncate(kit::skip(l.clone(), app.left), body.width))
-        .collect();
-    f.render_widget(Paragraph::new(shown), body);
+    f.render_widget(Paragraph::new(app.detail_scroll.view(lines, body)), body);
     app.detail_scroll.draw_more(f, area);
 }
 
@@ -218,7 +207,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         pairs.extend([("s", "split"), ("l", "numbers")]);
     }
     pairs.extend([("w", "whitespace"), ("+ -", "context"), ("n N", "hunks")]);
-    if app.over > 0 {
+    if app.detail_scroll.wide() {
         pairs.push(("← →", "long lines"));
     }
     pairs.extend([("f", "whole file"), ("z", "files"), ("e", "edit"), ("ctrl+p", "commands"), ("q", "quit")]);

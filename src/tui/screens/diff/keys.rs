@@ -2,9 +2,6 @@
 
 use super::*;
 
-/// Columns ← and → scroll long lines by.
-const SIDEWAYS: u16 = 8;
-
 impl App {
     pub(super) fn on_key(&mut self, k: KeyEvent) -> Flow<(), Effect> {
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
@@ -80,14 +77,6 @@ impl App {
             }
             KeyCode::End | KeyCode::Char('G') => {
                 self.selected = self.visible.len().saturating_sub(1);
-                return Flow::Stay;
-            }
-            KeyCode::Left => {
-                self.left = self.left.saturating_sub(SIDEWAYS);
-                return Flow::Stay;
-            }
-            KeyCode::Right => {
-                self.left = (self.left + SIDEWAYS).min(self.over);
                 return Flow::Stay;
             }
             KeyCode::Char('1') => Cmd::Compare(Target::Unstaged),

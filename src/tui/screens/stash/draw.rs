@@ -172,15 +172,7 @@ fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
         app.detail_for = id;
         app.detail_scroll.reset();
     }
-    app.detail_scroll.fit(lines.len(), inner.height);
-
-    let shown: Vec<Line> = lines
-        .iter()
-        .skip(app.detail_scroll.top() as usize)
-        .take(inner.height as usize)
-        .map(|l| kit::truncate(l.clone(), inner.width))
-        .collect();
-    f.render_widget(Paragraph::new(shown), inner);
+    f.render_widget(Paragraph::new(app.detail_scroll.view(&lines, inner)), inner);
     app.detail_scroll.draw_more(f, area);
 }
 
@@ -264,15 +256,12 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
     } else if app.list.is_empty() {
         vec![("tab", "changes"), ("q", "quit")]
     } else {
-        vec![
-            ("enter", "apply"),
-            ("p", "pop"),
-            ("d", "drop"),
-            ("ctrl+p", "commands"),
-            ("b", "branch"),
-            ("tab", "changes"),
-            ("q", "quit"),
-        ]
+        let mut p = vec![("enter", "apply"), ("p", "pop"), ("d", "drop"), ("ctrl+p", "commands"), ("b", "branch")];
+        if app.detail_scroll.wide() {
+            p.push(("← →", "long lines"));
+        }
+        p.extend([("tab", "changes"), ("q", "quit")]);
+        p
     };
     footer::draw(f, area, left, pairs);
 }

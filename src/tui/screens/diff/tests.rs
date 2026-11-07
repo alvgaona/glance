@@ -1,5 +1,4 @@
-//! Keys give effects and options; the diff is drawn without delta so the tests don't
-//! need it installed.
+//! Keys give effects and options, and what the screen draws.
 
 use ratatui::{Terminal, backend::TestBackend};
 
@@ -19,7 +18,7 @@ fn screen(name: &str) -> (Scratch, App) {
     s.write("a.txt", &old.replace("\n2\n", "\ntwo\n").replace("25\n", "twenty-five\n"));
     s.write("b.txt", "new\n");
     s.git(&["add", "b.txt"]);
-    let app = start(s.repo(), Some(s.0.clone()), Target::Unstaged, false).unwrap();
+    let app = start(s.repo(), Some(s.0.clone()), Target::Unstaged).unwrap();
     (s, app)
 }
 
@@ -63,6 +62,9 @@ fn draws_wide_and_narrow() {
     // The list and the diff side by side on one row.
     assert!(wide.lines().any(|l| l.contains("M  a.txt") && l.matches("a.txt").count() == 2), "{wide}");
     assert!(wide.contains("+twenty-five"), "{wide}");
+    // Wide enough for side by side: the old line next to the one replacing it.
+    let wider = draw(&mut app, 220, 40);
+    assert!(wider.lines().any(|l| l.contains("25 -25") && l.contains("25 +twenty-five")), "{wider}");
     // Resized: the list goes on top, and the diff is drawn again for the new width.
     let narrow = draw(&mut app, 80, 30);
     assert!(narrow.contains("+two"), "{narrow}");
@@ -100,10 +102,7 @@ fn options_and_the_next_file() {
     assert!(app.cut.full);
     assert_ne!(app.key_for(80), before);
 
-    // delta's side by side, but not where lines would wrap.
-    app.prefer_split = Some(true);
-    assert!(!app.split_at(90) && app.split_at(110));
-    app.prefer_split = None;
+    // Side by side where there's room.
     assert!(!app.split_at(110) && app.split_at(130));
     key(&mut app, KeyCode::Char('s'));
     assert_eq!(app.split, Some(true));
@@ -152,5 +151,6 @@ fn long_lines_scroll_sideways() {
     // Never past the end of the longest line.
     (0..50).for_each(|_| drop(key(&mut app, KeyCode::Right)));
     let text = draw(&mut app, 160, 50);
-    assert!(text.contains("xQZ"), "{text}");
+    // The line number and `+` stay in front.
+    assert!(text.lines().any(|l| l.contains("1 +x") && l.contains("xQZ")), "{text}");
 }

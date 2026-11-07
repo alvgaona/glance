@@ -1,6 +1,6 @@
-//! `glance diff`: changed files on the left, the picked file's diff on the right, drawn
-//! by delta when it's installed. What is compared and how the diff is cut switch on
-//! the screen; git and delta run on a background thread.
+//! `glance diff`: changed files on the left, the picked file's diff on the right. What is
+//! compared and how the diff is cut and laid out switch on the screen; git runs on a
+//! background thread.
 
 mod draw;
 mod keys;
@@ -17,12 +17,11 @@ use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{Frame, style::Style, text::Line};
 
-use crate::delta;
 use crate::git::compare::{self, Cut, Target};
 use crate::git::diff::PatchLine;
 use crate::git::tree::FileStat;
 use crate::tui::app::{self, Flow, Screen};
-use crate::tui::kit::{Command, Palette, PaletteEvent, Scroll, Toast, ansi, list};
+use crate::tui::kit::{Command, Palette, PaletteEvent, Scroll, Toast, list};
 use crate::tui::panels::diff;
 use crate::tui::{first_lines, theme};
 
@@ -56,7 +55,7 @@ enum Effect {
     EditOnTerminal(String, Option<u32>),
 }
 
-/// What the screen controls in delta's layout.
+/// How the diff is laid out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct Look {
     split: bool,
@@ -67,6 +66,10 @@ struct Look {
 struct Rendered {
     lines: Vec<Line<'static>>,
     hunks: Vec<HunkAt>,
+    /// Columns of each line kept in place when scrolled sideways.
+    pins: Vec<u16>,
+    /// Side by side, the new half of each row; `lines` is then the old half.
+    right: Vec<Line<'static>>,
 }
 
 /// Where a hunk is.
@@ -108,8 +111,6 @@ struct App {
     cut: Cut,
     /// Side by side, as set with `s`; `None` decides by the pane's width.
     split: Option<bool>,
-    /// `delta.side-by-side` from git config.
-    prefer_split: Option<bool>,
     numbers: bool,
     hide_files: bool,
     /// The sidebar, on wide screens.
@@ -123,8 +124,6 @@ struct App {
     details: Option<crate::git::commit::Details>,
     /// The sidebar's hunk rows, for clicks.
     outline_area: ratatui::layout::Rect,
-    /// delta is installed; without it the diff is drawn here.
-    delta: bool,
     /// New files git doesn't diff, counted for the header.
     untracked: usize,
     cache: HashMap<Key, Rendered>,
@@ -144,13 +143,10 @@ struct App {
 
 /// `on`: the file to start on (from the repository's top), when it's in the list.
 pub fn run(repo: gix::Repository, target: Target, on: Option<&str>) -> Result<()> {
-    let mut app = start(repo, None, target, delta::available())?;
+    let mut app = start(repo, None, target)?;
     if let Some(p) = app.visible.iter().position(|&i| Some(app.files[i].path.as_str()) == on) {
         app.selected = p;
     }
-    app.prefer_split = delta::setting("side-by-side");
-    app.numbers = delta::setting("line-numbers").unwrap_or(true);
-    // What was on last time wins over delta's settings.
     saved::load(&mut app);
     app.side = crate::tui::state::sidebar();
     if app.cut.whitespace {
@@ -163,7 +159,7 @@ pub fn run(repo: gix::Repository, target: Target, on: Option<&str>) -> Result<()
 }
 
 /// The screen as it opens, before the first draw.
-fn start(repo: gix::Repository, dir: Option<PathBuf>, target: Target, delta: bool) -> Result<App> {
+fn start(repo: gix::Repository, dir: Option<PathBuf>, target: Target) -> Result<App> {
     let mut app = App {
         repo_name: crate::git::repo_name(&repo),
         repo,
@@ -177,7 +173,6 @@ fn start(repo: gix::Repository, dir: Option<PathBuf>, target: Target, delta: boo
         scroll: 0,
         cut: Cut::default(),
         split: None,
-        prefer_split: None,
         numbers: true,
         hide_files: false,
         side: true,
@@ -186,7 +181,6 @@ fn start(repo: gix::Repository, dir: Option<PathBuf>, target: Target, delta: boo
         history_job: None,
         details: None,
         outline_area: Default::default(),
-        delta,
         untracked: 0,
         cache: HashMap::new(),
         job: None,
@@ -258,10 +252,10 @@ impl Screen for App {
         if !self.job.as_ref().is_some_and(|(k, ..)| *k == key) {
             // A newer pick replaces the job; the old thread's answer is dropped.
             let (tx, rx) = mpsc::channel();
-            let (dir, target, delta, k) = (self.dir.clone(), self.target.clone(), self.delta, key.clone());
+            let (dir, target, k) = (self.dir.clone(), self.target.clone(), key.clone());
             let file = self.files[self.visible[i]].clone();
             std::thread::spawn(move || {
-                let _ = tx.send(render(dir, &target, &file, &k, delta));
+                let _ = tx.send(render(dir, &target, &file, &k));
             });
             self.job = Some((key, rx, false));
         }
@@ -299,14 +293,14 @@ impl Screen for App {
     }
 }
 
-/// One file's diff: delta's, or drawn here without it.
-fn render(dir: Option<PathBuf>, target: &Target, f: &FileStat, key: &Key, delta: bool) -> Rendered {
+/// One file's diff, drawn.
+fn render(dir: Option<PathBuf>, target: &Target, f: &FileStat, key: &Key) -> Rendered {
     let red = Style::new().fg(theme::RED);
     let patch = match compare::patch(dir.as_deref(), target, f, key.cut) {
         Ok(p) => p,
         Err(e) => {
             let lines = vec![Line::styled(format!("git diff failed: {}", first_lines(&e.to_string())), red)];
-            return Rendered { lines, hunks: Vec::new() };
+            return Rendered { lines, hunks: Vec::new(), pins: Vec::new(), right: Vec::new() };
         }
     };
     let parsed = compare::lines(&patch);
@@ -317,33 +311,20 @@ fn render(dir: Option<PathBuf>, target: &Target, f: &FileStat, key: &Key, delta:
             .map(|(at, (line, context))| HunkAt { at, line: *line, context: context.clone() })
             .collect()
     };
-    let mut lines = Vec::new();
-    if delta {
-        let set = [
-            ("side-by-side", if key.look.split { "true" } else { "false" }),
-            ("line-numbers", if key.look.numbers { "true" } else { "false" }),
-            // The pane's title already names the file.
-            ("file-style", "omit"),
-            ("file-decoration-style", "none"),
-        ];
-        match delta::render(&patch, key.width, &set) {
-            // The line above the header: the top of its box.
-            Ok(d) => {
-                let hunks = place(d.hunks.into_iter().map(|i| i.saturating_sub(1)).collect());
-                return Rendered { lines: ansi::lines(&d.text), hunks };
-            }
-            Err(e) => lines.push(Line::styled(format!("delta failed: {}", first_lines(&e)), red)),
-        }
-    }
-    let at = lines.len();
-    let hunks = place(
-        parsed.iter().enumerate().filter(|(_, l)| matches!(l, PatchLine::Hunk { .. })).map(|(i, _)| at + i).collect(),
-    );
-    lines.extend(parsed.into_iter().map(diff::line));
-    if lines.len() == at {
+    let numbers = key.look.numbers;
+    let (mut lines, hunks, pins, right) = if key.look.split {
+        let h = diff::side_by_side(parsed, numbers);
+        (h.old, h.hunks, h.pins, h.new)
+    } else {
+        let hunks = parsed.iter().enumerate().filter(|(_, l)| matches!(l, PatchLine::Hunk { .. })).map(|(i, _)| i);
+        let hunks = hunks.collect();
+        let pins = parsed.iter().map(|l| diff::pin(l, numbers)).collect();
+        (diff::lines(&parsed, numbers), hunks, pins, Vec::new())
+    };
+    if lines.is_empty() {
         lines.push(Line::styled("Binary file, or only its mode changed", theme::faint()));
     }
-    Rendered { lines, hunks }
+    Rendered { lines, hunks: place(hunks), pins, right }
 }
 
 fn commands() -> Vec<Command<Cmd>> {
@@ -409,14 +390,9 @@ impl App {
         self.selected = (self.selected as isize + n).clamp(0, last) as usize;
     }
 
-    /// Side by side at this pane width. With delta set to side by side, from 100
-    /// columns; narrower, its lines would wrap.
+    /// Side by side at this pane width: unless set with `s`, from 120 columns.
     fn split_at(&self, width: u16) -> bool {
-        self.split.unwrap_or(match self.prefer_split {
-            Some(false) => false,
-            Some(true) => width >= 100,
-            None => width >= 120,
-        })
+        self.split.unwrap_or(width >= 120)
     }
 
     /// The cache key for the `i`th visible file at `width`.

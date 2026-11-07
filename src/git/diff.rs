@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use gix::diff::blob::{Algorithm, Diff, InternedInput, sources::byte_lines};
 
 /// How much a file changed.
@@ -22,9 +24,59 @@ pub fn count(old: &[u8], new: &[u8]) -> Option<Size> {
     Some(Size::Lines { added: diff.count_additions(), removed: diff.count_removals() })
 }
 
+/// Above this share of changed text, two lines are told apart whole, not word by word:
+/// marking nearly everything says nothing.
+const MOST_CHANGED: f32 = 0.6;
+
+/// The byte ranges of `old` and `new` that differ, word by word, for a removed line and
+/// the added one replacing it. Empty when they're too different to be worth marking.
+pub fn changed_words(old: &str, new: &str) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
+    use gix::diff::blob::sources::words;
+    let mut input = InternedInput::default();
+    input.update_before(words(old));
+    input.update_after(words(new));
+    let mut diff = Diff::compute(Algorithm::Myers, &input);
+    diff.postprocess_no_heuristic(&input);
+    let ranges = |line: &str, changed: &dyn Fn(u32) -> bool| {
+        let mut out: Vec<Range<usize>> = Vec::new();
+        let mut at = 0;
+        for (i, w) in words(line).enumerate() {
+            let r = at..at + w.len();
+            at = r.end;
+            if !changed(i as u32) {
+                continue;
+            }
+            match out.last_mut() {
+                Some(last) if last.end == r.start => last.end = r.end,
+                _ => out.push(r),
+            }
+        }
+        out
+    };
+    let old_ranges = ranges(old, &|i| diff.is_removed(i));
+    let new_ranges = ranges(new, &|i| diff.is_added(i));
+    let changed: usize = old_ranges.iter().chain(&new_ranges).map(|r| r.len()).sum();
+    if changed as f32 > MOST_CHANGED * (old.len() + new.len()).max(1) as f32 {
+        return (Vec::new(), Vec::new());
+    }
+    (old_ranges, new_ranges)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[allow(clippy::single_range_in_vec_init)] // one range is the point
+    fn marks_the_words_that_changed() {
+        let (old, new) = changed_words("let total = price * 2;", "let total = price * count;");
+        assert_eq!((old, new), (vec![20..21], vec![20..25]));
+        // Next to each other, changed words make one range.
+        let (old, _) = changed_words("call(a, b) here", "call(x) here");
+        assert_eq!(old, vec![5..9]);
+        // Nothing alike: nothing marked.
+        assert_eq!(changed_words("fn main() {", "    return 42;"), (vec![], vec![]));
+    }
 
     fn render(lines: &[PatchLine]) -> String {
         lines

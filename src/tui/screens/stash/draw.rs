@@ -158,7 +158,7 @@ fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(block, area);
     app.detail_area = area;
     app.detail_width = inner.width;
-    let Some(lines) = app.detail(inner.width) else {
+    let Some(d) = app.detail(inner.width) else {
         // Not read yet (it is before the next draw), or no stash at all.
         if app.current().is_none() {
             f.render_widget(Paragraph::new(Span::styled("A stash's files and diff show here.", theme::faint())), inner);
@@ -172,16 +172,11 @@ fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
         app.detail_for = id;
         app.detail_scroll.reset();
     }
-    f.render_widget(Paragraph::new(app.detail_scroll.view(&lines, inner)), inner);
+    f.render_widget(Paragraph::new(app.detail_scroll.view(&d.lines, &d.pins, inner)), inner);
     app.detail_scroll.draw_more(f, area);
 }
 
-pub(super) fn build_detail(
-    repo: &gix::Repository,
-    s: &Stash,
-    branch: Option<&str>,
-    width: usize,
-) -> Vec<Line<'static>> {
+pub(super) fn build_detail(repo: &gix::Repository, s: &Stash, branch: Option<&str>, width: usize) -> diff::Patches {
     let now = now();
     let label = |t: &str| Span::styled(format!("{t:<10}"), theme::faint());
     let mut out: Vec<Line<'static>> =
@@ -229,12 +224,14 @@ pub(super) fn build_detail(
                 out.push(Line::raw(""));
                 out.extend(panels::changes::files(&untracked, Some("untracked")));
             }
-            out.extend(diff::patches(repo, &tracked, width as u16).lines);
-            out.extend(diff::patches(repo, &untracked, width as u16).lines);
+            let patches = diff::patches(repo, &tracked).then(diff::patches(repo, &untracked));
+            patches.below(out)
         }
-        Err(e) => out.push(Line::styled(format!("couldn't read the stash: {e}"), Style::new().fg(theme::RED))),
+        Err(e) => {
+            out.push(Line::styled(format!("couldn't read the stash: {e}"), Style::new().fg(theme::RED)));
+            diff::Patches { lines: out, ..Default::default() }
+        }
     }
-    out
 }
 
 fn draw_footer(f: &mut Frame, app: &App, area: Rect) {

@@ -51,10 +51,10 @@ mod tests {
     fn options_round_trip() {
         let s = Scratch::new("diff-saved");
         s.commit("a.txt", "1\n");
-        let mut app = super::super::start(s.repo(), Some(s.0.clone()), Target::Unstaged, false).unwrap();
+        let mut app = super::super::start(s.repo(), Some(s.0.clone()), Target::Unstaged).unwrap();
         (app.numbers, app.cut.whitespace, app.cut.context, app.hide_files) = (false, true, 10, true);
         let saved = text(&app);
-        let mut back = super::super::start(s.repo(), Some(s.0.clone()), Target::Unstaged, false).unwrap();
+        let mut back = super::super::start(s.repo(), Some(s.0.clone()), Target::Unstaged).unwrap();
         read(&format!("{saved}junk\ncontext=lots\n"), &mut back);
         assert_eq!(text(&back), saved);
     }

@@ -160,7 +160,7 @@ impl Screen for App<'_> {
         let key = (hash.clone(), self.diff_width);
         if !self.diffs.contains_key(&key) {
             let p = match self.info.get(hash).and_then(|i| i.as_ref()) {
-                Some(d) => diff::patches(self.repo, &d.files, self.diff_width),
+                Some(d) => diff::patches(self.repo, &d.files),
                 None => {
                     let lines = vec![Line::styled("Couldn't read this commit.", theme::muted())];
                     diff::Patches { lines, ..Default::default() }
@@ -698,8 +698,8 @@ fn draw_diff(f: &mut Frame, app: &mut App, area: Rect) {
         app.scrolled_for = Some(hash.clone());
         app.detail_scroll.reset();
     }
-    let Some(diff::Patches { lines, .. }) = app.diffs.get(&(hash.clone(), inner.width)) else { return };
-    f.render_widget(Paragraph::new(app.detail_scroll.view(lines, inner)), inner);
+    let Some(p) = app.diffs.get(&(hash.clone(), inner.width)) else { return };
+    f.render_widget(Paragraph::new(app.detail_scroll.view(&p.lines, &p.pins, inner)), inner);
     app.detail_scroll.draw_more_keys(f, area, "ctrl+d/u");
 }
 

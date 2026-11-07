@@ -43,8 +43,7 @@ Or download a binary for macOS or Linux from the
 | --- | --- | --- |
 | [`git`](https://git-scm.com) | required | every change glance makes (stage, commit, fetch, rebase…) |
 | [`gh`](https://cli.github.com) | optional | pull request status and links in `glance branches` |
-| [`fzf`](https://github.com/junegunn/fzf) | optional | picking where `glance rebase -p` starts |
-| [`delta`](https://github.com/dandavison/delta) | optional | the diffs in `glance diff`, `glance show`, `glance add`, the log and stash details, and the `fzf` previews |
+| [`fzf`](https://github.com/junegunn/fzf) | optional | `glance log -i` in a build without the full-screen views (`--no-default-features`); its diff previews use [`delta`](https://github.com/dandavison/delta) when it's installed |
 
 Without an optional tool, only the feature that uses it is missing. Copying with `y`
 works on macOS only for now.
@@ -81,8 +80,8 @@ oh-my-zsh, so yours wins.
 | Command | Alias | What it does |
 | --- | --- | --- |
 | `glance status` | `st` | Branch, upstream and changed files, grouped. Printed, like `git status` but easier to scan. |
-| `glance add` | | Stage on a full screen, with each file next to its diff, drawn by delta when it's installed. Stage files, hunks or single lines, commit and amend, resolve conflicts. `glance add <path>…` stages directly. |
-| `glance diff` | `d` | Changed files on the left, the picked one's diff on the right, drawn by delta when it's installed. Switch between unstaged, staged and since HEAD, and change the layout on the screen. Takes any `git diff` arguments; piped, it is plain `git diff`. |
+| `glance add` | | Stage on a full screen, with each file next to its diff. Stage files, hunks or single lines, commit and amend, resolve conflicts. `glance add <path>…` stages directly. |
+| `glance diff` | `d` | Changed files on the left, the picked one's diff on the right, side by side when there's room, with the words that changed in each line marked. Switch between unstaged, staged and since HEAD, and change the layout on the screen. Takes any `git diff` arguments; piped, it is plain `git diff`. |
 | `glance show` | | One commit's files and diffs on the same screen. Piped, it is plain `git show`. |
 | `glance blame` | | Each line of a file with the commit that last changed it; `glance blame <rev> <path>` for the file at a commit. `enter` opens that commit on the `glance show` screen. Piped, it is plain `git blame`. |
 | `glance log` | `l` | Commit history with details and refs. Full screen in a terminal, a compact list when piped. |

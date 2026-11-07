@@ -1,8 +1,6 @@
 mod cli;
 mod clipboard;
 mod cmd;
-#[cfg(feature = "tui")]
-mod delta;
 mod fmt;
 // The commit picker when built without the full-screen views.
 #[cfg_attr(feature = "tui", allow(dead_code))]

@@ -149,7 +149,7 @@ pub fn help_color(args: impl IntoIterator<Item = OsString>) -> clap::ColorChoice
     about = "A nicer view of git: status, staging, diffs, history, branches and more",
     long_about = "A nicer view of git: status, staging, diffs, history, branches and more.\n\n\
         Commands open full screens in a terminal and print plain text when piped,\n\
-        so they work in scripts too. Diffs are drawn by delta when it's installed.",
+        so they work in scripts too.",
     styles = styles(),
     after_help = top_help()
 )]
@@ -199,7 +199,7 @@ pub enum Command {
         paths: Vec<String>,
     },
 
-    /// Changed files and their diffs, drawn by delta when it's installed.
+    /// Changed files and their diffs.
     ///
     /// The files on the left, the picked one's diff on the right. Switch between unstaged,
     /// staged and everything since HEAD, and change context, whitespace and layout on the

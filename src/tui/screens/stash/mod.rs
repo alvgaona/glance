@@ -98,7 +98,7 @@ struct App<'r> {
     searching: bool,
     focus: Pane,
     /// Details by (stash, panel width), filled in `tick`.
-    cache: HashMap<(ObjectId, u16), Rc<Vec<Line<'static>>>>,
+    cache: HashMap<(ObjectId, u16), Rc<diff::Patches>>,
     /// The details panel's width at the last draw.
     detail_width: u16,
     detail_scroll: Scroll,
@@ -412,7 +412,7 @@ impl App<'_> {
         }
     }
 
-    fn detail(&self, width: u16) -> Option<Rc<Vec<Line<'static>>>> {
+    fn detail(&self, width: u16) -> Option<Rc<diff::Patches>> {
         self.cache.get(&(self.current()?.oid, width)).cloned()
     }
 }

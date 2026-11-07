@@ -96,17 +96,41 @@ impl Scroll {
     }
 
     /// Fits it to `lines` drawn in `area` and gives the ones on screen, scrolled sideways.
-    pub fn view(&mut self, lines: &[Line<'static>], area: Rect) -> Vec<Line<'static>> {
-        self.fit(lines.len(), area.height);
-        let longest = lines.iter().map(Line::width).max().unwrap_or(0);
-        self.over = longest.saturating_sub(area.width as usize).min(u16::MAX as usize) as u16;
+    /// Line `i` keeps its first `pins[i]` columns in place (`u16::MAX`: all of it); lines
+    /// past the end of `pins` keep none.
+    pub fn view(&mut self, lines: &[Line<'static>], pins: &[u16], area: Rect) -> Vec<Line<'static>> {
+        let [shown] = self.views([lines], pins, [area]);
+        shown
+    }
+
+    /// [`Scroll::view`] for columns drawn next to each other (a diff side by side): they
+    /// scroll together, rows and sideways, as far as the longest needs.
+    pub fn views<const N: usize>(
+        &mut self,
+        columns: [&[Line<'static>]; N],
+        pins: &[u16],
+        areas: [Rect; N],
+    ) -> [Vec<Line<'static>>; N] {
+        let rows = columns.iter().map(|c| c.len()).max().unwrap_or(0);
+        self.fit(rows, areas.first().map_or(0, |a| a.height));
+        let over = |lines: &[Line], area: Rect| {
+            let longest = lines.iter().map(Line::width).max().unwrap_or(0);
+            longest.saturating_sub(area.width as usize).min(u16::MAX as usize) as u16
+        };
+        self.over = columns.iter().zip(areas).map(|(c, a)| over(c, a)).max().unwrap_or(0);
         self.left = self.left.min(self.over);
-        lines
-            .iter()
-            .skip(self.top as usize)
-            .take(area.height as usize)
-            .map(|l| super::truncate(super::skip(l.clone(), self.left), area.width))
-            .collect()
+        std::array::from_fn(|n| {
+            columns[n]
+                .iter()
+                .enumerate()
+                .skip(self.top as usize)
+                .take(areas[n].height as usize)
+                .map(|(i, l)| {
+                    let pin = pins.get(i).copied().unwrap_or(0);
+                    super::truncate(super::skip(l.clone(), pin, self.left), areas[n].width)
+                })
+                .collect()
+        })
     }
 
     /// "↓ 12 more · J/K" on the bottom edge of `area` while there's more, "↑ J/K" at the end.
@@ -157,22 +181,45 @@ mod tests {
         let mut s = Scroll::default();
         let area = Rect::new(0, 0, 10, 5);
         let lines = vec![Line::raw("0123456789abcdefghijklmnopqrstuvwxyz")];
-        assert_eq!(s.view(&lines, area), vec![Line::raw("012345678…")]);
+        assert_eq!(s.view(&lines, &[], area), vec![Line::raw("012345678…")]);
         assert!(s.wide());
         let right = key(KeyCode::Right, KeyModifiers::NONE);
         s.key(right, 5);
-        assert_eq!(s.view(&lines, area), vec![Line::raw("89abcdefg…")]);
+        assert_eq!(s.view(&lines, &[], area), vec![Line::raw("89abcdefg…")]);
         // Never past the end of the longest line.
         for _ in 0..10 {
             s.key(right, 5);
         }
-        assert_eq!(s.view(&lines, area), vec![Line::raw("qrstuvwxyz")]);
+        assert_eq!(s.view(&lines, &[], area), vec![Line::raw("qrstuvwxyz")]);
         assert!(s.key(key(KeyCode::Left, KeyModifiers::NONE), 5));
         assert_eq!(s.left, 18);
         s.reset();
         assert_eq!(s.left, 0);
         // Everything fits: nothing to scroll.
-        assert_eq!(s.view(&[Line::raw("short")], area), vec![Line::raw("short")]);
+        assert_eq!(s.view(&[Line::raw("short")], &[], area), vec![Line::raw("short")]);
         assert!(!s.wide());
+    }
+
+    #[test]
+    fn pinned_columns_stay_while_the_rest_scrolls() {
+        let mut s = Scroll::default();
+        let area = Rect::new(0, 0, 12, 5);
+        let lines = vec![Line::raw("   1 +0123456789abcdef"), Line::raw("   ⋯ line 1 of a long header")];
+        s.view(&lines, &[6, u16::MAX], area);
+        s.key(key(KeyCode::Right, KeyModifiers::NONE), 5);
+        let shown: Vec<String> = s.view(&lines, &[6, u16::MAX], area).iter().map(|l| l.to_string()).collect();
+        assert_eq!(shown, ["   1 +89abc…", "   ⋯ line 1…"]);
+    }
+
+    #[test]
+    fn columns_scroll_together() {
+        let mut s = Scroll::default();
+        let (a, b) = (Rect::new(0, 0, 6, 5), Rect::new(7, 0, 6, 5));
+        let (old, new) = (vec![Line::raw("short")], vec![Line::raw("0123456789")]);
+        s.views([&old, &new], &[], [a, b]);
+        // The new side is 4 columns too wide: both move that far, no further.
+        (0..3).for_each(|_| _ = s.key(key(KeyCode::Right, KeyModifiers::NONE), 5));
+        let [o, n] = s.views([&old, &new], &[], [a, b]);
+        assert_eq!((o[0].to_string(), n[0].to_string()), ("t".to_string(), "456789".to_string()));
     }
 }

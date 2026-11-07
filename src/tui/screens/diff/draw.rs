@@ -4,7 +4,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::Modifier,
     text::Span,
-    widgets::{Block, Padding, Paragraph},
+    widgets::{Block, Borders, Padding, Paragraph},
 };
 
 use super::*;
@@ -130,8 +130,17 @@ fn draw_diff(f: &mut Frame, app: &mut App, area: Rect) {
         return;
     };
     app.shown = key;
-    // Long lines scroll sideways (unified only: side by side wraps them), line numbers stay.
-    f.render_widget(Paragraph::new(app.detail_scroll.view(&r.lines, &r.pins, body)), body);
+    // Long lines scroll sideways; line numbers stay.
+    if r.right.is_empty() {
+        f.render_widget(Paragraph::new(app.detail_scroll.view(&r.lines, &r.pins, body)), body);
+    } else {
+        let [old, gap, new] =
+            Layout::horizontal([Constraint::Fill(1), Constraint::Length(1), Constraint::Fill(1)]).areas(body);
+        let [o, n] = app.detail_scroll.views([&r.lines, &r.right], &r.pins, [old, new]);
+        f.render_widget(Paragraph::new(o), old);
+        f.render_widget(Block::new().borders(Borders::LEFT).border_style(Style::new().fg(theme::BORDER)), gap);
+        f.render_widget(Paragraph::new(n), new);
+    }
     app.detail_scroll.draw_more(f, area);
 }
 
@@ -188,12 +197,9 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         footer::search(&app.query, app.searching, app.visible.len(), app.files.len())
     } else {
         // What's on, so the toggles are visible.
-        let mut on = Vec::new();
-        if app.delta {
-            on.push(if app.split_at(app.width) { "side by side" } else { "unified" });
-            if app.numbers {
-                on.push("line numbers");
-            }
+        let mut on = vec![if app.split_at(app.width) { "side by side" } else { "unified" }];
+        if app.delta && app.numbers {
+            on.push("line numbers");
         }
         if app.cut.whitespace {
             on.push("ignoring whitespace");
@@ -202,9 +208,9 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect) {
         on.push(if app.cut.full { "whole file" } else { &context });
         Line::styled(on.join(" · "), theme::faint())
     };
-    let mut pairs = vec![("1 2 3", "compare")];
+    let mut pairs = vec![("1 2 3", "compare"), ("s", "split")];
     if app.delta {
-        pairs.extend([("s", "split"), ("l", "numbers")]);
+        pairs.push(("l", "numbers"));
     }
     pairs.extend([("w", "whitespace"), ("+ -", "context"), ("n N", "hunks")]);
     if app.detail_scroll.wide() {

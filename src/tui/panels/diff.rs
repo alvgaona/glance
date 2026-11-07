@@ -136,6 +136,64 @@ fn by_delta(repo: &gix::Repository, files: &[FileStat], width: u16) -> Option<Pa
     Some(Patches { lines: out, files: at(drawn.files), hunks: at(drawn.hunks), pins: Vec::new() })
 }
 
+/// A diff side by side: the old half and the new half of each row, the columns of each
+/// row kept in place when scrolled sideways, and the rows hunks start on.
+#[derive(Default)]
+pub struct Halves {
+    pub old: Vec<Line<'static>>,
+    pub new: Vec<Line<'static>>,
+    pub pins: Vec<u16>,
+    pub hunks: Vec<usize>,
+}
+
+impl Halves {
+    fn row(&mut self, old: Option<Line<'static>>, new: Option<Line<'static>>, pin: u16) {
+        self.old.push(old.unwrap_or_default());
+        self.new.push(new.unwrap_or_default());
+        self.pins.push(pin);
+    }
+
+    /// The removed lines next to the added ones that replace them, then the rest of
+    /// whichever is longer against blank rows.
+    fn pair(&mut self, removed: &mut Vec<PatchLine>, added: &mut Vec<PatchLine>) {
+        let n = removed.len().max(added.len());
+        let (mut r, mut a) = (removed.drain(..), added.drain(..));
+        for _ in 0..n {
+            self.row(r.next().map(line), a.next().map(line), GUTTER);
+        }
+    }
+}
+
+/// `lines` side by side: removed lines on the left, added ones on the right, context on
+/// both with each side's line number.
+pub fn side_by_side(lines: Vec<PatchLine>) -> Halves {
+    let mut out = Halves::default();
+    let (mut removed, mut added) = (Vec::new(), Vec::new());
+    for l in lines {
+        match l {
+            // A removal after additions starts the next change.
+            PatchLine::Removed { .. } if !added.is_empty() => {
+                out.pair(&mut removed, &mut added);
+                removed.push(l);
+            }
+            PatchLine::Removed { .. } => removed.push(l),
+            PatchLine::Added { .. } => added.push(l),
+            PatchLine::Hunk { .. } => {
+                out.pair(&mut removed, &mut added);
+                out.hunks.push(out.old.len());
+                out.row(Some(line(l)), None, u16::MAX);
+            }
+            PatchLine::Context { old, new, text } => {
+                out.pair(&mut removed, &mut added);
+                let left = line(PatchLine::Context { old, new: old, text: text.clone() });
+                out.row(Some(left), Some(line(PatchLine::Context { old, new, text })), GUTTER);
+            }
+        }
+    }
+    out.pair(&mut removed, &mut added);
+    out
+}
+
 /// One diff line: line number, `+`/`-`, text; added lines on green, removed on red.
 pub fn line(l: PatchLine) -> Line<'static> {
     let added_bg = Color::Rgb(22, 44, 30);
@@ -178,5 +236,25 @@ mod tests {
         // Without pins of its own (delta's), the next one's still line up.
         let joined = Patches { lines: vec![Line::raw("")], ..Default::default() }.then(p(1, 7));
         assert_eq!(joined.pins, [0, 7]);
+    }
+
+    #[test]
+    fn side_by_side_pairs_changes() {
+        let text = |t: &str| t.to_string();
+        let lines = vec![
+            PatchLine::Hunk { old_start: 4, new_start: 4 },
+            PatchLine::Context { old: 4, new: 4, text: text("a") },
+            PatchLine::Removed { old: 5, text: text("b") },
+            PatchLine::Removed { old: 6, text: text("c") },
+            PatchLine::Added { new: 5, text: text("B") },
+            PatchLine::Context { old: 7, new: 6, text: text("d") },
+            PatchLine::Added { new: 7, text: text("e") },
+        ];
+        let h = side_by_side(lines);
+        let side = |v: &[Line]| v.iter().map(|l| l.to_string().trim().to_string()).collect::<Vec<_>>();
+        assert_eq!(side(&h.old), ["⋯ line 4", "4  a", "5 -b", "6 -c", "7  d", ""]);
+        assert_eq!(side(&h.new), ["", "4  a", "5 +B", "", "6  d", "7 +e"]);
+        assert_eq!(h.hunks, [0]);
+        assert_eq!(h.pins, [u16::MAX, 7, 7, 7, 7, 7]);
     }
 }

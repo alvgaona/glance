@@ -63,6 +63,9 @@ fn draws_wide_and_narrow() {
     // The list and the diff side by side on one row.
     assert!(wide.lines().any(|l| l.contains("M  a.txt") && l.matches("a.txt").count() == 2), "{wide}");
     assert!(wide.contains("+twenty-five"), "{wide}");
+    // Wide enough for side by side: the old line next to the one replacing it.
+    let wider = draw(&mut app, 220, 40);
+    assert!(wider.lines().any(|l| l.contains("25 -25") && l.contains("25 +twenty-five")), "{wider}");
     // Resized: the list goes on top, and the diff is drawn again for the new width.
     let narrow = draw(&mut app, 80, 30);
     assert!(narrow.contains("+two"), "{narrow}");

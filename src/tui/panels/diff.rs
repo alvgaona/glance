@@ -14,12 +14,16 @@ use crate::tui::theme;
 /// Stop drawing diffs after this many lines; huge commits would make the panel slow.
 const MAX_DIFF_LINES: usize = 4000;
 
-/// Diff lines, and the lines each file's header and each hunk start on.
+/// Diff lines, the lines each file's header and each hunk start on, and the columns
+/// of each line that stay put when scrolled sideways (see [`Scroll::view`]).
+///
+/// [`Scroll::view`]: crate::tui::kit::Scroll::view
 #[derive(Default)]
 pub struct Patches {
     pub lines: Vec<Line<'static>>,
     pub files: Vec<usize>,
     pub hunks: Vec<usize>,
+    pub pins: Vec<u16>,
 }
 
 impl Patches {
@@ -27,9 +31,33 @@ impl Patches {
     pub fn below(mut self, mut lines: Vec<Line<'static>>) -> Self {
         let n = lines.len();
         self.files.iter_mut().chain(&mut self.hunks).for_each(|i| *i += n);
+        self.pins.splice(0..0, std::iter::repeat_n(0, n));
         lines.append(&mut self.lines);
         self.lines = lines;
         self
+    }
+
+    /// `next` after these.
+    pub fn then(mut self, mut next: Patches) -> Self {
+        let n = self.lines.len();
+        self.files.extend(next.files.iter().map(|i| i + n));
+        self.hunks.extend(next.hunks.iter().map(|i| i + n));
+        self.pins.resize(n, 0);
+        self.pins.append(&mut next.pins);
+        self.lines.append(&mut next.lines);
+        self
+    }
+}
+
+/// Columns of line number and `+`/`-` in front of each diff line.
+pub const GUTTER: u16 = 7;
+
+/// The columns of `l` that stay put when scrolled sideways: its gutter, or all of a
+/// hunk's header.
+pub fn pin(l: &PatchLine) -> u16 {
+    match l {
+        PatchLine::Hunk { .. } => u16::MAX,
+        _ => GUTTER,
     }
 }
 
@@ -45,7 +73,9 @@ pub fn patches(repo: &gix::Repository, files: &[FileStat], width: u16) -> Patche
     let mut shown = 0;
     for f in files {
         out.lines.push(Line::raw(""));
+        out.pins.push(0);
         out.files.push(out.lines.len());
+        out.pins.push(u16::MAX);
         let (mark, color) = kind_mark(f.kind);
         let name = match &f.from {
             Some(from) => format!("{from} → {}", f.path),
@@ -60,10 +90,12 @@ pub fn patches(repo: &gix::Repository, files: &[FileStat], width: u16) -> Patche
         );
         if shown >= MAX_DIFF_LINES {
             out.lines.push(Line::styled("   diff not shown: too many changes", theme::faint()));
+            out.pins.push(0);
             continue;
         }
         let Some(lines) = tree::file_patch(repo, f) else {
             out.lines.push(Line::styled("   binary or very large file", theme::faint()));
+            out.pins.push(0);
             continue;
         };
         shown += lines.len();
@@ -71,6 +103,7 @@ pub fn patches(repo: &gix::Repository, files: &[FileStat], width: u16) -> Patche
             if matches!(l, PatchLine::Hunk { .. }) {
                 out.hunks.push(out.lines.len());
             }
+            out.pins.push(pin(&l));
             out.lines.push(line(l));
         }
     }
@@ -99,7 +132,8 @@ fn by_delta(repo: &gix::Repository, files: &[FileStat], width: u16) -> Option<Pa
     }
     // The blank line on top moves everything down one.
     let at = |v: Vec<usize>| v.into_iter().map(|i| i + 1).collect();
-    Some(Patches { lines: out, files: at(drawn.files), hunks: at(drawn.hunks) })
+    // shortcut: nothing pinned, delta draws its own line numbers; goes with delta.
+    Some(Patches { lines: out, files: at(drawn.files), hunks: at(drawn.hunks), pins: Vec::new() })
 }
 
 /// One diff line: line number, `+`/`-`, text; added lines on green, removed on red.
@@ -123,5 +157,26 @@ pub fn line(l: PatchLine) -> Line<'static> {
             Span::styled(text, theme::text()),
         ])
         .style(Style::new().bg(removed_bg)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn positions_move_with_what_goes_above_and_before() {
+        let p = |n: usize, pin: u16| Patches {
+            lines: vec![Line::raw(""); n],
+            files: vec![0],
+            hunks: vec![1],
+            pins: vec![pin; n],
+        };
+        let joined = p(2, 7).then(p(3, 9)).below(vec![Line::raw("top")]);
+        assert_eq!((joined.files, joined.hunks), (vec![1, 3], vec![2, 4]));
+        assert_eq!(joined.pins, [0, 7, 7, 9, 9, 9]);
+        // Without pins of its own (delta's), the next one's still line up.
+        let joined = Patches { lines: vec![Line::raw("")], ..Default::default() }.then(p(1, 7));
+        assert_eq!(joined.pins, [0, 7]);
     }
 }

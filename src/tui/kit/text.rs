@@ -94,29 +94,32 @@ pub fn pill(text: &str, bg: Color, fg: Color) -> Span<'static> {
     Span::styled(format!(" {text} "), Style::new().bg(bg).fg(fg))
 }
 
-/// Drops a line's first `cols` columns, to scroll it sideways.
-pub fn skip(line: Line<'static>, cols: u16) -> Line<'static> {
+/// Drops `cols` columns of a line after its first `keep` (a diff's line numbers), to
+/// scroll it sideways.
+pub fn skip(line: Line<'static>, keep: u16, cols: u16) -> Line<'static> {
     use unicode_width::UnicodeWidthChar;
+    if cols == 0 {
+        return line;
+    }
     let style = line.style;
-    let mut left = cols as usize;
+    let (keep, end) = (keep as usize, keep as usize + cols as usize);
+    let mut at = 0;
     let mut out = Vec::new();
     for span in line.spans {
-        let w = span.width();
-        if left >= w {
-            left -= w;
-            continue;
-        }
         // A wide character cut in half goes whole.
         let kept: String = span
             .content
             .chars()
-            .skip_while(|c| {
-                let gone = left > 0;
-                left = left.saturating_sub(c.width().unwrap_or(0));
-                gone
+            .filter(|c| {
+                let w = c.width().unwrap_or(0);
+                let shown = at + w <= keep || at >= end;
+                at += w;
+                shown
             })
             .collect();
-        out.push(Span::styled(kept, span.style));
+        if !kept.is_empty() {
+            out.push(Span::styled(kept, span.style));
+        }
     }
     Line::from(out).style(style)
 }
@@ -129,10 +132,20 @@ mod tests {
     #[test]
     fn skips_columns_across_spans() {
         let line = Line::from(vec![Span::raw("  12 "), Span::raw("hello"), Span::raw(" world")]);
-        assert_eq!(skip(line.clone(), 7).to_string(), "llo world");
-        assert_eq!(skip(line.clone(), 0).to_string(), "  12 hello world");
-        assert_eq!(skip(line, 99).to_string(), "");
-        assert_eq!(skip(Line::raw("日本語"), 1).to_string(), "本語");
+        assert_eq!(skip(line.clone(), 0, 7).to_string(), "llo world");
+        assert_eq!(skip(line.clone(), 0, 0).to_string(), "  12 hello world");
+        assert_eq!(skip(line, 0, 99).to_string(), "");
+        assert_eq!(skip(Line::raw("日本語"), 0, 1).to_string(), "本語");
+    }
+
+    #[test]
+    fn keeps_the_first_columns_in_place() {
+        let line = Line::from(vec![Span::raw("  12 +"), Span::raw("hello world")]);
+        assert_eq!(skip(line.clone(), 6, 6).to_string(), "  12 +world");
+        assert_eq!(skip(line.clone(), 6, 0).to_string(), "  12 +hello world");
+        assert_eq!(skip(line.clone(), u16::MAX, 6).to_string(), "  12 +hello world");
+        // A wide character across the kept edge goes.
+        assert_eq!(skip(Line::raw("a日本"), 2, 1).to_string(), "a本");
     }
 
     #[test]

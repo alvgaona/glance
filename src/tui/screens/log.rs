@@ -627,7 +627,7 @@ fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
         f.render_widget(block, area);
         return;
     };
-    f.render_widget(Paragraph::new(app.detail_scroll.view(&d.lines, inner)).block(block), area);
+    f.render_widget(Paragraph::new(app.detail_scroll.view(&d.lines, &d.pins, inner)).block(block), area);
     app.detail_scroll.draw_more(f, area);
 }
 

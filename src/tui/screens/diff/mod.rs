@@ -67,6 +67,8 @@ struct Look {
 struct Rendered {
     lines: Vec<Line<'static>>,
     hunks: Vec<HunkAt>,
+    /// Columns of each line kept in place when scrolled sideways.
+    pins: Vec<u16>,
 }
 
 /// Where a hunk is.
@@ -306,7 +308,7 @@ fn render(dir: Option<PathBuf>, target: &Target, f: &FileStat, key: &Key, delta:
         Ok(p) => p,
         Err(e) => {
             let lines = vec![Line::styled(format!("git diff failed: {}", first_lines(&e.to_string())), red)];
-            return Rendered { lines, hunks: Vec::new() };
+            return Rendered { lines, hunks: Vec::new(), pins: Vec::new() };
         }
     };
     let parsed = compare::lines(&patch);
@@ -330,7 +332,7 @@ fn render(dir: Option<PathBuf>, target: &Target, f: &FileStat, key: &Key, delta:
             // The line above the header: the top of its box.
             Ok(d) => {
                 let hunks = place(d.hunks.into_iter().map(|i| i.saturating_sub(1)).collect());
-                return Rendered { lines: ansi::lines(&d.text), hunks };
+                return Rendered { lines: ansi::lines(&d.text), hunks, pins: Vec::new() };
             }
             Err(e) => lines.push(Line::styled(format!("delta failed: {}", first_lines(&e)), red)),
         }
@@ -339,11 +341,14 @@ fn render(dir: Option<PathBuf>, target: &Target, f: &FileStat, key: &Key, delta:
     let hunks = place(
         parsed.iter().enumerate().filter(|(_, l)| matches!(l, PatchLine::Hunk { .. })).map(|(i, _)| at + i).collect(),
     );
+    // The "delta failed" line above, if any, keeps nothing.
+    let mut pins = vec![0; at];
+    pins.extend(parsed.iter().map(diff::pin));
     lines.extend(parsed.into_iter().map(diff::line));
     if lines.len() == at {
         lines.push(Line::styled("Binary file, or only its mode changed", theme::faint()));
     }
-    Rendered { lines, hunks }
+    Rendered { lines, hunks, pins }
 }
 
 fn commands() -> Vec<Command<Cmd>> {

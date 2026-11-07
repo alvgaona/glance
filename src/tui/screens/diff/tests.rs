@@ -152,5 +152,6 @@ fn long_lines_scroll_sideways() {
     // Never past the end of the longest line.
     (0..50).for_each(|_| drop(key(&mut app, KeyCode::Right)));
     let text = draw(&mut app, 160, 50);
-    assert!(text.contains("xQZ"), "{text}");
+    // The line number and `+` stay in front.
+    assert!(text.lines().any(|l| l.contains("1 +x") && l.contains("xQZ")), "{text}");
 }

@@ -88,7 +88,7 @@ fn build(repo: &gix::Repository, entry: usize, e: &Entry) -> View {
         Ok(Some(hunks)) => {
             for h in &hunks {
                 let start = view.lines.len();
-                view.lines.extend(diff::lines(&h.patch_lines(), true));
+                view.lines.extend(diff::lines(&h.patch_lines(), &e.path, true));
                 view.ranges.push(start..view.lines.len());
             }
             view.hunks = hunks;

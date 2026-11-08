@@ -9,6 +9,7 @@ use ratatui::{
 };
 
 use super::changes::kind_mark;
+use super::syntax::{self, Colors};
 use crate::git::diff::{self, PatchLine};
 use crate::git::tree::{self, FileStat};
 use crate::tui::theme;
@@ -104,7 +105,7 @@ pub fn patches(repo: &gix::Repository, files: &[FileStat]) -> Patches {
             }
         }
         out.pins.extend(lines.iter().map(|l| pin(l, true)));
-        out.lines.extend(self::lines(&lines, true));
+        out.lines.extend(self::lines(&lines, &f.path, true));
     }
     out
 }
@@ -138,9 +139,9 @@ impl Halves {
 }
 
 /// `lines` side by side: removed lines on the left, added ones on the right, context on
-/// both with each side's line number.
-pub fn side_by_side(lines: Vec<PatchLine>, numbers: bool) -> Halves {
-    let drawn = self::lines(&lines, numbers);
+/// both with each side's line number. `path`: the file's, for its language.
+pub fn side_by_side(lines: Vec<PatchLine>, path: &str, numbers: bool) -> Halves {
+    let drawn = self::lines(&lines, path, numbers);
     let pin = gutter(numbers);
     let mut out = Halves::default();
     let (mut removed, mut added) = (Vec::new(), Vec::new());
@@ -158,9 +159,11 @@ pub fn side_by_side(lines: Vec<PatchLine>, numbers: bool) -> Halves {
                 out.hunks.push(out.old.len());
                 out.row(Some(d), None, u16::MAX);
             }
-            PatchLine::Context { old, text, .. } => {
+            PatchLine::Context { old, .. } => {
                 out.pair(&mut removed, &mut added, pin);
-                let left = line(PatchLine::Context { old, new: old, text }, &[], numbers);
+                // The same line with the old side's number in front.
+                let mut left = d.clone();
+                left.spans[0] = Span::styled(sign_gutter(old, ' ', numbers), theme::faint());
                 out.row(Some(left), Some(d), pin);
             }
         }
@@ -170,15 +173,17 @@ pub fn side_by_side(lines: Vec<PatchLine>, numbers: bool) -> Halves {
 }
 
 /// Each diff line drawn, with the words that changed marked: a change's first removed
-/// line against its first added line, and so on. `numbers`: with line numbers.
-pub fn lines(lines: &[PatchLine], numbers: bool) -> Vec<Line<'static>> {
+/// line against its first added line, and so on; code coloured by `path`'s language.
+/// `numbers`: with line numbers.
+pub fn lines(lines: &[PatchLine], path: &str, numbers: bool) -> Vec<Line<'static>> {
     let mut marks = vec![Vec::new(); lines.len()];
     for (r, a) in replaced(lines) {
         if let (PatchLine::Removed { text: old, .. }, PatchLine::Added { text: new, .. }) = (&lines[r], &lines[a]) {
             (marks[r], marks[a]) = diff::changed_words(old, new);
         }
     }
-    lines.iter().zip(&marks).map(|(l, m)| line(l.clone(), m, numbers)).collect()
+    let colors = syntax::colors(lines, path);
+    lines.iter().zip(&marks).zip(&colors).map(|((l, m), c)| line(l.clone(), m, c, numbers)).collect()
 }
 
 /// Each removed line and the added line taking its place, by position in their change.
@@ -204,26 +209,45 @@ fn replaced(lines: &[PatchLine]) -> Vec<(usize, usize)> {
     out
 }
 
-/// One diff line: line number, `+`/`-`, text; added lines on green, removed on red,
-/// the bytes in `marks` brighter.
-fn line(l: PatchLine, marks: &[Range<usize>], numbers: bool) -> Line<'static> {
-    let gutter = |n: u32, sign: char| if numbers { format!("{n:>5} {sign}") } else { sign.to_string() };
+fn sign_gutter(n: u32, sign: char, numbers: bool) -> String {
+    if numbers { format!("{n:>5} {sign}") } else { sign.to_string() }
+}
+
+/// One diff line: line number, `+`/`-`, text in `colors`; added lines on green, removed
+/// on red, the bytes in `marks` brighter.
+fn line(l: PatchLine, marks: &[Range<usize>], colors: &Colors, numbers: bool) -> Line<'static> {
+    let gutter = |n: u32, sign: char| sign_gutter(n, sign, numbers);
     let text = |text: String, bg: Color| {
-        let mut out = Vec::new();
-        let mut at = 0;
-        for m in marks {
-            out.push(Span::styled(text[at..m.start].to_string(), theme::text()));
-            out.push(Span::styled(text[m.clone()].to_string(), theme::text().bg(bg)));
-            at = m.end;
-        }
-        out.push(Span::styled(text[at..].to_string(), theme::text()));
-        out.retain(|s| !s.content.is_empty());
-        out
+        // Cut wherever a colour or a mark starts or ends.
+        let edges = colors.iter().map(|(r, _)| r).chain(marks).flat_map(|r| [r.start, r.end]);
+        let mut cuts: Vec<usize> = edges.chain([0, text.len()]).filter(|&c| c <= text.len()).collect();
+        cuts.sort_unstable();
+        cuts.dedup();
+        let within = |r: &Range<usize>, at: usize| r.start <= at && at < r.end;
+        cuts.windows(2)
+            .map(|w| {
+                let mut style = theme::text();
+                if let Some((_, c)) = colors.iter().find(|(r, _)| within(r, w[0])) {
+                    style = style.fg(*c);
+                }
+                if marks.iter().any(|m| within(m, w[0])) {
+                    style = style.bg(bg);
+                }
+                Span::styled(text[w[0]..w[1]].to_string(), style)
+            })
+            .collect::<Vec<_>>()
     };
     match l {
         PatchLine::Hunk { new_start, .. } => Line::styled(format!("   ⋯ line {new_start}"), theme::faint()),
-        PatchLine::Context { new, text, .. } => {
+        // Uncoloured code stays dimmer than the changes around it.
+        PatchLine::Context { new, text, .. } if colors.is_empty() => {
             Line::from(vec![Span::styled(gutter(new, ' '), theme::faint()), Span::styled(text, theme::muted())])
+        }
+        PatchLine::Context { new, text: t, .. } => {
+            let mut spans = vec![Span::styled(gutter(new, ' '), theme::faint())];
+            // Nothing is marked on context, so no mark colour.
+            spans.extend(text(t, theme::BG));
+            Line::from(spans)
         }
         PatchLine::Added { new, text: t } => {
             let mut spans = vec![Span::styled(gutter(new, '+'), Style::new().fg(theme::GREEN))];
@@ -276,7 +300,7 @@ mod tests {
             PatchLine::Context { old: 7, new: 6, text: text("d") },
             PatchLine::Added { new: 7, text: text("e") },
         ];
-        let h = side_by_side(lines, true);
+        let h = side_by_side(lines, "notes", true);
         let side = |v: &[Line]| v.iter().map(|l| l.to_string().trim().to_string()).collect::<Vec<_>>();
         assert_eq!(side(&h.old), ["⋯ line 4", "4  a", "5 -b", "6 -c", "7  d", ""]);
         assert_eq!(side(&h.new), ["", "4  a", "5 +B", "", "6  d", "7 +e"]);
@@ -294,14 +318,14 @@ mod tests {
         let marked = |l: &Line, bg: Color| {
             l.spans.iter().filter(|s| s.style.bg == Some(bg)).map(|s| s.content.to_string()).collect::<Vec<_>>()
         };
-        let drawn = super::lines(&lines, true);
+        let drawn = super::lines(&lines, "notes", true);
         assert_eq!(marked(&drawn[0], REMOVED_MARK), ["2"]);
         assert_eq!(marked(&drawn[1], ADDED_MARK), ["3"]);
         // Nothing it replaces: added whole, nothing marked.
         assert!(marked(&drawn[2], ADDED_MARK).is_empty());
         assert_eq!(drawn[1].to_string(), "    1 +let n = 3;");
         // Without line numbers, only the `+` stays in front.
-        assert_eq!(super::lines(&lines, false)[1].to_string(), "+let n = 3;");
+        assert_eq!(super::lines(&lines, "notes", false)[1].to_string(), "+let n = 3;");
         assert_eq!(pin(&lines[1], false), 1);
     }
 }

@@ -34,12 +34,13 @@ owo-colors = "4.4.0"
 ratatui = { version = "0.30.2", optional = true, features = ["unstable-rendered-line-info"] }
 serde = { version = "1.0.229", features = ["derive"], optional = true }
 serde_json = { version = "1.0.154", optional = true }
+syntect = { version = "5.3.0", default-features = false, features = ["default-syntaxes", "regex-fancy"], optional = true }
 unicode-width = "0.2.3"
 
 [features]
 default = ["tui"]
 # Full-screen interactive views (log -i, rebase editor, branches with PR status from gh).
-tui = ["dep:ratatui", "dep:crossterm", "dep:serde", "dep:serde_json"]
+tui = ["dep:ratatui", "dep:crossterm", "dep:serde", "dep:serde_json", "dep:syntect"]
 
 [profile.release]
 lto = "thin"

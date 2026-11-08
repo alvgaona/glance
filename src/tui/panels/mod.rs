@@ -2,3 +2,4 @@
 
 pub mod changes;
 pub mod diff;
+mod syntax;

@@ -313,13 +313,13 @@ fn render(dir: Option<PathBuf>, target: &Target, f: &FileStat, key: &Key) -> Ren
     };
     let numbers = key.look.numbers;
     let (mut lines, hunks, pins, right) = if key.look.split {
-        let h = diff::side_by_side(parsed, numbers);
+        let h = diff::side_by_side(parsed, &f.path, numbers);
         (h.old, h.hunks, h.pins, h.new)
     } else {
         let hunks = parsed.iter().enumerate().filter(|(_, l)| matches!(l, PatchLine::Hunk { .. })).map(|(i, _)| i);
         let hunks = hunks.collect();
         let pins = parsed.iter().map(|l| diff::pin(l, numbers)).collect();
-        (diff::lines(&parsed, numbers), hunks, pins, Vec::new())
+        (diff::lines(&parsed, &f.path, numbers), hunks, pins, Vec::new())
     };
     if lines.is_empty() {
         lines.push(Line::styled("Binary file, or only its mode changed", theme::faint()));

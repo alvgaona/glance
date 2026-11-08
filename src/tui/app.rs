@@ -86,8 +86,12 @@ pub(crate) fn run<S: Screen>(screen: &mut S) -> Result<S::Out> {
                     seen = Some(stamp);
                 }
             }
-            screen.tick()?;
-            terminal.draw(|f| screen.draw(f))?;
+            // Keys already waiting go first: holding j skips the commits in between
+            // instead of loading each one.
+            if !event::poll(Duration::ZERO)? {
+                screen.tick()?;
+                terminal.draw(|f| screen.draw(f))?;
+            }
             if !event::poll(S::WAKE)? {
                 continue;
             }

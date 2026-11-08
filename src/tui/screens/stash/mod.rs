@@ -407,8 +407,22 @@ impl App<'_> {
     fn load_detail(&mut self, width: u16) {
         let Some(s) = self.current().cloned() else { return };
         if !self.cache.contains_key(&(s.oid, width)) {
+            // Each holds a whole drawn diff: kept from growing all session.
+            if self.cache.len() >= 64 {
+                self.cache.clear();
+            }
             let lines = build_detail(self.repo, &s, self.branch.as_deref(), width as usize);
             self.cache.insert((s.oid, width), Rc::new(lines));
+        }
+    }
+
+    /// Colours more of the details' diff once rows `top..bottom`, those on screen, come
+    /// near where its colouring stopped.
+    fn color_near(&mut self, width: u16, top: usize, bottom: usize) {
+        let Some(oid) = self.current().map(|s| s.oid) else { return };
+        // Only shared while a draw holds it, and this runs before.
+        if let Some(p) = self.cache.get_mut(&(oid, width)).and_then(Rc::get_mut) {
+            p.near(top, bottom);
         }
     }
 

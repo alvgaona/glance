@@ -158,6 +158,8 @@ fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_widget(block, area);
     app.detail_area = area;
     app.detail_width = inner.width;
+    let top = app.detail_scroll.top() as usize;
+    app.color_near(inner.width, top, top + inner.height as usize);
     let Some(d) = app.detail(inner.width) else {
         // Not read yet (it is before the next draw), or no stash at all.
         if app.current().is_none() {

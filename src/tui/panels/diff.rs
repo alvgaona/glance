@@ -9,7 +9,7 @@ use ratatui::{
 };
 
 use super::changes::kind_mark;
-use super::syntax::{self, Colors};
+use super::syntax::Painter;
 use crate::git::diff::{self, PatchLine};
 use crate::git::tree::{self, FileStat};
 use crate::tui::theme;
@@ -27,14 +27,22 @@ pub struct Patches {
     pub files: Vec<usize>,
     pub hunks: Vec<usize>,
     pub pins: Vec<u16>,
+    pub later: Later,
 }
 
 impl Patches {
+    /// Colours more of the diffs once rows `top..bottom`, those on screen, come near
+    /// where their colouring stopped.
+    pub fn near(&mut self, top: usize, bottom: usize) {
+        self.later.near(&mut self.lines, top, bottom);
+    }
+
     /// Put `lines` above: every position moves down.
     pub fn below(mut self, mut lines: Vec<Line<'static>>) -> Self {
         let n = lines.len();
         self.files.iter_mut().chain(&mut self.hunks).for_each(|i| *i += n);
         self.pins.splice(0..0, std::iter::repeat_n(0, n));
+        self.later.0.iter_mut().for_each(|(row, _)| *row += n);
         lines.append(&mut self.lines);
         self.lines = lines;
         self
@@ -47,6 +55,7 @@ impl Patches {
         self.hunks.extend(next.hunks.iter().map(|i| i + n));
         self.pins.resize(n, 0);
         self.pins.append(&mut next.pins);
+        self.later.0.extend(next.later.0.into_iter().map(|(row, l)| (row + n, l)));
         self.lines.append(&mut next.lines);
         self
     }
@@ -105,7 +114,9 @@ pub fn patches(repo: &gix::Repository, files: &[FileStat]) -> Patches {
             }
         }
         out.pins.extend(lines.iter().map(|l| pin(l, true)));
-        out.lines.extend(self::lines(&lines, &f.path, true));
+        let lazy = Lazy::new(lines, &f.path, true);
+        out.lines.extend(lazy.lines());
+        out.later.push(out.lines.len() - lazy.patch().len(), lazy);
     }
     out
 }
@@ -138,52 +149,118 @@ impl Halves {
     }
 }
 
-/// `lines` side by side: removed lines on the left, added ones on the right, context on
-/// both with each side's line number. `path`: the file's, for its language.
-pub fn side_by_side(lines: Vec<PatchLine>, path: &str, numbers: bool) -> Halves {
-    let drawn = self::lines(&lines, path, numbers);
-    let pin = gutter(numbers);
-    let mut out = Halves::default();
-    let (mut removed, mut added) = (Vec::new(), Vec::new());
-    for (l, d) in lines.into_iter().zip(drawn) {
-        match l {
-            // A removal after additions starts the next change.
-            PatchLine::Removed { .. } if !added.is_empty() => {
-                out.pair(&mut removed, &mut added, pin);
-                removed.push(d);
-            }
-            PatchLine::Removed { .. } => removed.push(d),
-            PatchLine::Added { .. } => added.push(d),
-            PatchLine::Hunk { .. } => {
-                out.pair(&mut removed, &mut added, pin);
-                out.hunks.push(out.old.len());
-                out.row(Some(d), None, u16::MAX);
-            }
-            PatchLine::Context { old, .. } => {
-                out.pair(&mut removed, &mut added, pin);
-                // The same line with the old side's number in front.
-                let mut left = d.clone();
-                left.spans[0] = Span::styled(sign_gutter(old, ' ', numbers), theme::faint());
-                out.row(Some(left), Some(d), pin);
-            }
-        }
-    }
-    out.pair(&mut removed, &mut added, pin);
-    out
+/// Rows past the bottom of the screen coloured ahead, once the screen is this near
+/// where colouring stopped: a line takes ~40µs, too slow to colour a long diff at once.
+const AHEAD: usize = 500;
+const NEAR: usize = 200;
+
+/// One file's diff, its code coloured only as far as it has been near the screen.
+pub struct Lazy {
+    patch: Vec<PatchLine>,
+    /// The words that changed in each line: a change's first removed line against its
+    /// first added line, and so on.
+    marks: Vec<Vec<Range<usize>>>,
+    painter: Painter,
+    numbers: bool,
 }
 
-/// Each diff line drawn, with the words that changed marked: a change's first removed
-/// line against its first added line, and so on; code coloured by `path`'s language.
-/// `numbers`: with line numbers.
-pub fn lines(lines: &[PatchLine], path: &str, numbers: bool) -> Vec<Line<'static>> {
-    let mut marks = vec![Vec::new(); lines.len()];
-    for (r, a) in replaced(lines) {
-        if let (PatchLine::Removed { text: old, .. }, PatchLine::Added { text: new, .. }) = (&lines[r], &lines[a]) {
-            (marks[r], marks[a]) = diff::changed_words(old, new);
+impl Lazy {
+    /// `patch` of the file at `path`, for its language; `numbers`: with line numbers.
+    /// Nothing is coloured yet.
+    pub fn new(patch: Vec<PatchLine>, path: &str, numbers: bool) -> Self {
+        let mut marks = vec![Vec::new(); patch.len()];
+        for (r, a) in replaced(&patch) {
+            if let (PatchLine::Removed { text: old, .. }, PatchLine::Added { text: new, .. }) = (&patch[r], &patch[a]) {
+                (marks[r], marks[a]) = diff::changed_words(old, new);
+            }
+        }
+        Lazy { patch, marks, painter: Painter::new(path), numbers }
+    }
+
+    pub fn patch(&self) -> &[PatchLine] {
+        &self.patch
+    }
+
+    /// Colours ahead once line `i` of the patch, on screen, is near where colouring
+    /// stopped. True when it coloured more: draw it again.
+    pub fn near(&mut self, i: usize) -> bool {
+        let done = self.painter.done();
+        // shortcut: colouring runs from the top, so a far jump (G in a 20k-line lockfile)
+        // would take a second; those lines stay plain. Colour in the background to lift it.
+        if done >= self.patch.len() || i + NEAR < done || i > done + AHEAD {
+            return false;
+        }
+        self.painter.reach(&self.patch, i + AHEAD)
+    }
+
+    /// Each line drawn: a line number, `+`/`-`, the code with the changed words marked.
+    pub fn lines(&self) -> Vec<Line<'static>> {
+        let drawn = self.patch.iter().zip(&self.marks).enumerate();
+        drawn.map(|(i, (l, m))| line(l.clone(), m, self.painter.colors(i), self.numbers)).collect()
+    }
+
+    /// Side by side: removed lines on the left, added ones on the right, context on both
+    /// with each side's line number.
+    pub fn halves(&self) -> Halves {
+        let numbers = self.numbers;
+        let pin = gutter(numbers);
+        let mut out = Halves::default();
+        let (mut removed, mut added) = (Vec::new(), Vec::new());
+        for (l, d) in self.patch.iter().zip(self.lines()) {
+            match *l {
+                // A removal after additions starts the next change.
+                PatchLine::Removed { .. } if !added.is_empty() => {
+                    out.pair(&mut removed, &mut added, pin);
+                    removed.push(d);
+                }
+                PatchLine::Removed { .. } => removed.push(d),
+                PatchLine::Added { .. } => added.push(d),
+                PatchLine::Hunk { .. } => {
+                    out.pair(&mut removed, &mut added, pin);
+                    out.hunks.push(out.old.len());
+                    out.row(Some(d), None, u16::MAX);
+                }
+                PatchLine::Context { old, .. } => {
+                    out.pair(&mut removed, &mut added, pin);
+                    // The same line with the old side's number in front.
+                    let mut left = d.clone();
+                    left.spans[0] = Span::styled(sign_gutter(old, ' ', numbers), theme::faint());
+                    out.row(Some(left), Some(d), pin);
+                }
+            }
+        }
+        out.pair(&mut removed, &mut added, pin);
+        out
+    }
+}
+
+/// Diffs drawn into a list of lines, each from its row, to colour as they scroll near.
+#[derive(Default)]
+pub struct Later(Vec<(usize, Lazy)>);
+
+impl Later {
+    pub const NONE: Later = Later(Vec::new());
+
+    /// `lazy`, drawn from `row` on.
+    pub fn push(&mut self, row: usize, lazy: Lazy) {
+        self.0.push((row, lazy));
+    }
+
+    /// Colours more of the diffs near rows `top..bottom` of `lines`, those on screen, and
+    /// draws them again there.
+    pub fn near(&mut self, lines: &mut [Line<'static>], top: usize, bottom: usize) {
+        for (row, l) in &mut self.0 {
+            // Above the screen, or far below: later.
+            if *row + l.patch.len() <= top || *row > bottom + AHEAD {
+                continue;
+            }
+            if l.near(bottom.saturating_sub(*row)) {
+                for (at, d) in lines[*row..].iter_mut().zip(l.lines()) {
+                    *at = d;
+                }
+            }
         }
     }
-    let colors = syntax::colors(lines, path);
-    lines.iter().zip(&marks).zip(&colors).map(|((l, m), c)| line(l.clone(), m, c, numbers)).collect()
 }
 
 /// Each removed line and the added line taking its place, by position in their change.
@@ -215,7 +292,7 @@ fn sign_gutter(n: u32, sign: char, numbers: bool) -> String {
 
 /// One diff line: line number, `+`/`-`, text in `colors`; added lines on green, removed
 /// on red, the bytes in `marks` brighter.
-fn line(l: PatchLine, marks: &[Range<usize>], colors: &Colors, numbers: bool) -> Line<'static> {
+fn line(l: PatchLine, marks: &[Range<usize>], colors: &[(Range<usize>, Color)], numbers: bool) -> Line<'static> {
     let gutter = |n: u32, sign: char| sign_gutter(n, sign, numbers);
     let text = |text: String, bg: Color| {
         // Cut wherever a colour or a mark starts or ends.
@@ -279,9 +356,11 @@ mod tests {
             files: vec![0],
             hunks: vec![1],
             pins: vec![pin; n],
+            later: Later(vec![(1, Lazy::new(Vec::new(), "a.rs", true))]),
         };
         let joined = p(2, 7).then(p(3, 9)).below(vec![Line::raw("top")]);
         assert_eq!((joined.files, joined.hunks), (vec![1, 3], vec![2, 4]));
+        assert_eq!(joined.later.0.iter().map(|(row, _)| *row).collect::<Vec<_>>(), [2, 4]);
         assert_eq!(joined.pins, [0, 7, 7, 9, 9, 9]);
         // Without pins of its own, the next one's still line up.
         let joined = Patches { lines: vec![Line::raw("")], ..Default::default() }.then(p(1, 7));
@@ -300,12 +379,33 @@ mod tests {
             PatchLine::Context { old: 7, new: 6, text: text("d") },
             PatchLine::Added { new: 7, text: text("e") },
         ];
-        let h = side_by_side(lines, "notes", true);
+        let h = Lazy::new(lines, "notes", true).halves();
         let side = |v: &[Line]| v.iter().map(|l| l.to_string().trim().to_string()).collect::<Vec<_>>();
         assert_eq!(side(&h.old), ["⋯ line 4", "4  a", "5 -b", "6 -c", "7  d", ""]);
         assert_eq!(side(&h.new), ["", "4  a", "5 +B", "", "6  d", "7 +e"]);
         assert_eq!(h.hunks, [0]);
         assert_eq!(h.pins, [u16::MAX, 7, 7, 7, 7, 7]);
+    }
+
+    #[test]
+    fn colours_as_the_screen_comes_near() {
+        let patch = (1..=2000).map(|new| PatchLine::Added { new, text: "let x = 1;".into() }).collect();
+        let lazy = Lazy::new(patch, "a.rs", true);
+        let mut lines = lazy.lines();
+        let mut later = Later::default();
+        later.push(0, lazy);
+        // `let` is in the text colour until coloured.
+        let coloured = |l: &Line| l.spans[1].style.fg != Some(theme::TEXT);
+        assert!(!coloured(&lines[0]));
+        later.near(&mut lines, 0, 40);
+        assert!(coloured(&lines[0]) && coloured(&lines[500]));
+        assert!(!coloured(&lines[900]));
+        // Scrolled down near the end of what's coloured: more of it.
+        later.near(&mut lines, 400, 440);
+        assert!(coloured(&lines[900]) && !coloured(&lines[1999]));
+        // A jump far past what's coloured stays plain rather than colour all above it.
+        later.near(&mut lines, 1960, 2000);
+        assert!(!coloured(&lines[1999]));
     }
 
     #[test]
@@ -318,14 +418,14 @@ mod tests {
         let marked = |l: &Line, bg: Color| {
             l.spans.iter().filter(|s| s.style.bg == Some(bg)).map(|s| s.content.to_string()).collect::<Vec<_>>()
         };
-        let drawn = super::lines(&lines, "notes", true);
+        let drawn = Lazy::new(lines.to_vec(), "notes", true).lines();
         assert_eq!(marked(&drawn[0], REMOVED_MARK), ["2"]);
         assert_eq!(marked(&drawn[1], ADDED_MARK), ["3"]);
         // Nothing it replaces: added whole, nothing marked.
         assert!(marked(&drawn[2], ADDED_MARK).is_empty());
         assert_eq!(drawn[1].to_string(), "    1 +let n = 3;");
         // Without line numbers, only the `+` stays in front.
-        assert_eq!(super::lines(&lines, "notes", false)[1].to_string(), "+let n = 3;");
+        assert_eq!(Lazy::new(lines.to_vec(), "notes", false).lines()[1].to_string(), "+let n = 3;");
         assert_eq!(pin(&lines[1], false), 1);
     }
 }

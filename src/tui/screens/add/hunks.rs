@@ -15,9 +15,16 @@ pub(super) struct View {
     /// Where each hunk is in `lines`.
     pub(super) ranges: Vec<Range<usize>>,
     pub(super) hunks: Vec<Hunk>,
+    /// The hunks' diffs, to colour more of as they scroll near.
+    later: diff::Later,
 }
 
 impl View {
+    /// No diff yet, for `entry`.
+    const fn empty(entry: usize) -> View {
+        View { entry, lines: Vec::new(), ranges: Vec::new(), hunks: Vec::new(), later: diff::Later::NONE }
+    }
+
     pub(super) fn has_hunks(&self) -> bool {
         !self.ranges.is_empty()
     }
@@ -33,7 +40,7 @@ impl View {
     }
 }
 
-static EMPTY: View = View { entry: usize::MAX, lines: Vec::new(), ranges: Vec::new(), hunks: Vec::new() };
+static EMPTY: View = View::empty(usize::MAX);
 
 /// Lines picked inside one hunk (`v`): indices into its `lines`, `anchor..=cursor`.
 /// It belongs to one entry and hunk, and lapses when either changes.
@@ -71,7 +78,7 @@ fn build(repo: &gix::Repository, entry: usize, e: &Entry) -> View {
         lines.push(Line::styled(format!("renamed from {from}"), Style::new().fg(theme::BLUE)));
     }
     lines.push(Line::raw(""));
-    let mut view = View { entry, lines, ranges: Vec::new(), hunks: Vec::new() };
+    let mut view = View { lines, ..View::empty(entry) };
 
     if e.is_folder() {
         view.lines.push(Line::styled("A new folder: space stages everything in it.", theme::muted()));
@@ -88,7 +95,9 @@ fn build(repo: &gix::Repository, entry: usize, e: &Entry) -> View {
         Ok(Some(hunks)) => {
             for h in &hunks {
                 let start = view.lines.len();
-                view.lines.extend(diff::lines(&h.patch_lines(), &e.path, true));
+                let lazy = diff::Lazy::new(h.patch_lines(), &e.path, true);
+                view.lines.extend(lazy.lines());
+                view.later.push(start, lazy);
                 view.ranges.push(start..view.lines.len());
             }
             view.hunks = hunks;
@@ -113,7 +122,7 @@ impl App {
         if self.diff.as_ref().map(|v| v.entry) != Some(entry) {
             let view = match self.current() {
                 Some(e) => build(&self.repo, entry, e),
-                None => View { entry, lines: Vec::new(), ranges: Vec::new(), hunks: Vec::new() },
+                None => View::empty(entry),
             };
             self.diff = Some(view);
         }
@@ -125,8 +134,18 @@ impl App {
         self.diff.as_ref().filter(|v| v.entry == self.selected).unwrap_or(&EMPTY)
     }
 
+    /// Colours more of the diff once rows `top..bottom`, those on screen, come near where
+    /// its colouring stopped.
+    pub(super) fn color_near(&mut self, top: usize, bottom: usize) {
+        if let Some(v) = self.diff.as_mut().filter(|v| v.entry == self.selected) {
+            v.later.near(&mut v.lines, top, bottom);
+        }
+    }
+
     /// Moves the keys to the diff, on its first hunk.
     pub(super) fn enter_hunks(&mut self) {
+        // Keys typed ahead come before the next tick builds the view.
+        self.load_view();
         let Some(e) = self.current() else { return };
         let why = match e.group {
             Group::Conflicts => Some("A conflict is fixed in the file: e opens it, then space marks it resolved"),

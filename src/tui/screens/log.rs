@@ -411,6 +411,10 @@ impl App<'_> {
         if key.1 == 0 || self.cache.contains_key(&key) {
             return;
         }
+        // Each holds a whole drawn diff: kept from growing all session.
+        if self.cache.len() >= 64 {
+            self.cache.clear();
+        }
         if !self.meta.contains_key(&oid) {
             match commit::read(self.repo, &oid.to_string()) {
                 Ok(d) => {
@@ -431,6 +435,8 @@ impl App<'_> {
 
     /// Scrolls the details to the next hunk (or the one before), if there is one.
     fn jump(&mut self, forward: bool) {
+        // Keys typed ahead come before the next tick loads the details.
+        self.load_detail();
         let Some(d) = self.detail() else { return };
         let top = self.detail_scroll.top() as usize;
         let to = if forward { d.hunks.iter().find(|&&h| h > top) } else { d.hunks.iter().rev().find(|&&h| h < top) };
@@ -439,6 +445,17 @@ impl App<'_> {
             // Before the first hunk: back to the top, where the message is.
             None if !forward => self.detail_scroll.reset(),
             None => {}
+        }
+    }
+
+    /// Colours more of the details' diff once rows `top..bottom`, those on screen, come
+    /// near where its colouring stopped.
+    fn color_near(&mut self, top: usize, bottom: usize) {
+        let Some(oid) = self.selected_commit().map(|c| c.oid) else { return };
+        // Only shared while a draw holds it, and this runs before.
+        let key = (oid, self.detail_width, self.side_open);
+        if let Some(p) = self.cache.get_mut(&key).and_then(Rc::get_mut) {
+            p.near(top, bottom);
         }
     }
 
@@ -623,6 +640,8 @@ fn draw_details(f: &mut Frame, app: &mut App, area: Rect) {
     let block = kit::panel(theme::PANEL);
     let inner = block.inner(area);
     app.detail_width = inner.width;
+    let top = app.detail_scroll.top() as usize;
+    app.color_near(top, top + inner.height as usize);
     let Some(d) = app.detail() else {
         f.render_widget(block, area);
         return;

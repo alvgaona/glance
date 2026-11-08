@@ -125,11 +125,12 @@ fn draw_diff(f: &mut Frame, app: &mut App, area: Rect) {
     // Until a new option's render is in, the last one of this file stays up.
     let want = app.key_for(inner.width).filter(|k| app.cache.contains_key(k));
     let key = want.or_else(|| app.shown.clone().filter(|k| app.detail_for.as_ref() == Some(&k.path)));
-    let Some(r) = key.as_ref().and_then(|k| app.cache.get(k)) else {
+    let Some(r) = key.as_ref().and_then(|k| app.cache.get_mut(k)) else {
         f.render_widget(Paragraph::new(Span::styled("loading…", theme::faint())), body);
         return;
     };
     app.shown = key;
+    r.near(app.detail_scroll.top() as usize + body.height as usize);
     // Long lines scroll sideways; line numbers stay.
     if r.right.is_empty() {
         f.render_widget(Paragraph::new(app.detail_scroll.view(&r.lines, &r.pins, body)), body);

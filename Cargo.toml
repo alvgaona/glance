@@ -46,3 +46,13 @@ tui = ["dep:ratatui", "dep:crossterm", "dep:serde", "dep:serde_json", "dep:synte
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# Highlighting is ~15x slower unoptimised: debug builds still get fast diffs.
+[profile.dev.package.syntect]
+opt-level = 3
+
+[profile.dev.package.fancy-regex]
+opt-level = 3
+
+[profile.dev.package.regex-automata]
+opt-level = 3

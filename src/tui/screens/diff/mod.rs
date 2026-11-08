@@ -70,6 +70,26 @@ struct Rendered {
     pins: Vec<u16>,
     /// Side by side, the new half of each row; `lines` is then the old half.
     right: Vec<Line<'static>>,
+    /// The diff, to colour more of as it scrolls near; with `split`, side by side.
+    lazy: Option<(diff::Lazy, bool)>,
+}
+
+impl Rendered {
+    /// Colours more once `bottom`, the last row on screen, is near where colouring stopped.
+    fn near(&mut self, bottom: usize) {
+        let Some((lazy, split)) = &mut self.lazy else { return };
+        // shortcut: a row side by side holds up to two lines, so twice as far is enough.
+        let line = if *split { bottom * 2 } else { bottom };
+        if !lazy.near(line) {
+            return;
+        }
+        if *split {
+            let h = lazy.halves();
+            (self.lines, self.right) = (h.old, h.new);
+        } else {
+            self.lines = lazy.lines();
+        }
+    }
 }
 
 /// Where a hunk is.
@@ -300,7 +320,7 @@ fn render(dir: Option<PathBuf>, target: &Target, f: &FileStat, key: &Key) -> Ren
         Ok(p) => p,
         Err(e) => {
             let lines = vec![Line::styled(format!("git diff failed: {}", first_lines(&e.to_string())), red)];
-            return Rendered { lines, hunks: Vec::new(), pins: Vec::new(), right: Vec::new() };
+            return Rendered { lines, hunks: Vec::new(), pins: Vec::new(), right: Vec::new(), lazy: None };
         }
     };
     let parsed = compare::lines(&patch);
@@ -312,19 +332,23 @@ fn render(dir: Option<PathBuf>, target: &Target, f: &FileStat, key: &Key) -> Ren
             .collect()
     };
     let numbers = key.look.numbers;
+    let mut lazy = diff::Lazy::new(parsed, &f.path, numbers);
+    // The first screenful coloured here, off the screen's thread.
+    lazy.near(0);
     let (mut lines, hunks, pins, right) = if key.look.split {
-        let h = diff::side_by_side(parsed, &f.path, numbers);
+        let h = lazy.halves();
         (h.old, h.hunks, h.pins, h.new)
     } else {
+        let parsed = lazy.patch();
         let hunks = parsed.iter().enumerate().filter(|(_, l)| matches!(l, PatchLine::Hunk { .. })).map(|(i, _)| i);
         let hunks = hunks.collect();
         let pins = parsed.iter().map(|l| diff::pin(l, numbers)).collect();
-        (diff::lines(&parsed, &f.path, numbers), hunks, pins, Vec::new())
+        (lazy.lines(), hunks, pins, Vec::new())
     };
     if lines.is_empty() {
         lines.push(Line::styled("Binary file, or only its mode changed", theme::faint()));
     }
-    Rendered { lines, hunks: place(hunks), pins, right }
+    Rendered { lines, hunks: place(hunks), pins, right, lazy: Some((lazy, key.look.split)) }
 }
 
 fn commands() -> Vec<Command<Cmd>> {

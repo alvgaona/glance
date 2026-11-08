@@ -60,10 +60,10 @@ fn discard_asks_and_the_dialog_holds_the_write() {
 }
 
 #[test]
-fn hunks_need_the_view_built_by_tick() {
+fn hunks_open_before_the_tick_builds_the_view() {
     let s = scratch("add-hunk");
     let mut app = start(s.repo()).unwrap();
-    app.tick().unwrap();
+    // Typed ahead: no tick between the keys, so Enter builds the view itself.
     key(&mut app, KeyCode::Enter);
     assert_eq!(app.focus, Focus::Hunks);
     let Flow::Run(e @ Effect::Hunk { action: stage::HunkAction::Stage, .. }) = key(&mut app, KeyCode::Char(' ')) else {

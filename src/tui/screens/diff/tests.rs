@@ -154,3 +154,27 @@ fn long_lines_scroll_sideways() {
     // The line number and `+` stay in front.
     assert!(text.lines().any(|l| l.contains("1 +x") && l.contains("xQZ")), "{text}");
 }
+
+#[test]
+fn side_by_side_colours_more_on_its_own_sides() {
+    let patch: Vec<PatchLine> = (1..=2000)
+        .flat_map(|n| {
+            let text = format!("let x = {n};");
+            [PatchLine::Removed { old: n, text: text.clone() }, PatchLine::Added { new: n, text }]
+        })
+        .collect();
+    let mut lazy = diff::Lazy::new(patch, "a.rs", true);
+    lazy.near(0);
+    let h = lazy.halves();
+    let mut r = Rendered { lines: h.old, hunks: Vec::new(), pins: h.pins, right: h.new, lazy: Some((lazy, true)) };
+    // `let` is in the text colour until coloured.
+    let coloured = |l: &Line| l.spans[1].style.fg != Some(theme::TEXT);
+    assert!(!coloured(&r.lines[1500]));
+    // Scrolled down bit by bit: a row here holds two lines, so 1500 rows are 3000 lines.
+    for bottom in (300..=1500).step_by(300) {
+        r.near(bottom);
+    }
+    assert!(coloured(&r.lines[1500]) && coloured(&r.right[1500]));
+    // Removed lines stay left, added ones right.
+    assert!(r.lines[1500].to_string().contains('-') && r.right[1500].to_string().contains('+'));
+}

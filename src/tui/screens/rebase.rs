@@ -698,7 +698,9 @@ fn draw_diff(f: &mut Frame, app: &mut App, area: Rect) {
         app.scrolled_for = Some(hash.clone());
         app.detail_scroll.reset();
     }
-    let Some(p) = app.diffs.get(&(hash.clone(), inner.width)) else { return };
+    let Some(p) = app.diffs.get_mut(&(hash.clone(), inner.width)) else { return };
+    let top = app.detail_scroll.top() as usize;
+    p.near(top, top + inner.height as usize);
     f.render_widget(Paragraph::new(app.detail_scroll.view(&p.lines, &p.pins, inner)), inner);
     app.detail_scroll.draw_more_keys(f, area, "ctrl+d/u");
 }

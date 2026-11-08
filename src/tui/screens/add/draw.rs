@@ -246,6 +246,7 @@ fn draw_diff(f: &mut Frame, app: &mut App, area: Rect) {
     let len = app.view().lines.len();
     app.detail_scroll.fit(len, inner.height);
     let top = (app.detail_scroll.top() as usize).min(len);
+    app.color_near(top, top + inner.height as usize);
     let picked = app.picked_rows();
     let view = app.view();
     // While the diff has the keys, a bar marks the hunk they work on; while picking

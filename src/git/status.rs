@@ -63,13 +63,22 @@ pub fn read(repo: &gix::Repository, sizes: bool) -> Result<Status> {
         st.upstream = upstream(repo, name.as_ref(), head_id.detach()).ok().flatten();
     }
 
-    let iter =
-        repo.status(gix::progress::Discard)?.untracked_files(gix::status::UntrackedFiles::Collapsed).into_iter(None)?;
+    // Submodules are never inspected: broken or uninitialised ones would fail the whole status.
+    let iter = repo
+        .status(gix::progress::Discard)?
+        .untracked_files(gix::status::UntrackedFiles::Collapsed)
+        .index_worktree_submodules(gix::status::Submodule::Given {
+            ignore: gix::submodule::config::Ignore::All,
+            check_dirty: false,
+        })
+        .into_iter(None)?;
 
     for item in iter {
         match item? {
             gix::status::Item::TreeIndex(change) => {
                 use gix::diff::index::ChangeRef::*;
+                // A submodule's ids are commits in its own repo: there are no lines to count.
+                let gitlink = change.entry_mode().is_submodule();
                 // (kind, path, renamed-from, old blob, new blob)
                 let (kind, path, from, old, new) = match change {
                     Addition { location, id, .. } => (ChangeKind::Added, location, None, None, Some(id.into_owned())),
@@ -83,7 +92,7 @@ pub fn read(repo: &gix::Repository, sizes: bool) -> Result<Status> {
                     }
                 };
                 let mut fc = file(kind, &path, from.as_deref());
-                if sizes {
+                if sizes && !gitlink {
                     let read = |id: Option<gix::ObjectId>| id.map(|id| diff::blob(repo, id)).unwrap_or_default();
                     fc.size = diff::count(&read(old), &read(new));
                 }

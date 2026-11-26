@@ -2,6 +2,20 @@
 
 All notable changes to glance are listed here, newest first.
 
+## [0.4.0](https://github.com/alvgaona/glance/releases/tag/v0.4.0) - 2026-11-26
+
+### Features
+
+- **tui:** colour code in diffs by its language ([d252db6](https://github.com/alvgaona/glance/commit/d252db61f9926eaab18de91233d8212d0280faf3))
+
+### Fixes
+
+- **status:** ignore submodules ([818ead1](https://github.com/alvgaona/glance/commit/818ead1a33e22e27b973b955a5ed5182d46d1eac))
+
+### Performance
+
+- **tui:** colour diffs as they scroll near ([2cde230](https://github.com/alvgaona/glance/commit/2cde2308e83537c8917475705b224f04440d5da1))
+
 ## [0.3.0](https://github.com/alvgaona/glance/releases/tag/v0.3.0) - 2026-11-07
 
 ### Features
